@@ -1,0 +1,30 @@
+# Autonomous build loop: per-iter claims are local; state.json IS committed
+/.loop/claims/
+
+# Dependencies and builds
+node_modules/
+.pnpm-store/
+.next/
+out/
+dist/
+build/
+coverage/
+.turbo/
+*.tsbuildinfo
+
+# Env and secrets (fixtures are fictional; real credentials never enter the repo)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+keys/
+
+# Hosting
+.vercel/
+
+# Local verification artifacts, OS and editor cruft
+.playwright-mcp/
+*.log
+.DS_Store
