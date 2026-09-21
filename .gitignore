@@ -15,7 +15,6 @@ coverage/
 # Env and secrets (fixtures are fictional; real credentials never enter the repo)
 .env
 .env.*
-!.env.example
 *.pem
 *.key
 secrets/
