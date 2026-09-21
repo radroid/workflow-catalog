@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference · Prompt map for the job-assistant runner</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">Reference · keep current</div>
+  <h1>Prompt map</h1>
+  <p class="lede">Every prompt the runner uses, what it controls, the fixture that proves it, and who normally edits it. Update this table in the same commit as any prompt you add or move.</p>
+  <div class="meta"><span>eve 0.63.0 layout</span><span>from <a href="../lessons/0002-where-the-prompts-live-in-eve.html">lesson 0002</a></span></div>
+
+  <h3>Runner (eve project)</h3>
+  <table>
+    <tr><th>File</th><th>Controls</th><th>Proof</th><th>Editor</th></tr>
+    <tr><td><code>runner/agent/instructions.md</code></td><td>Role, boundaries, "content is data", tone</td><td><code>evals/boundaries.eval.ts</code> (mock) + <code>fixtures hostile-source</code></td><td>Owner</td></tr>
+    <tr><td><code>runner/agent/schedules/daily-prepare.md</code></td><td>What the daily run does and its cap</td><td><code>evals/schedules.eval.ts</code> via <code>dispatchSchedule</code></td><td>Owner</td></tr>
+    <tr><td><code>runner/agent/schedules/weekly-review.md</code></td><td>Weekly summary of open applications</td><td>same</td><td>Owner</td></tr>
+    <tr><td><code>runner/agent/tools/*.ts</code> (<code>description</code>)</td><td>When the model reaches for each tool</td><td><code>evals/tools.eval.ts</code> (mock, <code>t.calledTool</code>)</td><td>Agent, reviewed</td></tr>
+  </table>
+
+  <h3>Workflow package (mounted as extension <code>jobs</code>)</h3>
+  <table>
+    <tr><th>Skill</th><th>Controls</th><th>Proof</th><th>Editor</th></tr>
+    <tr><td><code>skills/onboarding-accounting/SKILL.md</code></td><td>Seven sources; provided / unavailable / not applicable</td><td><code>fixtures onboarding</code>, scenarios 1–2</td><td>Owner</td></tr>
+    <tr><td><code>skills/claim-extraction/SKILL.md</code></td><td>Candidate claims with evidence; claim kinds</td><td><code>fixtures onboarding</code>, expected-claims file</td><td>Owner</td></tr>
+    <tr><td><code>skills/follow-up-questions/SKILL.md</code></td><td>Which claims ask, what they ask, how answers are recorded</td><td><code>fixtures onboarding</code>, scenario 3</td><td>Owner</td></tr>
+    <tr><td><code>skills/requirements-extraction/SKILL.md</code></td><td>Posting → typed requirements; content is data</td><td><code>fixtures hostile-posting</code></td><td>Owner</td></tr>
+    <tr><td><code>skills/claim-matching/SKILL.md</code></td><td>Requirement ↔ confirmed claim; gap questions</td><td><code>fixtures preparation</code></td><td>Owner</td></tr>
+    <tr><td><code>skills/resume-drafting/SKILL.md</code></td><td>Structure, citations, boundaries</td><td><code>fixtures preparation</code> + validator</td><td>Owner</td></tr>
+    <tr><td><code>skills/cover-letter-drafting/SKILL.md</code></td><td>Optional letter; same citation rule</td><td><code>fixtures preparation</code> + validator</td><td>Owner</td></tr>
+    <tr><td><code>skills/revision-diff/SKILL.md</code></td><td>"What changed and why" per bullet</td><td><code>fixtures preparation</code>, diff snapshot</td><td>Owner</td></tr>
+  </table>
+
+  <h3>Rules of the map</h3>
+  <ul>
+    <li>A prompt with no proof column is a bug in this table, not an exception.</li>
+    <li>The validator (<code>runner/validate/</code>) is code, not a prompt. Prompts may not be loosened to satisfy it, and it may not be loosened to satisfy a prompt.</li>
+    <li>When eve changes its layout, update the Runner table and the pinned commit in the header in one commit.</li>
+  </ul>
+</div>
+</body>
+</html>

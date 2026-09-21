@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE · How a friend makes a workflow their own</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Tokens: snapshot of tweakcn "vercel" preset (see ../visuals/THEME-SOURCE.md). Geist with local fallbacks. */
+:root{--font-sans:Geist,"Geist Variable",ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",sans-serif;--font-mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--radius:.5rem;--background:oklch(.99 0 0);--foreground:oklch(0 0 0);--card:oklch(1 0 0);--muted:oklch(.97 0 0);--muted-foreground:oklch(.44 0 0);--secondary:oklch(.94 0 0);--border:oklch(.92 0 0);--primary:oklch(0 0 0);--primary-foreground:oklch(1 0 0);--destructive:oklch(.63 .19 23.03);--amber:oklch(.81 .17 75.35);--blue:oklch(.55 .22 264.53);--shadow-sm:0 1px 2px 0 hsl(0 0% 0%/.18),0 1px 2px -1px hsl(0 0% 0%/.18)}
+[data-theme=dark]{--background:oklch(0 0 0);--foreground:oklch(1 0 0);--card:oklch(.14 0 0);--muted:oklch(.23 0 0);--muted-foreground:oklch(.72 0 0);--secondary:oklch(.25 0 0);--border:oklch(.26 0 0);--primary:oklch(1 0 0);--primary-foreground:oklch(0 0 0);--destructive:oklch(.69 .2 23.91);--blue:oklch(.58 .21 260.84)}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:15px;line-height:1.5;letter-spacing:0}
+a{color:inherit}
+.wrap{max-width:1280px;margin:0 auto;padding:40px 28px 80px}
+header{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:end;padding-bottom:28px;border-bottom:1px solid var(--border)}
+.eyebrow{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground)}
+h1{font-size:clamp(28px,4vw,44px);line-height:1.05;letter-spacing:-.03em;margin:10px 0 12px;font-weight:600;max-width:20ch}
+.lede{max-width:70ch;color:var(--muted-foreground);margin:0}
+.lede strong{color:var(--foreground);font-weight:500}
+.tools{display:flex;gap:8px;align-items:center}
+main{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:40px;padding-top:32px}
+@media (max-width:980px){main{grid-template-columns:1fr}.sticky{position:static}}
+h2{font-size:12px;font-family:var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin:0 0 12px;font-weight:500}
+h3{font-size:15px;margin:0 0 6px;font-weight:600;letter-spacing:-.01em}
+section{margin-bottom:34px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
+.pad{padding:16px 18px}
+button{font:inherit;font-size:13px;font-weight:500;color:var(--foreground);background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:7px 12px;cursor:pointer;box-shadow:var(--shadow-sm);text-align:left;line-height:1.3}
+button:hover{background:var(--muted)}
+button:disabled{opacity:.42;cursor:not-allowed;box-shadow:none}
+button.primary{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+button.primary:hover{opacity:.9}
+button.ghost{background:transparent;box-shadow:none}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.group{margin-bottom:16px}
+.group .label{font-size:12px;color:var(--muted-foreground);margin:0 0 6px}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--border);margin-bottom:14px}
+.tab{border:0;box-shadow:none;background:transparent;border-radius:0;padding:8px 10px;color:var(--muted-foreground);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab[aria-selected=true]{color:var(--foreground);border-bottom-color:var(--foreground)}
+.scenario p{margin:0 0 12px;color:var(--muted-foreground)}
+.scenario p strong{color:var(--foreground);font-weight:500}
+.steps{display:flex;flex-direction:column;gap:6px}
+.step{display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:10px;width:100%}
+.step .n{font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground)}
+.step.done{color:var(--muted-foreground);text-decoration:line-through}
+.step.current{border-color:var(--foreground);box-shadow:0 0 0 1px var(--foreground)}
+.step .out{font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground);text-decoration:none}
+.sticky{position:sticky;top:20px}
+.state{display:grid;gap:14px}
+.kv{display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:baseline;font-size:13px}
+.kv .k{color:var(--muted-foreground)}
+.pill{display:inline-block;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid var(--border);background:var(--muted);white-space:nowrap}
+.pill.ok{background:var(--foreground);color:var(--background);border-color:var(--foreground)}
+.pill.warn{background:var(--amber);color:#000;border-color:var(--amber)}
+.pill.bad{background:var(--destructive);color:#fff;border-color:var(--destructive)}
+.pill.dim{opacity:.6}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--muted-foreground);font-size:11.5px;padding:0 0 6px;border-bottom:1px solid var(--border)}
+td{padding:7px 8px 7px 0;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.id,.mono{font-family:var(--font-mono);font-size:12px;color:var(--muted-foreground);white-space:nowrap}
+.flash{border-left:3px solid var(--amber);background:var(--muted);padding:10px 14px;border-radius:0 var(--radius) var(--radius) 0;font-size:13.5px;margin-bottom:14px;min-height:42px}
+.flash.blocked{border-left-color:var(--destructive)}
+.flash.ok{border-left-color:var(--foreground)}
+.flash .tag{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground);display:block;margin-bottom:2px}
+.ready{display:grid;gap:4px;font-size:13px}
+.ready div{display:flex;gap:8px;align-items:baseline}
+.ready .m{font-family:var(--font-mono);font-size:12px;width:16px;text-align:center}
+pre{font-family:var(--font-mono);font-size:12px;line-height:1.55;margin:0;white-space:pre-wrap;color:var(--foreground)}
+.profile{background:var(--muted);padding:16px 18px;border-radius:var(--radius);border:1px solid var(--border)}
+.log{font-family:var(--font-mono);font-size:12px;color:var(--muted-foreground);display:grid;gap:4px}
+.log .new{color:var(--foreground)}
+.tabgroup{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tabchip{border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;background:var(--card);display:flex;gap:8px;align-items:center}
+.tabchip .dot{width:8px;height:8px;border-radius:50%;background:var(--blue)}
+.tabchip.closed .dot{background:var(--border)}
+.tabchip.closed{color:var(--muted-foreground)}
+footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--border);color:var(--muted-foreground);font-size:13px;max-width:80ch}
+.small{font-size:12.5px;color:var(--muted-foreground)}
+.toggle{font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:640px){.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <div class="eyebrow">Prototype · throwaway · logic walkthrough · 2026-09-20</div>
+    <h1>How a friend makes a workflow their own</h1>
+    <p class="lede"><strong>The question this demo answers:</strong> does an onboarding built on <em>accounting for sources</em>, <em>confirming claims</em>, and a <em>readiness lock</em> give a friend enough understanding and ownership to use the job-application workflow independently, and does the application flow stay honest when the browser misbehaves? Press the buttons; watch the state. Everything here is fictional and in memory.</p>
+  </div>
+  <div class="tools">
+    <button class="ghost toggle" id="themeBtn" type="button">Dark</button>
+    <button class="ghost toggle" id="resetBtn" type="button">Reset</button>
+  </div>
+</header>
+
+<main>
+  <div>
+    <section>
+      <h2>Guided walkthroughs</h2>
+      <div class="card pad">
+        <div class="tabs" role="tablist" id="tabs"></div>
+        <div class="scenario" id="scenario"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Free play</h2>
+      <div class="card pad" id="freeplay"></div>
+      <p class="small" style="margin-top:8px">Illegal moves are refused with a reason instead of doing something half-right. That refusal <em>is</em> the design.</p>
+    </section>
+  </div>
+
+  <div class="sticky">
+    <div class="flash" id="flash"><span class="tag">Last action</span>Nothing yet. Start a walkthrough on the left.</div>
+    <div class="state">
+      <div class="card pad">
+        <h3>Readiness</h3>
+        <div class="ready" id="readiness"></div>
+      </div>
+      <div class="two">
+        <div class="card pad">
+          <h3>Sources</h3>
+          <div class="kv" id="sources"></div>
+        </div>
+        <div class="card pad">
+          <h3>Career profile</h3>
+          <div class="kv" id="profile"></div>
+        </div>
+      </div>
+      <div class="card pad">
+        <h3>Claims</h3>
+        <table id="claims"></table>
+      </div>
+      <div class="card pad">
+        <h3>Applications</h3>
+        <table id="apps"></table>
+      </div>
+      <div class="card pad">
+        <h3>Browser</h3>
+        <div id="browser"></div>
+      </div>
+      <div class="card pad">
+        <h3>career-profile.md <span class="small">(what the friend owns)</span></h3>
+        <div class="profile"><pre id="profileMd"></pre></div>
+      </div>
+      <div class="card pad">
+        <h3>Run log</h3>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  This is a logic prototype in the sense of the <code>/prototype</code> skill: the state module below is pure and liftable; the page is throwaway. Readiness rule, claim states, idempotent runs, and the "closed tab is not an application" rule are the decisions being checked. Real names, employers and metrics are fictional.
+</footer>
+</div>
+
+<script>
+/* ===================== PURE MODULE: workflowInstance ===================== *
+ * (state, action) => { state, ok, message }. No DOM in here.               */
+const workflowInstance = (() => {
+  const SOURCES = [
+    ['resume','Resume'],['coverLetters','Previous cover letters'],['portfolio','Portfolio / personal site'],
+    ['repositories','Repositories'],['social','Social profiles (exported)'],['workSamples','Work samples'],['preferences','Target roles & preferences']
+  ];
+  const CANNED = {
+    resume: [
+      {id:'C1', text:'Software Engineer at Northwind Labs, Mar 2022 – Jun 2025', kind:'fact'},
+      {id:'C2', text:'Built an internal reporting service in Python', kind:'fact'},
+      {id:'C3', text:'Cut report processing time by 30%', kind:'metric', question:'Is there evidence for the 30% figure (a ticket, a dashboard, a review)?'}
+    ],
+    coverLetters: [{id:'C4', text:'Led the migration of billing jobs to a queue-based design', kind:'fact'}],
+    portfolio: [{id:'C5', text:'Designed the data model for a small analytics product', kind:'fact'}],
+    repositories: [{id:'C6', text:'Maintainer of ledgerkit (TypeScript, 1.2k stars)', kind:'fact'}],
+    workSamples: [{id:'C7', text:'Wrote the on-call runbook adopted team-wide', kind:'fact'}],
+    social: [], preferences: []
+  };
+  const JOBS = [
+    {id:'J1', title:'Senior Backend Engineer', company:'Fernwood', url:'https://jobs.example/fernwood/123'},
+    {id:'J2', title:'Platform Engineer', company:'Harbor', url:'https://jobs.example/harbor/88'},
+    {id:'J3', title:'Staff Engineer, Data', company:'Quill', url:'https://jobs.example/quill/7'}
+  ];
+  let tabSeq = 100;
+
+  function initial(){
+    const sources = {}; SOURCES.forEach(([k]) => sources[k] = 'pending');
+    return {
+      sources, claims: [], preferences: null,
+      profile: { approved:false, version:0, pendingRevision:null },
+      jobs: [], applications: [], runs: [],
+      session: null, browser: { available:true, tabs:{} }, log: []
+    };
+  }
+  const clone = s => JSON.parse(JSON.stringify(s));
+  const ok = (state, message, extra={}) => ({ state, ok:true, message, ...extra });
+  const refuse = (state, message) => ({ state, ok:false, message, blocked:true });
+  const log = (s, line) => { s.log.unshift(line); s.log = s.log.slice(0, 40); };
+
+  function readiness(s){
+    const unaccounted = SOURCES.filter(([k]) => s.sources[k]==='pending').map(([,l])=>l);
+    const candidates = s.claims.filter(c => c.status==='candidate' || c.status==='disputed');
+    return {
+      sourcesAccounted: unaccounted.length===0, unaccounted,
+      claimsSettled: s.claims.length>0 && candidates.length===0, candidates,
+      hasClaims: s.claims.filter(c=>c.status==='confirmed').length>0,
+      approved: s.profile.approved
+    };
+  }
+  const isReady = s => { const r = readiness(s); return r.sourcesAccounted && r.claimsSettled && r.approved; };
+
+  function reduce(prev, action){
+    const s = clone(prev);
+    const r = readiness(s);
+    switch(action.type){
+      case 'source': {
+        const [k, status] = [action.source, action.status];
+        s.sources[k] = status;
+        if (k==='preferences' && status==='provided') s.preferences = 'Senior backend roles · remote or Toronto · two pages max';
+        log(s, `source ${k} → ${status}`);
+        return ok(s, `${labelOf(k)} marked ${status}. ${status==='provided'?'Its claims are extracted when you ask.':'That still counts as accounted for; nothing is invented to fill the gap.'}`);
+      }
+      case 'extract': {
+        const provided = SOURCES.filter(([k]) => s.sources[k]==='provided').map(([k])=>k);
+        if (!provided.length) return refuse(s, 'Nothing to extract: no source has been provided yet.');
+        let added = 0;
+        provided.forEach(k => CANNED[k].forEach(c => {
+          if (!s.claims.find(x => x.id===c.id)) { s.claims.push({...c, source:k, status: c.kind==='metric' ? 'candidate' : 'candidate', evidence: `${labelOf(k)} · passage`}); added++; }
+        }));
+        log(s, `extract → ${added} new candidate claims`);
+        return ok(s, added ? `${added} candidate claim${added>1?'s':''} extracted. Each one stays a candidate until you confirm, dispute or exclude it. The metric (C3) will ask a question when disputed.` : 'Extraction is idempotent: no new claims, nothing duplicated.');
+      }
+      case 'claim': {
+        const c = s.claims.find(x => x.id===action.id);
+        if (!c) return refuse(s, `No claim ${action.id} yet — extract first.`);
+        if (action.status==='confirmed' && c.kind==='metric' && c.status!=='answered') {
+          c.status = 'disputed'; log(s, `claim ${c.id} → question asked`);
+          return ok(s, `C3 is a metric. Before it can be confirmed the workflow asks: "${c.question}"`);
+        }
+        c.status = action.status; log(s, `claim ${c.id} → ${action.status}`);
+        if (s.profile.approved && action.status!=='excluded') { s.profile.approved = false; s.profile.pendingRevision = null; log(s, 'profile approval withdrawn (claims changed)'); }
+        return ok(s, action.status==='excluded' ? `${c.id} excluded. It will never appear in a generated document, and the prompt never sees it.` : `${c.id} ${action.status}.`);
+      }
+      case 'answer': {
+        const c = s.claims.find(x => x.id===action.id);
+        if (!c || c.status!=='disputed') return refuse(s, 'There is no open question to answer.');
+        if (action.hasEvidence) { c.status='confirmed'; c.evidence = 'Your statement: "measured on the ops dashboard, Q3 2024"'; log(s, `claim ${c.id} → confirmed with evidence`); return ok(s, `${c.id} confirmed; the evidence is recorded as your own statement, not as an external fact.`); }
+        c.status='excluded'; log(s, `claim ${c.id} → excluded (no evidence)`); return ok(s, `${c.id} excluded. The resume will describe the work without the number.`);
+      }
+      case 'approve': {
+        const rr = readiness(s);
+        if (!rr.sourcesAccounted) return refuse(s, `Not ready: ${rr.unaccounted.length} source${rr.unaccounted.length>1?'s':''} unaccounted (${rr.unaccounted.join(', ')}). Mark each provided, unavailable, or not applicable.`);
+        if (!rr.claimsSettled) return refuse(s, rr.candidates.length ? `Not ready: ${rr.candidates.map(c=>c.id).join(', ')} still ${rr.candidates.length>1?'need':'needs'} a decision.` : 'Not ready: no claims yet — extract first.');
+        if (!rr.hasClaims) return refuse(s, 'Not ready: every claim was excluded, so there is nothing to write from.');
+        s.profile.approved = true; s.profile.version += 1; s.profile.pendingRevision = null;
+        log(s, `profile approved → v${s.profile.version}`);
+        return ok(s, `Career profile v${s.profile.version} approved. Generation is now unlocked. Every future document will cite this version.`);
+      }
+      case 'edit': {
+        const c = s.claims.find(x => x.id==='C2');
+        if (!c || c.status!=='confirmed') return refuse(s, 'Nothing approved to edit yet.');
+        if (!s.profile.approved) { c.text = 'Built and operated an internal reporting service in Python'; log(s,'claim C2 edited (draft)'); return ok(s,'Edited in place — the profile is not approved yet, so no revision is needed.'); }
+        s.profile.pendingRevision = { claim:'C2', text:'Built and operated an internal reporting service in Python' };
+        log(s, 'revision proposed for C2'); return ok(s, `A revision to C2 is proposed. Profile v${s.profile.version} stays in force until you accept it, so nothing generated changes underneath you.`);
+      }
+      case 'acceptRevision': {
+        if (!s.profile.pendingRevision) return refuse(s, 'No revision waiting.');
+        const c = s.claims.find(x => x.id===s.profile.pendingRevision.claim); c.text = s.profile.pendingRevision.text;
+        s.profile.pendingRevision = null; s.profile.version += 1; log(s, `revision accepted → profile v${s.profile.version}`);
+        return ok(s, `Profile is now v${s.profile.version}. Documents prepared from v${s.profile.version-1} keep saying which version they used.`);
+      }
+      case 'capture': {
+        const j = JOBS[action.index];
+        if (s.jobs.find(x => x.url===j.url)) return refuse(s, `${j.company} is already saved (same URL). Capture is idempotent; nothing was duplicated.`);
+        s.jobs.push({...j, revision:1, capturedAt:'today'}); s.applications.push({ jobId:j.id, status:'saved', documents:[], taskId:'T-'+j.id, revision:1 });
+        log(s, `capture ${j.id} (${j.company}) rev 1`);
+        return ok(s, `${j.title} at ${j.company} saved with a snapshot (rev 1). The posting can change or vanish; the snapshot cannot.`);
+      }
+      case 'prepare': {
+        if (!isReady(s)) { const rr = readiness(s); const why = !rr.sourcesAccounted ? `unaccounted sources (${rr.unaccounted.join(', ')})` : !rr.claimsSettled ? `undecided claims (${rr.candidates.map(c=>c.id).join(', ')||'none extracted'})` : 'profile not approved'; return refuse(s, `Preparation is locked: ${why}. The workflow will not guess.`); }
+        const targets = s.applications.filter(a => action.jobId ? a.jobId===action.jobId : a.status==='saved');
+        if (!targets.length) { if (action.scheduled) { log(s, 'scheduled prepare → nothing to do'); return ok(s, 'Nothing to prepare: every saved job is already prepared. The extra run was harmless; nothing was drafted twice.'); } return refuse(s, action.jobId ? 'That job is not saved.' : 'Nothing to prepare: no saved jobs waiting.'); }
+        let made = 0, skipped = 0;
+        targets.forEach(a => {
+          const job = s.jobs.find(j => j.id===a.jobId);
+          const key = `${a.jobId}@${job.revision}+profile@v${s.profile.version}`;
+          if (s.runs.find(r => r.key===key && r.outcome==='completed')) { skipped++; return; }
+          const cited = s.claims.filter(c => c.status==='confirmed').map(c => c.id);
+          a.documents.push({ version: a.documents.length+1, profileVersion: s.profile.version, jobRevision: job.revision, cites: cited });
+          a.status = 'ready'; s.runs.push({ key, outcome:'completed', kind: action.scheduled ? 'scheduled' : 'on-demand' }); made++;
+        });
+        log(s, `${action.scheduled?'scheduled':'on-demand'} prepare → ${made} new, ${skipped} skipped (already done)`);
+        if (!made) return ok(s, `Nothing new: ${skipped} application${skipped>1?'s':''} already prepared for this job revision and profile version. Retries and catch-up runs are free of duplicates.`);
+        return ok(s, `${made} application package${made>1?'s':''} prepared. Each cites only confirmed claim IDs and records profile v${s.profile.version} and the job revision it read.`);
+      }
+      case 'browser': { s.browser.available = action.available; log(s, `browser ${action.available?'available':'unavailable'}`); return ok(s, action.available ? 'Chrome is open and the extension is paired.' : 'Chrome is closed (or the laptop is asleep). Prepared work waits; nothing tries to open tabs.'); }
+      case 'startApplying': {
+        const ready = s.applications.filter(a => a.status==='ready');
+        if (!ready.length) return refuse(s, 'No prepared applications to open.');
+        if (!s.browser.available) return refuse(s, 'The browser is not available. The session manifest is saved; open it when you are back.');
+        if (s.session && s.session.open) return refuse(s, 'A session is already open. Reopen it deliberately rather than creating a second group.');
+        s.session = { id:'S1', title:`Apply today · ${ready.length} job${ready.length>1?'s':''}`, open:true, tasks: ready.map(a => a.taskId) };
+        ready.forEach(a => { s.browser.tabs[a.taskId] = { chromeTabId: ++tabSeq, open:true }; });
+        log(s, `session S1 opened: ${ready.length} tabs (journal → open → record ids)`);
+        return ok(s, `Tab group "${s.session.title}" opened. Chrome tab IDs are ephemeral; the task IDs are what the workflow remembers.`);
+      }
+      case 'closeTab': {
+        const t = s.browser.tabs[action.taskId]; if (!t || !t.open) return refuse(s, 'That tab is not open.');
+        t.open = false; log(s, `tab for ${action.taskId} closed`); return ok(s, 'Tab closed. The application did not change: a closed tab is not an application.');
+      }
+      case 'status': {
+        const a = s.applications.find(x => x.taskId===action.taskId); if (!a) return refuse(s, 'Unknown task.');
+        if (a.status==='applied' && action.status!=='applied') return refuse(s, 'Already applied; the workflow will not move an application backwards from a tab event.');
+        a.status = action.status; a.revision += 1; log(s, `${a.taskId} → ${action.status} (explicit, rev ${a.revision})`);
+        return ok(s, `${a.taskId} marked ${action.status} by you, explicitly. That is the only way status moves.`);
+      }
+      case 'restartBrowser': {
+        Object.keys(s.browser.tabs).forEach(k => { s.browser.tabs[k] = { chromeTabId:null, open:false }; });
+        if (s.session) s.session.open = false;
+        log(s, 'Chrome restarted: tab ids gone, manifest kept');
+        return ok(s, 'Chrome restarted. All Chrome tab IDs are gone; the session manifest and every application status survive. Reopen the session deliberately.');
+      }
+      case 'reimport': {
+        if (!s.session) return refuse(s, 'No manifest to import.');
+        const applied = s.applications.filter(a => a.status==='applied').length;
+        log(s, `stale manifest re-imported: ${applied} applied untouched`);
+        return ok(s, `An older manifest was imported. ${applied} application${applied===1?'':'s'} already marked Applied stayed Applied: imports never reset newer local state.`);
+      }
+      case 'reset': return ok(initial(), 'Reset to a fresh workflow instance.');
+    }
+    return refuse(s, 'Unknown action.');
+  }
+  function labelOf(k){ const f = SOURCES.find(([x])=>x===k); return f ? f[1] : k; }
+  function profileMarkdown(s){
+    const conf = s.claims.filter(c=>c.status==='confirmed'), pend = s.claims.filter(c=>c.status==='candidate'||c.status==='disputed'), exc = s.claims.filter(c=>c.status==='excluded');
+    const lines = [`# Career profile${s.profile.approved?`  (approved · v${s.profile.version})`:'  (draft · not approved)'}`, ''];
+    lines.push('## Confirmed claims'); conf.length ? conf.forEach(c=>lines.push(`- ${c.id}: ${c.text}\n  Evidence: ${c.evidence}`)) : lines.push('- (none yet)');
+    lines.push('', '## Presentation that can change', '- Emphasise backend work for infrastructure roles.', '- Reorder projects by relevance; rewrite bullets, keep meaning.');
+    lines.push('', '## Needs a decision — never used in documents'); pend.length ? pend.forEach(c=>lines.push(`- ${c.id}: ${c.text}${c.status==='disputed'?`\n  Question: ${c.question}`:''}`)) : lines.push('- (nothing pending)');
+    lines.push('', '## Excluded'); exc.length ? exc.forEach(c=>lines.push(`- ${c.id}: ${c.text}`)) : lines.push('- (nothing excluded)');
+    lines.push('', '## Boundaries', '- Do not invent metrics, credentials, or responsibilities.', '- Do not change employment dates or official titles.');
+    lines.push('', '## Preferences', `- ${s.preferences || '(not provided yet)'}`);
+    if (s.profile.pendingRevision) lines.push('', `## Proposed revision (not yet accepted)`, `- ${s.profile.pendingRevision.claim} → ${s.profile.pendingRevision.text}`);
+    return lines.join('\n');
+  }
+  return { initial, reduce, readiness, isReady, SOURCES, JOBS, labelOf, profileMarkdown };
+})();
+
+/* ===================== PAGE SHELL (throwaway) ===================== */
+const W = workflowInstance;
+let state = W.initial();
+let lastLogLen = 0;
+const $ = id => document.getElementById(id);
+const pill = (t, cls='') => `<span class="pill ${cls}">${t}</span>`;
+const srcPill = st => st==='provided' ? pill('provided','ok') : st==='pending' ? pill('pending','warn') : pill(st.replace('-',' '),'dim');
+const claimPill = st => ({candidate:pill('candidate','warn'),disputed:pill('question open','warn'),confirmed:pill('confirmed','ok'),excluded:pill('excluded','bad')})[st];
+const appPill = st => ({saved:pill('saved'),ready:pill('ready','ok'),applied:pill('applied','ok'),deferred:pill('deferred','dim')})[st];
+
+function dispatch(action){
+  const res = W.reduce(state, action);
+  state = res.state;
+  const f = $('flash'); f.className = 'flash ' + (res.blocked ? 'blocked' : 'ok');
+  f.innerHTML = `<span class="tag">${res.blocked ? 'Refused' : 'Done'}</span>${res.message}`;
+  render(); return res;
+}
+
+function render(){
+  const r = W.readiness(state);
+  $('readiness').innerHTML = [
+    [r.sourcesAccounted, `Every source accounted for${r.unaccounted.length?` — ${r.unaccounted.length} pending`:''}`],
+    [r.claimsSettled, `Every claim decided${r.candidates.length?` — ${r.candidates.map(c=>c.id).join(', ')} open`:''}`],
+    [r.approved, `Profile approved${state.profile.approved?` (v${state.profile.version})`:''}`],
+    [W.isReady(state), `<strong>${W.isReady(state)?'Ready: generation unlocked':'Not ready: generation locked'}</strong>`]
+  ].map(([okv,t]) => `<div><span class="m">${okv?'●':'○'}</span><span>${t}</span></div>`).join('');
+  $('sources').innerHTML = W.SOURCES.map(([k,l]) => `<span class="k">${l}</span>${srcPill(state.sources[k])}`).join('');
+  $('profile').innerHTML = `<span class="k">Status</span>${state.profile.approved?pill('approved','ok'):pill('draft','warn')}<span class="k">Version</span><span class="mono">${state.profile.version||'—'}</span><span class="k">Confirmed claims</span><span class="mono">${state.claims.filter(c=>c.status==='confirmed').length}</span><span class="k">Pending revision</span><span class="mono">${state.profile.pendingRevision?state.profile.pendingRevision.claim:'none'}</span>`;
+  $('claims').innerHTML = state.claims.length ? `<tr><th>ID</th><th>Claim</th><th>Source</th><th>Status</th></tr>` + state.claims.map(c => `<tr><td class="id">${c.id}</td><td>${c.text}</td><td class="mono">${W.labelOf(c.source)}</td><td>${claimPill(c.status)}</td></tr>`).join('') : `<tr><td class="small">No claims extracted yet.</td></tr>`;
+  $('apps').innerHTML = state.applications.length ? `<tr><th>Task</th><th>Job</th><th>Status</th><th>Documents</th></tr>` + state.applications.map(a => { const j = state.jobs.find(x=>x.id===a.jobId); return `<tr><td class="id">${a.taskId}</td><td>${j.title}<br><span class="small">${j.company} · snapshot rev ${j.revision}</span></td><td>${appPill(a.status)}</td><td class="mono">${a.documents.length? a.documents.map(d=>`v${d.version}: profile v${d.profileVersion}, job rev ${d.jobRevision}, cites ${d.cites.join(' ')}`).join('<br>') : '—'}</td></tr>`; }).join('') : `<tr><td class="small">No jobs captured yet.</td></tr>`;
+  const tabs = Object.entries(state.browser.tabs);
+  $('browser').innerHTML = `<div class="kv"><span class="k">Chrome</span>${state.browser.available?pill('available','ok'):pill('unavailable','warn')}<span class="k">Session</span><span class="mono">${state.session?`${state.session.id} · ${state.session.title} · ${state.session.open?'open':'not open'}`:'none'}</span></div>` + (tabs.length ? `<div class="tabgroup">${tabs.map(([tid,t]) => `<span class="tabchip ${t.open?'':'closed'}"><span class="dot"></span>${tid}<span class="mono">${t.chromeTabId?`chrome #${t.chromeTabId}`:'no chrome id'}</span></span>`).join('')}</div>` : '');
+  $('profileMd').textContent = W.profileMarkdown(state);
+  $('log').innerHTML = state.log.length ? state.log.slice(0,10).map((l,i) => `<div class="${i===0?'new':''}">${l}</div>`).join('') : '<div>—</div>';
+  renderFreeplay(); renderScenario();
+}
+
+/* ---- free play ---- */
+const FREEPLAY = [
+  ['Onboarding · sources', [
+    ...W.SOURCES.map(([k,l]) => [`Provide ${l.toLowerCase()}`, {type:'source', source:k, status:'provided'}]),
+    ['Mark social as unavailable', {type:'source', source:'social', status:'unavailable'}],
+    ['Mark work samples not applicable', {type:'source', source:'workSamples', status:'not-applicable'}]
+  ]],
+  ['Onboarding · claims', [
+    ['Extract claims from provided sources', {type:'extract'}],
+    ['Confirm C1', {type:'claim', id:'C1', status:'confirmed'}], ['Confirm C2', {type:'claim', id:'C2', status:'confirmed'}],
+    ['Confirm C3 (the 30% metric)', {type:'claim', id:'C3', status:'confirmed'}], ['Answer: yes, I have evidence', {type:'answer', id:'C3', hasEvidence:true}],
+    ['Answer: no evidence', {type:'answer', id:'C3', hasEvidence:false}], ['Exclude C3', {type:'claim', id:'C3', status:'excluded'}],
+    ['Confirm C4', {type:'claim', id:'C4', status:'confirmed'}], ['Confirm C5', {type:'claim', id:'C5', status:'confirmed'}],
+    ['Confirm C6', {type:'claim', id:'C6', status:'confirmed'}], ['Confirm C7', {type:'claim', id:'C7', status:'confirmed'}],
+    ['Approve career profile', {type:'approve'}], ['Edit an approved fact (C2)', {type:'edit'}], ['Accept the revision', {type:'acceptRevision'}]
+  ]],
+  ['Applications', [
+    ['Capture: Fernwood', {type:'capture', index:0}], ['Capture: Harbor', {type:'capture', index:1}], ['Capture: Quill', {type:'capture', index:2}],
+    ['Prepare all saved (on demand)', {type:'prepare'}], ['Scheduled daily preparation runs', {type:'prepare', scheduled:true}]
+  ]],
+  ['Browser', [
+    ['Start applying (open tab group)', {type:'startApplying'}], ['Close the Fernwood tab', {type:'closeTab', taskId:'T-J1'}],
+    ['Mark Fernwood applied', {type:'status', taskId:'T-J1', status:'applied'}], ['Defer Harbor', {type:'status', taskId:'T-J2', status:'deferred'}],
+    ['Chrome becomes unavailable', {type:'browser', available:false}], ['Chrome is back', {type:'browser', available:true}],
+    ['Restart Chrome', {type:'restartBrowser'}], ['Re-import an older manifest', {type:'reimport'}]
+  ]]
+];
+function renderFreeplay(){
+  if ($('freeplay').dataset.built) return;
+  $('freeplay').innerHTML = FREEPLAY.map(([g, items]) => `<div class="group"><p class="label">${g}</p><div class="grid">${items.map(([l,a],i) => `<button type="button" data-g="${g}" data-i="${i}">${l}</button>`).join('')}</div></div>`).join('');
+  $('freeplay').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { const grp = FREEPLAY.find(([g])=>g===b.dataset.g); dispatch(grp[1][+b.dataset.i][1]); }));
+  $('freeplay').dataset.built = '1';
+}
+
+/* ---- guided walkthroughs ---- */
+const ALL_ACCOUNTED = [
+  ['Provide resume', {type:'source',source:'resume',status:'provided'}], ['Provide previous cover letters', {type:'source',source:'coverLetters',status:'provided'}],
+  ['Provide portfolio link', {type:'source',source:'portfolio',status:'provided'}], ['Connect repositories (GitHub, read-only)', {type:'source',source:'repositories',status:'provided'}],
+  ['Social profiles: mark unavailable', {type:'source',source:'social',status:'unavailable'}], ['Work samples: mark not applicable', {type:'source',source:'workSamples',status:'not-applicable'}],
+  ['State target roles & preferences', {type:'source',source:'preferences',status:'provided'}]
+];
+const CONFIRM_REST = [['Confirm C1', {type:'claim',id:'C1',status:'confirmed'}],['Confirm C2', {type:'claim',id:'C2',status:'confirmed'}],['Confirm C4', {type:'claim',id:'C4',status:'confirmed'}],['Confirm C5', {type:'claim',id:'C5',status:'confirmed'}],['Confirm C6', {type:'claim',id:'C6',status:'confirmed'}]];
+const SCENARIOS = [
+  { name:'1 · First application', intro:'<strong>The happy path.</strong> A friend accounts for every source (two are honestly missing), decides every claim, approves the profile, saves one job, prepares it, opens the tab, and records the application. Watch readiness flip from locked to unlocked only after approval.',
+    steps:[...ALL_ACCOUNTED, ['Extract claims', {type:'extract'}], ...CONFIRM_REST, ['Confirm C3 — the metric asks a question', {type:'claim',id:'C3',status:'confirmed'}], ['Answer: yes, I have evidence', {type:'answer',id:'C3',hasEvidence:true}], ['Approve career profile', {type:'approve'}], ['Capture Fernwood from the current tab', {type:'capture',index:0}], ['Prepare the application', {type:'prepare',jobId:'J1'}], ['Start applying', {type:'startApplying'}], ['Mark Fernwood applied', {type:'status',taskId:'T-J1',status:'applied'}]] },
+  { name:'2 · Too early', intro:'<strong>Generating before the profile is ready is refused, with the reason.</strong> The friend uploads one resume, extracts, saves a job and asks for a resume. The workflow says exactly what is missing instead of producing a plausible-looking document from unreviewed claims.',
+    steps:[['Provide resume', {type:'source',source:'resume',status:'provided'}], ['Extract claims', {type:'extract'}], ['Capture Harbor', {type:'capture',index:1}], ['Try to prepare — refused: sources pending', {type:'prepare',jobId:'J2'}], ['Account for the rest of the sources… (cover letters)', {type:'source',source:'coverLetters',status:'unavailable'}], ['…portfolio', {type:'source',source:'portfolio',status:'not-applicable'}], ['…repositories', {type:'source',source:'repositories',status:'unavailable'}], ['…social', {type:'source',source:'social',status:'unavailable'}], ['…work samples', {type:'source',source:'workSamples',status:'not-applicable'}], ['…preferences', {type:'source',source:'preferences',status:'provided'}], ['Try again — refused: claims undecided', {type:'prepare',jobId:'J2'}], ['Confirm C1', {type:'claim',id:'C1',status:'confirmed'}], ['Confirm C2', {type:'claim',id:'C2',status:'confirmed'}], ['Exclude C3', {type:'claim',id:'C3',status:'excluded'}], ['Try again — refused: not approved', {type:'prepare',jobId:'J2'}], ['Approve career profile', {type:'approve'}], ['Prepare — now allowed', {type:'prepare',jobId:'J2'}]] },
+  { name:'3 · The shaky metric', intro:'<strong>A number without evidence never reaches a document.</strong> The resume says "30% faster". The friend cannot back it up. Watch it move to Excluded, and check the prepared document cites C1, C2, C4–C6 but never C3.',
+    steps:[...ALL_ACCOUNTED, ['Extract claims', {type:'extract'}], ...CONFIRM_REST, ['Confirm C3 — a question is asked instead', {type:'claim',id:'C3',status:'confirmed'}], ['Answer: no evidence', {type:'answer',id:'C3',hasEvidence:false}], ['Approve career profile', {type:'approve'}], ['Capture Quill', {type:'capture',index:2}], ['Prepare — document cites confirmed IDs only', {type:'prepare',jobId:'J3'}]] },
+  { name:'4 · A closed tab is not an application', intro:'<strong>Tabs are a to-do list, not a record.</strong> The friend opens the group, closes a tab (maybe by accident), and the application is still Ready. Only an explicit "Applied" moves it. Then Chrome restarts: Chrome IDs vanish, nothing else does.',
+    steps:[...ALL_ACCOUNTED, ['Extract claims', {type:'extract'}], ...CONFIRM_REST, ['Exclude C3', {type:'claim',id:'C3',status:'excluded'}], ['Approve career profile', {type:'approve'}], ['Capture Fernwood', {type:'capture',index:0}], ['Capture Harbor', {type:'capture',index:1}], ['Prepare all', {type:'prepare'}], ['Start applying — group of 2', {type:'startApplying'}], ['Close the Fernwood tab', {type:'closeTab',taskId:'T-J1'}], ['Mark Fernwood applied (explicit)', {type:'status',taskId:'T-J1',status:'applied'}], ['Restart Chrome', {type:'restartBrowser'}], ['Re-import an older manifest — Applied stays Applied', {type:'reimport'}]] },
+  { name:'5 · Scheduled prep runs twice', intro:'<strong>Retries and catch-up runs never duplicate a draft.</strong> The laptop slept through the schedule; on wake the run fires, then fires again on a retry. The second run does nothing because the idempotency key (job revision + profile version) already completed.',
+    steps:[...ALL_ACCOUNTED, ['Extract claims', {type:'extract'}], ...CONFIRM_REST, ['Exclude C3', {type:'claim',id:'C3',status:'excluded'}], ['Approve career profile', {type:'approve'}], ['Capture Fernwood', {type:'capture',index:0}], ['Capture Quill', {type:'capture',index:2}], ['Chrome becomes unavailable (laptop asleep)', {type:'browser',available:false}], ['Scheduled preparation (catch-up on wake)', {type:'prepare',scheduled:true}], ['Scheduled preparation fires again (retry)', {type:'prepare',scheduled:true}], ['Chrome is back', {type:'browser',available:true}], ['Start applying', {type:'startApplying'}]] },
+  { name:'6 · Editing an approved fact', intro:'<strong>Owning the profile means editing it without breaking what was already generated.</strong> After approval the friend rewords C2. The change becomes a proposed revision; v1 stays in force until they accept, and documents keep saying which version they used.',
+    steps:[...ALL_ACCOUNTED, ['Extract claims', {type:'extract'}], ...CONFIRM_REST, ['Exclude C3', {type:'claim',id:'C3',status:'excluded'}], ['Approve career profile (v1)', {type:'approve'}], ['Capture Harbor', {type:'capture',index:1}], ['Prepare (cites profile v1)', {type:'prepare',jobId:'J2'}], ['Edit C2 → a revision is proposed', {type:'edit'}], ['Prepare again — nothing new, v1 still in force', {type:'prepare',jobId:'J2'}], ['Accept the revision (v2)', {type:'acceptRevision'}], ['Prepare again — new document from v2', {type:'prepare',jobId:'J2'}]] }
+];
+let active = 0, cursor = 0, outcomes = [];
+function startScenario(i){ active = i; cursor = 0; outcomes = []; state = W.initial(); const f=$('flash'); f.className='flash'; f.innerHTML=`<span class="tag">Walkthrough</span>${SCENARIOS[i].name} — fresh instance. Press step 1.`; render(); }
+function renderScenario(){
+  $('tabs').innerHTML = SCENARIOS.map((s,i) => `<button type="button" role="tab" class="tab" aria-selected="${i===active}" data-i="${i}">${s.name}</button>`).join('');
+  $('tabs').querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => startScenario(+b.dataset.i)));
+  const sc = SCENARIOS[active];
+  $('scenario').innerHTML = `<p>${sc.intro}</p><div class="steps">${sc.steps.map(([l],i) => `<button type="button" class="step ${i<cursor?'done':i===cursor?'current':''}" data-i="${i}" ${i!==cursor?'disabled':''}><span class="n">${String(i+1).padStart(2,'0')}</span><span>${l}</span><span class="out">${outcomes[i]||''}</span></button>`).join('')}</div>${cursor>=sc.steps.length?'<p style="margin-top:12px"><strong>Walkthrough complete.</strong> Free-play from here, or pick another tab.</p>':''}`;
+  $('scenario').querySelectorAll('.step').forEach(b => b.addEventListener('click', () => { const i=+b.dataset.i; if(i!==cursor) return; const res = dispatch(sc.steps[i][1]); outcomes[i] = res.blocked ? 'refused ✓' : 'done'; cursor++; renderScenario(); }));
+}
+$('themeBtn').addEventListener('click', () => { const el=document.documentElement; const d = el.dataset.theme==='dark'; el.dataset.theme = d?'light':'dark'; $('themeBtn').textContent = d?'Dark':'Light'; });
+$('resetBtn').addEventListener('click', () => startScenario(active));
+startScenario(0);
+</script>
+</body>
+</html>

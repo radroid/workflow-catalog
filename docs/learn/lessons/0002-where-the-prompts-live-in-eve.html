@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0002 · Where the prompts live in eve, and how to change one safely</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">Lesson 0002 · eve prompts</div>
+  <h1>Where the prompts live in eve, and how to change one safely</h1>
+  <p class="lede"><strong>One tangible win:</strong> you will be able to open the runner, find every prompt the workflow uses in under a minute, change one, and prove the change with a fixture before you commit.</p>
+  <div class="meta"><span>~20 min</span><span>prev: <a href="0001-reviewing-an-overnight-agents-work.html">0001</a></span><span>reference: <a href="../reference/eve-prompt-map.html">prompt map</a></span><span>eve pinned: 0.63.0</span></div>
+
+  <div class="callout"><span class="tag">Read this first</span>eve is in beta and shipped 27 releases in the two weeks before this lesson was written. The file layout below is from eve's docs at the pinned version (commit <code>d004e6d</code>). When the pin changes, re-check the layout against <code>node_modules/eve/docs</code> before trusting this page. Source: <a href="https://github.com/vercel/eve/blob/d004e6d47e9d25d0380c24b5a47b65a18f8b2784/docs/agent-files.md">eve docs, agent files</a>.</div>
+
+  <h2>1. Knowledge: prompts are files, and their paths are the API</h2>
+  <p>eve derives everything from paths under <code>agent/</code>. That is good news for maintenance: there is no registry to update, and a prompt's location tells you what it controls.</p>
+  <table>
+    <tr><th>Path in the runner</th><th>What it is</th><th>When the model sees it</th></tr>
+    <tr><td><code>agent/instructions.md</code></td><td>The always-on system prompt. "Whatever you write is the prompt."</td><td>Every turn of every session</td></tr>
+    <tr><td><code>agent/skills/&lt;name&gt;/SKILL.md</code></td><td>A procedure the model loads on demand. Agent Skills format; <code>description</code> frontmatter is required.</td><td>When the model decides the skill applies, or a tool loads it</td></tr>
+    <tr><td><code>agent/schedules/&lt;name&gt;.md</code></td><td>A cron prompt: frontmatter <code>cron:</code>, body is the task. Starts a new session on every fire.</td><td>On the schedule, only under <code>eve start</code></td></tr>
+    <tr><td><code>agent/subagents/&lt;name&gt;/instructions.md</code></td><td>System prompt of a delegated agent</td><td>When the root agent delegates</td></tr>
+    <tr><td><code>agent/extensions/jobs.ts</code></td><td>Mounts the job-assistant package; its skills and prompts arrive prefixed <code>jobs__</code></td><td>As above, per contributed file</td></tr>
+    <tr><td><code>agent/tools/*.ts</code></td><td>Tool <em>descriptions</em> in <code>defineTool({ description })</code>. Not a prompt file, but the model reads them.</td><td>Every turn, in the tool list</td></tr>
+  </table>
+  <p>In this project the workflow's own prompts live in the package, <code>packages/job-assistant/skills/*/SKILL.md</code>, and the runner mounts them as an extension. So there are two places to look, and the <a href="../reference/eve-prompt-map.html">prompt map</a> lists both with the fixture that proves each one.</p>
+
+  <h2>2. Knowledge: what a prompt change can and cannot be proven by</h2>
+  <p>eve's test harness is <code>evals/*.eval.ts</code> run by <code>eve eval</code>. It can mock the model with <code>mockModel</code> from <code>eve/evals</code>, which is perfect for proving that <em>tools</em> get called correctly, and useless for proving that a <em>prompt</em> got better, because the mock ignores the prompt. So the rule in this repo is:</p>
+  <div class="card">
+    <ol>
+      <li><strong>Behaviour proofs</strong> (did the right tool get called, did the run refuse when unready) use <code>mockModel</code> evals and run in CI.</li>
+      <li><strong>Prompt proofs</strong> run the real model on a fixture and check the output with the deterministic validator: every claim cited, no excluded IDs, boundaries intact. They run locally with <code>pnpm fixtures &lt;name&gt;</code> and their output diff is attached to the commit.</li>
+    </ol>
+  </div>
+  <p>Sources: <a href="https://github.com/vercel/eve/blob/d004e6d47e9d25d0380c24b5a47b65a18f8b2784/docs/evals/index.mdx">eve evals overview</a>, and the validator rules in <code>docs/spec/mvp-spec.md</code> §F7.</p>
+
+  <h2>3. Skill: the change-one-prompt loop</h2>
+  <div class="card">
+    <ol>
+      <li><strong>Find it.</strong> Open the prompt map, pick the file. Read the whole file, not just the line you want to change; skills carry a "Never" section that other sentences depend on.</li>
+      <li><strong>Find its fixture.</strong> The map names it. Run it once before you change anything so you have a baseline output.</li>
+      <li><strong>Change one thing.</strong> One instruction, one file. If you need two, that is two commits.</li>
+      <li><strong>Prove it.</strong> Re-run the fixture. Read the validator output and the diff against the baseline. If the validator got looser to make it pass, you changed the wrong thing.</li>
+      <li><strong>Commit with the proof.</strong> Message: which prompt, what you intended, the fixture name, and one line from the diff that shows it worked.</li>
+    </ol>
+  </div>
+  <p>For interactive checks before writing a fixture, <code>eve dev</code> gives you the TUI, and <code>eve invoke "…"</code> gives you a single scripted turn from the shell. Source: <a href="https://github.com/vercel/eve/blob/d004e6d47e9d25d0380c24b5a47b65a18f8b2784/docs/guides/dev-tui.md">eve dev TUI guide</a>.</p>
+
+  <h2>4. Retrieval practice</h2>
+  <div class="quiz" data-quiz='{"q":"Where is the always-on system prompt?","opts":["agent/instructions.md","agent/agent.ts file","agent/skills/root.md","agent/prompt.txt"],"answer":0,"why":"instructions.md at the agent root is the system prompt; agent.ts holds config like the model."}'></div>
+  <div class="quiz" data-quiz='{"q":"A mockModel eval can prove that…","opts":["a tool got called","a prompt got clearer","a resume reads well","a claim is true"],"answer":0,"why":"The mock ignores prompt content; it can only prove tool-call behaviour."}'></div>
+  <div class="quiz" data-quiz='{"q":"Schedules defined in agent/schedules fire under…","opts":["eve start only","eve dev only","both commands","neither one"],"answer":0,"why":"eve dev never fires cron; a built app served by eve start does."}'></div>
+  <div class="quiz" data-quiz='{"q":"A skill file must carry which frontmatter?","opts":["description","cron string","model name","author name"],"answer":0,"why":"eve reads description from SKILL.md frontmatter; without it the skill will not load."}'></div>
+  <div class="score" data-score></div>
+
+  <h2>5. Do it for real</h2>
+  <p>Pick the follow-up questions skill, <code>packages/job-assistant/skills/follow-up-questions/SKILL.md</code>. Baseline the onboarding fixture. Change the question the metric claim asks, so it requests the <em>source</em> of the number rather than a yes or no. Re-run. The validator should still pass and the diff should show the new question. Commit with the proof. Then write a learning record if anything surprised you.</p>
+
+  <div class="callout"><span class="tag">Ask your teacher</span>If a fixture fails and you cannot tell whether the prompt or the validator is wrong, paste both outputs into this workspace and ask. The agent will diff them with you and say which one to change.</div>
+
+  <div class="nav"><a href="0001-reviewing-an-overnight-agents-work.html">← Previous lesson</a><span>Primary source: <a href="https://github.com/vercel/eve/tree/d004e6d47e9d25d0380c24b5a47b65a18f8b2784/docs">eve docs at the pinned commit</a></span></div>
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

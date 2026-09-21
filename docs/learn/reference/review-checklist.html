@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference · Twenty-minute packet review checklist</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">Reference · print me</div>
+  <h1>Twenty-minute packet review</h1>
+  <p class="lede">Run top to bottom. Stop the moment a box cannot be ticked; that is the finding.</p>
+  <div class="meta"><span>from <a href="../lessons/0001-reviewing-an-overnight-agents-work.html">lesson 0001</a></span><span>source: <a href="https://google.github.io/eng-practices/review/reviewer/looking-for.html">Google reviewer guide</a></span></div>
+
+  <h3>Report (3 min)</h3>
+  <ul class="checklist">
+    <li>A run report exists and names the packet.</li>
+    <li>Every "skipped", "could not", or "assumed" line is copied into my notes.</li>
+    <li>The report's claimed test result is treated as a claim, not a fact.</li>
+  </ul>
+  <h3>Diff to packet (4 min)</h3>
+  <ul class="checklist">
+    <li>Each acceptance criterion maps to a file or test in the diff.</li>
+    <li>No change exists that no criterion asked for (or it is listed for split/revert).</li>
+    <li>No "while I was here" refactor touches files outside the packet's paths.</li>
+  </ul>
+  <h3>Proofs (5 min)</h3>
+  <ul class="checklist">
+    <li>Smoke test run by me, output seen by me.</li>
+    <li>Packet fixtures run by me, including the hostile-content fixture when relevant.</li>
+    <li>No test marked skip/only; no fixture edited to make an assertion pass.</li>
+  </ul>
+  <h3>Risk surfaces (5 min)</h3>
+  <ul class="checklist">
+    <li>Prompts: any changed prompt file has a fixture that proves the change.</li>
+    <li>Schemas and validators: nothing became optional, permissive, or "any".</li>
+    <li>Extension: manifest permissions and host permissions unchanged, or the change is justified against the browser-boundary research.</li>
+    <li>Workspace data: nothing writes personal context anywhere except the local workspace.</li>
+  </ul>
+  <h3>Decision (3 min)</h3>
+  <ul class="checklist">
+    <li>Decision written into the packet file: merge / push back (numbered) / revert and re-run.</li>
+    <li>One line: what to change in the packet's prompt next time.</li>
+  </ul>
+  <p class="small">Agent-specific defects, in order of frequency: scope creep, weakened validators, untested prompt edits, new permissions, silent assumptions in the report.</p>
+</div>
+</body>
+</html>
