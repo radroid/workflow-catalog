@@ -1,10 +1,47 @@
+import { Fragment } from "react";
 import { requireSession } from "../../../lib/auth/require-session";
 import { toggleInstallItemAction } from "../../../lib/actions/install";
 import { getDb } from "../../../lib/db";
 import { INSTALL_CHECKLIST_ITEMS, listCheckedItems } from "../../../lib/install-status";
-import { INSTALL_STEPS } from "../../../lib/install-commands";
+import { INSTALL_STEPS, urlBreakParts } from "../../../lib/install-commands";
 
 export const metadata = { title: "Install · workflow catalog" };
+
+/**
+ * One <code> per command line, not one text blob joined with "\n" — P09.1
+ * (UI critic, revision round): a long command (e.g. the git clone URL)
+ * wrapping onto a second visual row at 390px looked identical to a fresh
+ * command starting there, since nothing distinguished a soft-wrapped
+ * continuation from a new line. Each command is its own block-level
+ * element, so text-indent's negative hanging-indent trick (globals.css's
+ * .command-line) applies per command rather than only to the whole
+ * <pre>'s first line: a wrapped continuation indents under the line
+ * above it, a new command starts flush left again. No extra prompt
+ * character (e.g. "$ ") is ever added to the DOM — this is exactly the
+ * command text, so selecting and copying a block reproduces exactly its
+ * commands (see tests/install-command-block.test.ts).
+ *
+ * P09.1 revision 2 (UI critic): a URL gets a <wbr> after each path "/"
+ * (urlBreakParts), so at 390px the clone URL wraps between path segments
+ * (after "github.com/") instead of mid-word. A <wbr> is a break
+ * opportunity, not a character, so a copy is unchanged.
+ */
+function CommandBlock({ commands }: { commands: string[] }) {
+  return (
+    <pre className="command-block">
+      {commands.map((command, index) => (
+        <code className="command-line" key={index}>
+          {urlBreakParts(command).map((part, partIndex) => (
+            <Fragment key={partIndex}>
+              {partIndex > 0 ? <wbr /> : null}
+              {part}
+            </Fragment>
+          ))}
+        </code>
+      ))}
+    </pre>
+  );
+}
 
 export default async function InstallPage() {
   const session = await requireSession();
@@ -25,11 +62,19 @@ export default async function InstallPage() {
         {INSTALL_STEPS.map((step) => (
           <li key={step.id}>
             <p className="step-label">{step.label}</p>
-            {step.commands ? (
-              <pre className="command-block">
-                <code>{step.commands.join("\n")}</code>
-              </pre>
+            {step.prereqs ? (
+              <ul className="plain-list">
+                {step.prereqs.map((prereq, index) => (
+                  <li key={index}>
+                    {prereq.text}
+                    {prereq.commandsLabel ? <p className="command-label">{prereq.commandsLabel}</p> : null}
+                    {prereq.commands ? <CommandBlock commands={prereq.commands} /> : null}
+                  </li>
+                ))}
+              </ul>
             ) : null}
+            {step.commandsLabel ? <p className="command-label">{step.commandsLabel}</p> : null}
+            {step.commands ? <CommandBlock commands={step.commands} /> : null}
             {step.note ? <p className="step-note">{step.note}</p> : null}
           </li>
         ))}

@@ -112,6 +112,78 @@ describe("fetchPackageRelease — error", () => {
     const result = await fetchPackageRelease(VERSION);
     expect(result.kind).toBe("error");
   });
+
+  // P09-B peer review, round 2 (low follow-up #2): when the cap trips,
+  // readCappedText used to release its lock on the reader (in a `finally`)
+  // without ever cancelling it — dropping this function's own reference to
+  // the stream, but never telling the underlying connection to stop. A
+  // custom ReadableStream whose `cancel()` records that it was called is
+  // the only way to prove the fix from outside the module: a plain
+  // Response body (as the test above uses) doesn't expose whether anyone
+  // downstream is still consuming the connection after this function gives
+  // up on it. This test fails against the pre-fix code (confirmed:
+  // temporarily reverted the `reader.cancel()` call locally, reran, watched
+  // `cancelCalled` stay false).
+  //
+  // P09.1 revision round (reviewer R1): cancel() alone turned out not to be
+  // enough in production — when this fetch was routed through Next's Data
+  // Cache, Next's patched fetch had already teed the response, and
+  // cancelling only *our* copy of the body left an internal second copy
+  // (feeding the cache) still reading regardless, measured at ~835 KB and
+  // ~5 s. Aborting the fetch's own AbortSignal is what actually stops the
+  // underlying request; this test now also captures the signal the mocked
+  // fetch was called with and asserts it's aborted once the cap trips.
+  it("cancels the body reader AND aborts the fetch's own signal once the cap trips", async () => {
+    let cancelCalled = false;
+    let capturedSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedSignal = init?.signal ?? undefined;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            // One chunk, comfortably over the 4096-byte cap, so the cap
+            // trips on the very first read() rather than needing the
+            // stream to be asked for more.
+            controller.enqueue(new TextEncoder().encode("a".repeat(50_000)));
+          },
+          cancel() {
+            cancelCalled = true;
+          },
+        });
+        return new Response(stream, { status: 200 });
+      }),
+    );
+
+    const result = await fetchPackageRelease(VERSION);
+
+    expect(result.kind).toBe("error");
+    expect(cancelCalled).toBe(true);
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  // P09.1 revision round (reviewer R1): this fetch must never enter Next's
+  // Data Cache — the *parsed* result is what getCachedPackageRelease caches
+  // instead (see release-cache.test.ts). `cache: "no-store"` is the
+  // documented way to opt a single fetch() call out of it; a `next: {...}`
+  // option is the (now removed) alternative that put it there in the first
+  // place, so this also asserts that option is gone, not just that
+  // no-store is present.
+  it("never passes fetch a `next` caching option, and always passes cache: \"no-store\"", async () => {
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedInit = init;
+        return new Response(`${CHECKSUM_HEX}  ${TARBALL_NAME}\n`, { status: 200 });
+      }),
+    );
+
+    await fetchPackageRelease(VERSION);
+
+    expect(capturedInit?.cache).toBe("no-store");
+    expect(capturedInit).not.toHaveProperty("next");
+  });
 });
 
 describe("fetchPackageRelease — timeout", () => {
@@ -166,6 +238,12 @@ describe("fetchPackageRelease — timeout", () => {
     const result = await pending;
 
     expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("unreachable");
+    // P09.1 (P09-B review round 2 follow-up): pin the actual message, not
+    // just the "error" kind — describeFetchError only produces this exact
+    // string for an AbortError, so this also proves the abort (not some
+    // other rejection) is what resolved the request.
+    expect(result.message).toBe("Request timed out.");
   });
 
   it("resolves to the error state within the timeout when the body stalls mid-stream, after some bytes", async () => {
@@ -188,5 +266,7 @@ describe("fetchPackageRelease — timeout", () => {
     const result = await pending;
 
     expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("unreachable");
+    expect(result.message).toBe("Request timed out.");
   });
 });
