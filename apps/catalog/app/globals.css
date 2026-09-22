@@ -127,6 +127,78 @@ section + section {
   margin-top: 12px;
 }
 
+/* An intro paragraph inside a .card (e.g. the template page's Sources /
+   Connections / Browser permissions cards) explaining the content right
+   below it — .lede's page-level 28px bottom margin (sized for a top-of-page
+   intro) reads as an oversized gap in a compact card; this tightens it
+   without touching .lede everywhere else it's used. */
+.card .lede {
+  margin-bottom: 14px;
+}
+
+/* Key/value rows (docs/spec/visuals/index.html's prototype pattern):
+   template page's Sources and Connections cards. A flat sequence of
+   children auto-flows into a repeating [1fr key][auto value] grid, so
+   pairs of children become rows — no wrapper element needed per row. Prose
+   -length key text (e.g. a source's full label) wraps normally within its
+   1fr column instead of being forced into pill styling, which is the
+   P09-B revision-round bug this replaces (long text in an all-caps mono
+   nowrap .pill wrapped mid-word at 390px). */
+.kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  align-items: baseline;
+  font-size: 13.5px;
+}
+
+.kv .k {
+  color: var(--muted-foreground);
+}
+
+/* Browser permissions: name + meaning, semantically a definition list
+   (screen readers announce the dt/dd relationship specifically), not the
+   <ol> of unrelated steps it used to be reused from. dt at least as bold as
+   dd, per the P09-B revision round's UI critique. */
+.perm-list {
+  margin: 0;
+}
+
+.perm-list dt {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  margin: 16px 0 4px;
+}
+
+.perm-list dt:first-child {
+  margin-top: 0;
+}
+
+.perm-list dd {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+/* The changelog's per-version notes: a plain <ul> with no class rendered
+   with the browser's own default list margin/padding/marker spacing
+   instead of this theme's spacing scale — flagged in the P09-B revision
+   round. */
+.changelog-notes {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.changelog-notes li {
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 13.5px;
+}
+
+.changelog-notes li:last-child {
+  margin-bottom: 0;
+}
+
 .stack {
   display: flex;
   flex-direction: column;
@@ -202,13 +274,24 @@ button:disabled {
   box-shadow: none;
 }
 
-button.primary {
+/* .button.primary too, not just button.primary — the template page's
+   download link is an <a className="button primary"> (a real download needs
+   a real href, which only <a> can carry), styled by the shared `.button`
+   rule above but never matched by a selector requiring a literal <button>.
+   Same bug and same fix as .button.ghost right below: unfixed, the link
+   fell back to plain `.button`'s var(--card)/var(--foreground) pairing
+   instead of the primary treatment, flagged in the P09-B revision round as
+   unreadable (effectively white-on-white in light mode) once a release
+   exists to link to. */
+button.primary,
+.button.primary {
   background: var(--primary);
   color: var(--primary-foreground);
   border-color: var(--primary);
 }
 
-button.primary:hover {
+button.primary:hover,
+.button.primary:hover {
   opacity: 0.92;
 }
 
@@ -513,6 +596,14 @@ tr:last-child td {
 }
 
 .top-nav a:hover {
+  color: var(--foreground);
+}
+
+/* aria-current="page" (see components/gated-nav.tsx) is primarily an
+   assistive-tech signal, but a link that's the current page should look
+   different too — matches the hover color rather than inventing a third
+   treatment. */
+.top-nav a[aria-current="page"] {
   color: var(--foreground);
 }
 

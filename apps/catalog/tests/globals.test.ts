@@ -66,6 +66,22 @@ describe("catalog theme wiring", () => {
     expect(ghostRuleMatch?.[1]).toMatch(/background:\s*transparent/);
   });
 
+  it("applies the primary style to <a class=\"button primary\"> links, not just <button class=\"primary\">", () => {
+    // Same bug class as .button.ghost above: the template page's download
+    // link is an <a className="button primary">, not a <button>, so a
+    // selector requiring a literal button element leaves it on .button's
+    // plain card background/foreground text — effectively unreadable
+    // against the intended primary treatment. Caught in the P09-B revision
+    // round.
+    const primaryRuleMatch = /button\.primary,\s*\n?\s*\.button\.primary\s*{([^}]*)}/.exec(globalsCss);
+    expect(primaryRuleMatch, "expected a combined button.primary, .button.primary rule").not.toBeNull();
+    expect(primaryRuleMatch?.[1]).toMatch(/background:\s*var\(--primary\)/);
+    expect(primaryRuleMatch?.[1]).toMatch(/color:\s*var\(--primary-foreground\)/);
+
+    const primaryHoverMatch = /button\.primary:hover,\s*\n?\s*\.button\.primary:hover\s*{([^}]*)}/.exec(globalsCss);
+    expect(primaryHoverMatch, "expected a combined button.primary:hover, .button.primary:hover rule").not.toBeNull();
+  });
+
   it("gives the auto-focused 'Refused' alert a themed :focus ring, not the browser default", () => {
     const alertRingMatch = /\.flash\.error:focus\s*{([^}]*)}/.exec(globalsCss);
     expect(alertRingMatch, "expected a .flash.error:focus rule").not.toBeNull();

@@ -1,3 +1,5 @@
+import { Fragment } from "react";
+import Link from "next/link";
 import { requireSession } from "../../../../lib/auth/require-session";
 import { workflowManifest } from "../../../../lib/workflow-manifest";
 import { fetchPackageRelease } from "../../../../lib/release";
@@ -24,16 +26,14 @@ export default async function TemplatePage() {
       <h1>{workflowManifest.name}</h1>
       <p className="lede">{workflowManifest.description}</p>
 
-      <h2>Version</h2>
-      <p className="tight">
-        <span className="pill">{workflowManifest.version}</span>
-      </p>
-
       <h2>Download</h2>
       <div className="card pad stack">
         {releaseResult.kind === "found" ? (
           <>
-            <p className="tight">Checksum &mdash; SHA-256 of the release tarball itself</p>
+            <p className="tight">
+              Version {workflowManifest.version}&nbsp;&middot; Release: published
+            </p>
+            <p className="tight">Checksum&nbsp;&mdash; SHA-256 of the release tarball itself</p>
             <p className="mono break-all">{releaseResult.release.checksum}</p>
             <div className="row multiline">
               <a className="button primary" href={releaseResult.release.tarballUrl}>
@@ -45,43 +45,71 @@ export default async function TemplatePage() {
             </div>
           </>
         ) : releaseResult.kind === "not_found" ? (
-          <p className="lede tight">Checksum and download appear with the first release.</p>
+          <>
+            <p className="tight">
+              Version {workflowManifest.version}&nbsp;&middot; Release: not published yet
+            </p>
+            <p className="lede tight">
+              Checksum and download appear with the first release. Meanwhile, see the{" "}
+              <Link href="/install">install guide</Link>.
+            </p>
+          </>
         ) : (
-          <p className="lede tight">Checksum and download are temporarily unavailable. Try again shortly.</p>
+          <>
+            <p className="tight">
+              Version {workflowManifest.version}&nbsp;&middot; Release: temporarily unavailable
+            </p>
+            <p className="lede tight">Checksum and download are temporarily unavailable. Try again shortly.</p>
+          </>
         )}
       </div>
 
       <h2>What it needs</h2>
 
-      <h3>Sources</h3>
-      <p className="lede tight">Every one of these is accounted for during onboarding &mdash; provided, unavailable, or not applicable, never silently skipped.</p>
-      <div className="row multiline">
-        {workflowManifest.requiredSources.map((source) => (
-          <span className="pill" key={source}>
-            {SOURCE_CATEGORY_LABELS[source]}
-          </span>
-        ))}
+      <div className="card pad">
+        <h3>Sources</h3>
+        <p className="lede">
+          Every one of these is accounted for during onboarding&nbsp;&mdash; provided, unavailable, or not
+          applicable, never silently skipped.
+        </p>
+        <div className="kv">
+          {workflowManifest.requiredSources.map((source) => (
+            <Fragment key={source}>
+              <span className="k">{SOURCE_CATEGORY_LABELS[source]}</span>
+              <span className="pill">Required</span>
+            </Fragment>
+          ))}
+        </div>
       </div>
 
-      <h3>Connections</h3>
-      <div className="row multiline">
-        {workflowManifest.connections.map((connection) => (
-          <span className="pill" key={connection}>
-            {CONNECTION_LABELS[connection]}
-          </span>
-        ))}
+      <div className="card pad">
+        <h3>Connections</h3>
+        <p className="lede">Ways the runner can bring each source in.</p>
+        <div className="kv">
+          {workflowManifest.connections.map((connection) => (
+            <Fragment key={connection}>
+              <span className="k">{CONNECTION_LABELS[connection]}</span>
+              <span className="pill">Supported</span>
+            </Fragment>
+          ))}
+        </div>
       </div>
 
-      <h3>Browser permissions</h3>
-      <p className="lede tight">Exactly these six, and nothing else &mdash; no host access beyond the extension&apos;s own bridge, no <code>tabs</code>, <code>debugger</code>, or remote code.</p>
-      <ol className="step-list">
-        {workflowManifest.browserPermissions.map((permission) => (
-          <li key={permission}>
-            <p className="step-label mono">{permission}</p>
-            <p className="step-note">{BROWSER_PERMISSION_DESCRIPTIONS[permission]}</p>
-          </li>
-        ))}
-      </ol>
+      <div className="card pad">
+        <h3>Browser permissions</h3>
+        <p className="lede">
+          Exactly these six, and nothing else&nbsp;&mdash; no host access beyond the extension&apos;s own
+          bridge, no <code>tabs</code>, <code>debugger</code>, or remote code.
+        </p>
+        <dl className="perm-list">
+          {workflowManifest.browserPermissions.map((permission) => (
+            <Fragment key={permission}>
+              <dt>{permission}</dt>
+              <dd>{BROWSER_PERMISSION_DESCRIPTIONS[permission]}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      </div>
 
       <h2>Changelog</h2>
       <div className="card pad stack">
@@ -90,7 +118,7 @@ export default async function TemplatePage() {
             <p className="tight">
               <strong>{entry.version}</strong> <span className="mono">{entry.date}</span>
             </p>
-            <ul>
+            <ul className="changelog-notes">
               {entry.notes.map((note) => (
                 <li key={note}>{note}</li>
               ))}
