@@ -73,8 +73,12 @@ are verified locally/in CI against PGlite. To actually deploy:
    own Deployment Protection would only add a second, redundant gate and — on Hobby — only
    supports a single external viewer, which would break the five-person pilot. Turn it off in
    the project's Deployment Protection settings.
-6. **Deploy.** `vercel build` (or a push, once the project is linked) from `apps/catalog`;
-   confirm the preview URL loads `/` signed out.
+6. **Deploy.** `vercel build` alone produces no URL — it only writes `.vercel/output/` locally,
+   and needs the project's settings/env vars pulled first. From `apps/catalog`, with the
+   project linked: `vercel pull --yes --environment=preview`, then `vercel build`, then
+   `vercel deploy --prebuilt` to actually upload and get a preview URL. Or skip the CLI and
+   just push to a branch — the linked Vercel project deploys previews on push automatically.
+   Either way, confirm the preview URL loads `/` signed out.
 
 None of steps 1–5 were performed by this packet. `vercel build` was **not** run locally either —
 it requires a linked Vercel project (step 1), which is owner-gated. `pnpm --filter catalog build`
