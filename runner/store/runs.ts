@@ -50,6 +50,12 @@ const RECORD_KEY_ORDER = [
 export interface RunRecordWithPath extends RunRecord {
   /** `runs/<date>/<runId>.json`, relative to the workspace root, for the person to open. */
   readonly path: string;
+  /**
+   * The same file's absolute, OS-native path (G8, round-1 revision): local-API-only,
+   * never included in `GET /status` (that route never touches this type).
+   * Computed with `Workspace#resolve`, which does no I/O of its own.
+   */
+  readonly absolutePath: string;
 }
 
 /** The OS-local calendar date (`YYYY-MM-DD`) of `date`, per decision 4 (never UTC). */
@@ -202,10 +208,23 @@ export interface ListRunsOptions {
   readonly sinceDays?: number;
 }
 
+/** Up to this many skipped (unreadable/invalid) paths are named in a `listRuns` result; `invalidCount` still counts every one (G9, nit). */
+export const MAX_SKIPPED_FILES_REPORTED = 10;
+
 export interface ListRunsResult {
   readonly records: readonly RunRecordWithPath[];
-  /** Files that existed but did not validate (or were not readable): skipped, never thrown, surfaced as a count so the UI can say so. */
+  /** Files (or, when a whole date directory could not be listed, that directory) skipped because they didn't validate or couldn't be read: never thrown, always counted. */
   readonly invalidCount: number;
+  /** Up to `MAX_SKIPPED_FILES_REPORTED` relative paths of what `invalidCount` counted, so the UI can name them (G9). A directory that itself failed to list is reported as `runs/<date>/`. */
+  readonly skippedFiles: readonly string[];
+}
+
+function withPath(workspace: Workspace, record: RunRecord, date: string, file: string): RunRecordWithPath {
+  return { ...record, path: `${RUNS_SEGMENT}/${date}/${file}`, absolutePath: workspace.resolve(RUNS_SEGMENT, date, file) };
+}
+
+function pushSkipped(skippedFiles: string[], entry: string): void {
+  if (skippedFiles.length < MAX_SKIPPED_FILES_REPORTED) skippedFiles.push(entry);
 }
 
 /** Newest first, bounded to `limit` records within the last `sinceDays` local days (F11; defaults 200 / 14). */
@@ -216,32 +235,43 @@ export async function listRuns(workspace: Workspace, clock: Clock, options: List
   const dateDirs = (await dateDirectories(workspace)).sort().reverse();
   const records: RunRecordWithPath[] = [];
   let invalidCount = 0;
+  const skippedFiles: string[] = [];
   for (const date of dateDirs) {
     if (date < cutoff) break; // sorted descending: every remaining directory is also out of the window
-    const files = (await workspace.list(RUNS_SEGMENT, date)).filter((name) => name.endsWith(".json"));
+    let files: string[];
+    try {
+      files = (await workspace.list(RUNS_SEGMENT, date)).filter((name) => name.endsWith(".json"));
+    } catch {
+      // An error listing one date directory (e.g. a permissions problem) skips just that directory with a
+      // note, never a 500 for the whole page (nit).
+      invalidCount += 1;
+      pushSkipped(skippedFiles, `${RUNS_SEGMENT}/${date}/`);
+      continue;
+    }
     for (const file of files) {
       const record = await readRecord(workspace, date, file);
       if (!record) {
         invalidCount += 1;
+        pushSkipped(skippedFiles, `${RUNS_SEGMENT}/${date}/${file}`);
         continue;
       }
-      records.push({ ...record, path: `${RUNS_SEGMENT}/${date}/${file}` });
+      records.push(withPath(workspace, record, date, file));
     }
   }
   // Every writer here stamps startedAt via Date#toISOString() (fixed-width, UTC "Z" suffix), so a lexical
   // sort is a chronological sort.
   records.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
-  return { records: records.slice(0, limit), invalidCount };
+  return { records: records.slice(0, limit), invalidCount, skippedFiles };
 }
 
-/** Undefined for a non-uuid `runId` (no filesystem touch), a missing run, or one whose file does not validate. */
+/** Undefined for a non-uuid `runId` (no filesystem touch), a missing run, one whose file does not validate, or one whose file's own `runId` field does not match (nit: defends a hand-edited or corrupted file). */
 export async function getRun(workspace: Workspace, runId: string): Promise<RunRecordWithPath | undefined> {
   if (!uuidSchema.safeParse(runId).success) return undefined;
   const dateDirs = await dateDirectories(workspace);
   const file = `${runId}.json`;
   for (const date of dateDirs) {
     const record = await readRecord(workspace, date, file);
-    if (record) return { ...record, path: `${RUNS_SEGMENT}/${date}/${file}` };
+    if (record && record.runId === runId) return withPath(workspace, record, date, file);
   }
   return undefined;
 }
@@ -257,8 +287,38 @@ export async function countCountableRuns(workspace: Workspace, date: string): Pr
   return count;
 }
 
-/** The idempotency lookup P05 and P08-B use: has a run with this key already succeeded within the retained window? */
-export async function hasSucceededWithIdempotencyKey(workspace: Workspace, clock: Clock, idempotencyKey: string, options: ListRunsOptions = {}): Promise<boolean> {
-  const { records } = await listRuns(workspace, clock, options);
-  return records.some((record) => record.outcome === "success" && record.idempotencyKey === idempotencyKey);
+export interface HasSucceededOptions {
+  readonly sinceDays?: number;
+}
+
+/**
+ * The idempotency lookup P05 and P08-B use: has a run with this key already
+ * succeeded within the retained window? G3 (round-1 revision, reviewer issue
+ * 4): scans the *whole* `sinceDays` window (default 14), newest first,
+ * stopping at the first match — deliberately not `listRuns`'s 200-record
+ * page, so a success outside the newest 200 records (behind a busy day)
+ * still reads as "done" and never causes a duplicate run. A `paused` record
+ * is never a match (it never ran): the `outcome === "success"` check below
+ * already excludes it, same as `listRuns`.
+ */
+export async function hasSucceededWithIdempotencyKey(workspace: Workspace, clock: Clock, idempotencyKey: string, options: HasSucceededOptions = {}): Promise<boolean> {
+  const sinceDays = options.sinceDays ?? DEFAULT_RUN_LIST_WINDOW_DAYS;
+  const cutoff = localDateString(new Date(clock.now().getTime() - sinceDays * DAY_MS));
+  const dateDirs = (await dateDirectories(workspace)).sort().reverse(); // newest date directory first
+  for (const date of dateDirs) {
+    if (date < cutoff) break;
+    const files = (await workspace.list(RUNS_SEGMENT, date)).filter((name) => name.endsWith(".json"));
+    const dayRecords: RunRecord[] = [];
+    for (const file of files) {
+      const record = await readRecord(workspace, date, file);
+      if (record) dayRecords.push(record);
+    }
+    // Newest first within the day too, so "stopping at the first hit" is genuinely newest-first, not just
+    // newest-directory-first.
+    dayRecords.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
+    for (const record of dayRecords) {
+      if (record.outcome === "success" && record.idempotencyKey === idempotencyKey) return true;
+    }
+  }
+  return false;
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { budgetStatusSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { ManualClock } from "../lib/clock.ts";
@@ -12,6 +12,7 @@ import {
   pauseBudget,
   resumeBudget,
   setBudgetLimits,
+  withBudgetLock,
 } from "../store/budget.ts";
 import { finishRun, startRun, writePausedRun } from "../store/runs.ts";
 import { Workspace } from "../store/workspace.ts";
@@ -64,6 +65,12 @@ describe("store/budget.ts: pause and resume", () => {
     const state = await getBudgetState(reopened, clock);
     expect(state).toMatchObject({ paused: true, pausedReason: "provider limit", dailyRunLimit: 33, itemCap: 9 });
     expect(state.pausedSince).toBe(clock.now().toISOString());
+
+    // Nit (round-1 review): read the raw bytes directly, bypassing getBudgetState's own read path entirely —
+    // pins that the pause is genuinely durable on disk, not reconstructible only through an in-memory shortcut
+    // this design doesn't have today but a future regression could add.
+    const raw = JSON.parse(await readFile(workspace.resolve("runs", "budget.json"), "utf8")) as Record<string, unknown>;
+    expect(raw).toMatchObject({ paused: true, pausedReason: "provider limit", dailyRunLimit: 33, itemCap: 9, pausedSince: clock.now().toISOString() });
   });
 
   it("resumeBudget clears the pause and keeps the existing limits", async () => {
@@ -110,7 +117,7 @@ describe("store/budget.ts: decision 2 — corrupt runs/budget.json fails closed,
     expect(state).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, corrupt: true });
   });
 
-  it("runs are refused with a paused record while the file is corrupt (proven at the store layer; run-harness.test.ts proves it end to end)", async () => {
+  it("runs are refused with a paused record while the file is corrupt (proven at the store layer; run-harness.test.ts's 'a corrupt runs/budget.json refuses withRun' test proves it end to end)", async () => {
     const clock = new ManualClock();
     const workspace = await newWorkspace(clock);
     await writeFile(workspace.resolve("runs", "budget.json"), "not json at all", "utf8");
@@ -134,6 +141,55 @@ describe("store/budget.ts: decision 2 — corrupt runs/budget.json fails closed,
     await setBudgetLimits(workspace, { dailyRunLimit: 12, itemCap: 4 });
     const state = await getBudgetState(workspace, clock);
     expect(state).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, dailyRunLimit: 12, itemCap: 4, corrupt: false });
+  });
+});
+
+describe("store/budget.ts: G4 (round-1 revision, reviewer issue 5) — serialized writes", () => {
+  it("a Save racing a provider-limit pause keeps both, every time (mutation target: un-serialize the writes)", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    let lost = 0;
+    const trials = 40;
+    for (let i = 0; i < trials; i += 1) {
+      await setBudgetLimits(workspace, { dailyRunLimit: 10, itemCap: 5 });
+      await resumeBudget(workspace); // a clean, unpaused starting state each trial
+      await Promise.all([setBudgetLimits(workspace, { dailyRunLimit: 12, itemCap: 4 }), pauseBudget(workspace, clock, "provider limit")]);
+      const state = await getBudgetState(workspace, clock);
+      if (!state.paused) lost += 1;
+    }
+    expect(lost).toBe(0);
+  });
+
+  it("withBudgetLock runs callers strictly one at a time per workspace", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const order: number[] = [];
+    let active = 0;
+    let overlapped = false;
+    const task = (n: number) =>
+      withBudgetLock(workspace, async () => {
+        active += 1;
+        if (active > 1) overlapped = true;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        order.push(n);
+        active -= 1;
+      });
+    await Promise.all([task(1), task(2), task(3)]);
+    expect(overlapped).toBe(false);
+    expect(order).toEqual([1, 2, 3]); // queued in call order
+  });
+
+  it("a rejecting callback does not poison the chain for the next caller", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await expect(
+      withBudgetLock(workspace, async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    // A later, unrelated lock use still runs (this is what a broken chain would hang or reject).
+    const result = await withBudgetLock(workspace, async () => "ok");
+    expect(result).toBe("ok");
   });
 });
 

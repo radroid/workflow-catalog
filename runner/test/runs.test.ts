@@ -21,6 +21,45 @@ describe("store/runs.ts: localDateString", () => {
   });
 });
 
+/** Explicitly sets/restores process.env.TZ around `run` (sync or async), so a test's outcome never depends on the ambient shell. */
+async function withTz<T>(tz: string, run: () => T | Promise<T>): Promise<T> {
+  const original = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return await run();
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+}
+
+describe("store/runs.ts: localDateString under an explicit TZ=UTC (nit: this is what CI uses)", () => {
+  it("still lands on the correct local (=UTC) calendar date either side of midnight", async () => {
+    await withTz("UTC", () => {
+      expect(localDateString(new Date("2026-09-22T23:59:59.000Z"))).toBe("2026-09-22");
+      expect(localDateString(new Date("2026-09-23T00:00:01.000Z"))).toBe("2026-09-23");
+    });
+  });
+});
+
+describe("store/runs.ts: a run crossing local midnight (nit)", () => {
+  it("stays filed under its startedAt date even when finishRun happens on the next local day", async () => {
+    await withTz("UTC", async () => {
+      const clock = new ManualClock("2026-09-22T23:59:30.000Z");
+      const workspace = await newWorkspace(clock);
+      const runId = randomUUID();
+      const { startedAt } = await startRun(workspace, clock, { runId, kind: "manual", isCatchUp: false, idempotencyKey: "midnight", inputs: {} });
+      clock.advance(60_000); // now 2026-09-23T00:00:30Z: a new local day under TZ=UTC
+      await finishRun(workspace, clock, { runId, kind: "manual", isCatchUp: false, idempotencyKey: "midnight", inputs: {}, startedAt, outcome: "success", model: "m", tokens: { input: 0, output: 0 } });
+
+      expect(await workspace.list("runs", "2026-09-22")).toEqual([`${runId}.json`]);
+      expect(await workspace.list("runs", "2026-09-23")).toEqual([]);
+      const record = await getRun(workspace, runId);
+      expect(record?.path).toBe(`runs/2026-09-22/${runId}.json`);
+    });
+  });
+});
+
 describe("store/runs.ts: start/finish (crash safety)", () => {
   it("startRun writes a crash-safe placeholder; finishRun overwrites the same file with the real outcome", async () => {
     const clock = new ManualClock();
@@ -186,6 +225,72 @@ describe("store/runs.ts: listing and reading", () => {
     const date = localDateString(clock.now());
     expect(record?.path).toBe(`runs/${date}/${runId}.json`);
   });
+
+  it("G8: absolutePath resolves the same file under the workspace root, from both getRun and listRuns", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const runId = randomUUID();
+    await writePausedRun(workspace, clock, { runId, kind: "manual", isCatchUp: false, idempotencyKey: "k", inputs: {}, reason: "r" });
+    const record = await getRun(workspace, runId);
+    const date = localDateString(clock.now());
+    expect(record?.absolutePath).toBe(workspace.resolve("runs", date, `${runId}.json`));
+    const { records } = await listRuns(workspace, clock);
+    expect(records[0]?.absolutePath).toBe(record?.absolutePath);
+  });
+
+  it("getRun refuses a file whose own runId field does not match the filename (nit: defends a hand-edited or corrupted file)", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const runId = randomUUID();
+    const wrongId = randomUUID();
+    await writePausedRun(workspace, clock, { runId, kind: "manual", isCatchUp: false, idempotencyKey: "k", inputs: {}, reason: "r" });
+    const date = localDateString(clock.now());
+    const raw = (await workspace.readJson("runs", date, `${runId}.json`)) as Record<string, unknown>;
+    await workspace.writeJson(["runs", date, `${runId}.json`], { ...raw, runId: wrongId });
+    expect(await getRun(workspace, runId)).toBeUndefined();
+  });
+
+  it("G9/nit: skippedFiles names up to 10 invalid/unreadable paths in <code>-ready relative form; invalidCount still counts every one", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const date = localDateString(clock.now());
+    await writePausedRun(workspace, clock, { runId: randomUUID(), kind: "manual", isCatchUp: false, idempotencyKey: "seed", inputs: {}, reason: "r" }); // ensures runs/<date>/ exists
+    const badPaths: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const file = `${randomUUID()}.json`;
+      await writeFile(workspace.resolve("runs", date, file), "{ not json", "utf8");
+      badPaths.push(`runs/${date}/${file}`);
+    }
+    const { records, invalidCount, skippedFiles } = await listRuns(workspace, clock);
+    expect(records.length).toBe(1); // the seed
+    expect(invalidCount).toBe(12);
+    expect(skippedFiles.length).toBe(10);
+    for (const path of skippedFiles) expect(badPaths).toContain(path);
+  });
+
+  it("nit: an error listing one date directory skips just that directory with a note, not a 500", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const goodId = randomUUID();
+    await writePausedRun(workspace, clock, { runId: goodId, kind: "manual", isCatchUp: false, idempotencyKey: "good", inputs: {}, reason: "r" });
+    clock.advance(DAY_MS);
+    const badDate = localDateString(clock.now());
+    await workspace.writeJson(["runs", badDate, `${randomUUID()}.json`], { not: "read: list() is mocked to throw for this date below" });
+
+    const original = workspace.list.bind(workspace);
+    const listSpy = vi.spyOn(workspace, "list").mockImplementation(async (...segments: string[]) => {
+      if (segments[0] === "runs" && segments[1] === badDate) throw new Error("EACCES (simulated)");
+      return original(...segments);
+    });
+    try {
+      const { records, invalidCount, skippedFiles } = await listRuns(workspace, clock);
+      expect(records.map((r) => r.runId)).toEqual([goodId]); // the good directory still comes back
+      expect(invalidCount).toBe(1);
+      expect(skippedFiles).toEqual([`runs/${badDate}/`]);
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
 });
 
 describe("store/runs.ts: countCountableRuns", () => {
@@ -225,5 +330,55 @@ describe("store/runs.ts: hasSucceededWithIdempotencyKey", () => {
     expect(await hasSucceededWithIdempotencyKey(workspace, clock, "used-key")).toBe(true);
     expect(await hasSucceededWithIdempotencyKey(workspace, clock, "failed-key")).toBe(false);
     expect(await hasSucceededWithIdempotencyKey(workspace, clock, "never-seen")).toBe(false);
+  });
+
+  it("nit: a paused record with a matching key never counts as succeeded", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await writePausedRun(workspace, clock, { runId: randomUUID(), kind: "manual", isCatchUp: false, idempotencyKey: "shared-key", inputs: {}, reason: "daily run limit reached (10)" });
+    expect(await hasSucceededWithIdempotencyKey(workspace, clock, "shared-key")).toBe(false);
+  });
+});
+
+describe("store/runs.ts: G3 (round-1 revision, reviewer issue 4) — the idempotency window is not capped at 200", () => {
+  it("finds a success from 5 days ago behind more than 200 newer records (mutation target: reintroduce listRuns's 200 cap here)", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const key = "prepare:job-northwind-labs";
+    const oldId = randomUUID();
+    const { startedAt } = await startRun(workspace, clock, { runId: oldId, kind: "prepare_newly_saved_jobs", isCatchUp: false, idempotencyKey: key, inputs: {} });
+    await finishRun(workspace, clock, { runId: oldId, kind: "prepare_newly_saved_jobs", isCatchUp: false, idempotencyKey: key, inputs: {}, startedAt, outcome: "success", model: "m", tokens: { input: 1, output: 1 } });
+    clock.advance(DAY_MS);
+    for (let day = 0; day < 4; day += 1) {
+      for (let i = 0; i < 50; i += 1) {
+        await writePausedRun(workspace, clock, { runId: randomUUID(), kind: "manual", isCatchUp: false, idempotencyKey: `other-${day}-${i}`, inputs: {}, reason: "daily run limit reached (50)" });
+        clock.advance(60_000);
+      }
+      clock.advance(DAY_MS - 50 * 60_000);
+    }
+    // 200 newer records now sit strictly ahead of the 5-day-old success in the window; listRuns's own 200-record
+    // page would never reach it.
+    expect(await hasSucceededWithIdempotencyKey(workspace, clock, key)).toBe(true);
+  });
+
+  it("stops at the first match, newest first: far fewer files are read than the full window holds", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    for (let day = 0; day < 10; day += 1) {
+      for (let i = 0; i < 30; i += 1) {
+        await writePausedRun(workspace, clock, { runId: randomUUID(), kind: "manual", isCatchUp: false, idempotencyKey: `other-${day}-${i}`, inputs: {}, reason: "r" });
+      }
+      clock.advance(DAY_MS);
+    }
+    const matchId = randomUUID();
+    const { startedAt } = await startRun(workspace, clock, { runId: matchId, kind: "manual", isCatchUp: false, idempotencyKey: "the-key", inputs: {} });
+    await finishRun(workspace, clock, { runId: matchId, kind: "manual", isCatchUp: false, idempotencyKey: "the-key", inputs: {}, startedAt, outcome: "success", model: "m", tokens: { input: 0, output: 0 } });
+
+    const readSpy = vi.spyOn(workspace, "readJson");
+    expect(await hasSucceededWithIdempotencyKey(workspace, clock, "the-key")).toBe(true);
+    // The match is alone in the newest (11th) date directory: only it should have been read, nowhere near the
+    // 300+ records spread across the other 10 days.
+    expect(readSpy.mock.calls.length).toBeLessThan(60);
+    readSpy.mockRestore();
   });
 });

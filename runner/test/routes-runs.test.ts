@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { statusResponseSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
-import { pauseBudget, setBudgetLimits } from "../store/budget.ts";
-import { finishRun, startRun, writePausedRun } from "../store/runs.ts";
+import { CORRUPT_BUDGET_REASON, pauseBudget, setBudgetLimits } from "../store/budget.ts";
+import { finishRun, localDateString, startRun, writePausedRun } from "../store/runs.ts";
 import { BRIDGE, UI_TOKEN, makeBridge, pairDevice } from "./helpers.ts";
 
 const COOKIE = `wc_runner_ui=${UI_TOKEN}`;
@@ -20,10 +21,10 @@ describe("routes/runs.ts: GET /api/runs", () => {
     const bridge = await realBridge();
     const response = await bridge.request("/api/runs", { headers: READ });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ runs: [], invalidCount: 0 });
+    expect(await response.json()).toEqual({ runs: [], invalidCount: 0, skippedFiles: [] });
   });
 
-  it("lists newest first, each with its file path", async () => {
+  it("lists newest first, each with its file path and absolute path (G8)", async () => {
     const bridge = await realBridge();
     const first = randomUUID();
     const { startedAt: startedFirst } = await startRun(bridge.workspace, bridge.clock, { runId: first, kind: "manual", isCatchUp: false, idempotencyKey: "k1", inputs: {} });
@@ -33,10 +34,26 @@ describe("routes/runs.ts: GET /api/runs", () => {
     await writePausedRun(bridge.workspace, bridge.clock, { runId: second, kind: "manual", isCatchUp: false, idempotencyKey: "k2", inputs: {}, reason: "daily run limit reached (10)" });
 
     const response = await bridge.request("/api/runs", { headers: READ });
-    const body = (await response.json()) as { runs: Array<{ runId: string; path: string; outcome: string }>; invalidCount: number };
+    const body = (await response.json()) as { runs: Array<{ runId: string; path: string; absolutePath: string; outcome: string }>; invalidCount: number; skippedFiles: string[] };
     expect(body.runs.map((r) => r.runId)).toEqual([second, first]);
     expect(body.runs[0]!.path).toMatch(/^runs\/\d{4}-\d{2}-\d{2}\/[0-9a-f-]+\.json$/);
+    expect(body.runs[0]!.absolutePath).toBe(bridge.workspace.resolve(...body.runs[0]!.path.split("/")));
     expect(body.invalidCount).toBe(0);
+    expect(body.skippedFiles).toEqual([]);
+  });
+
+  it("G9: skippedFiles names invalid files as relative paths, up to 10", async () => {
+    const bridge = await realBridge();
+    const good = randomUUID();
+    await writePausedRun(bridge.workspace, bridge.clock, { runId: good, kind: "manual", isCatchUp: false, idempotencyKey: "good", inputs: {}, reason: "r" });
+    const date = localDateString(bridge.clock.now());
+    const badFile = `${randomUUID()}.json`;
+    await writeFile(bridge.workspace.resolve("runs", date, badFile), "{ not json", "utf8");
+
+    const response = await bridge.request("/api/runs", { headers: READ });
+    const body = (await response.json()) as { runs: unknown[]; invalidCount: number; skippedFiles: string[] };
+    expect(body.invalidCount).toBe(1);
+    expect(body.skippedFiles).toEqual([`runs/${date}/${badFile}`]);
   });
 
   it("401 without the cookie, 403 for a cross-site request", async () => {
@@ -78,7 +95,22 @@ describe("routes/runs.ts: GET/POST /api/runs/budget", () => {
     const bridge = await realBridge();
     const response = await bridge.request("/api/runs/budget", { headers: READ });
     const body = (await response.json()) as Record<string, unknown>;
-    expect(body).toMatchObject({ dailyRunLimit: 10, itemCap: 5, runsUsedToday: 0, paused: false, pausedReason: null, pausedSince: null });
+    expect(body).toMatchObject({ dailyRunLimit: 10, itemCap: 5, runsUsedToday: 0, paused: false, pausedReason: null, pausedSince: null, corrupt: false, corruptOrigin: false });
+  });
+
+  it("G9: a corrupt file reports corrupt and corruptOrigin true; a Save-repair keeps corruptOrigin true with corrupt now false", async () => {
+    const bridge = await realBridge();
+    await writeFile(bridge.workspace.resolve("runs", "budget.json"), "{ broken", "utf8");
+    const corrupt = await bridge.request("/api/runs/budget", { headers: READ });
+    expect(await corrupt.json()).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, corrupt: true, corruptOrigin: true, dailyRunLimit: 10, itemCap: 5 });
+
+    const saved = await bridge.request("/api/runs/budget", { method: "POST", headers: SAME_ORIGIN, body: JSON.stringify({ dailyRunLimit: 12, itemCap: 4 }) });
+    // Decision 2: Save repairs the file (now schema-valid) but keeps the pause until Resume; the UI still needs
+    // to know this pause came from a corrupt file, so corruptOrigin survives even though corrupt itself flips.
+    expect(await saved.json()).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, corrupt: false, corruptOrigin: true, dailyRunLimit: 12, itemCap: 4 });
+
+    const resumed = await bridge.request("/api/runs/budget/resume", { method: "POST", headers: SAME_ORIGIN, body: "{}" });
+    expect(await resumed.json()).toMatchObject({ paused: false, corrupt: false, corruptOrigin: false });
   });
 
   it("POST saves new limits within bounds", async () => {
@@ -139,5 +171,17 @@ describe("routes/runs.ts: status(ctx) contributes budget to GET /status", () => 
     const parsed = statusResponseSchema.safeParse(body);
     expect(parsed.success, parsed.success ? "" : JSON.stringify((parsed as { error: { issues: unknown } }).error.issues)).toBe(true);
     expect((body as { budget: { dailyRunLimit: number; itemCap?: number } }).budget).toMatchObject({ dailyRunLimit: 17, runsUsedToday: 0, paused: false });
+  });
+
+  it("G8: /status's budget never carries corrupt/corruptOrigin/absolutePath — statusResponseSchema is .strict()", async () => {
+    // statusResponseSchema (and budgetStatusSchema nested inside it) are .strict(): the safeParse above already
+    // proves no extra field is present, but this spells out the specific fields G8 says must never leak here.
+    const bridge = await realBridge();
+    const { token } = await pairDevice(bridge);
+    const response = await bridge.request("/status", { headers: { authorization: `Bearer ${token}`, origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" } });
+    const body = (await response.json()) as { budget: Record<string, unknown> };
+    expect(body.budget.corrupt).toBeUndefined();
+    expect(body.budget.corruptOrigin).toBeUndefined();
+    expect(body.budget.absolutePath).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DAILY_RUN_LIMIT_MAX, DAILY_RUN_LIMIT_MIN, getBudgetState, getBudgetStatus, ITEM_CAP_MAX, ITEM_CAP_MIN, resumeBudget, setBudgetLimits } from "../../store/budget.ts";
+import { CORRUPT_BUDGET_REASON, DAILY_RUN_LIMIT_MAX, DAILY_RUN_LIMIT_MIN, getBudgetState, getBudgetStatus, ITEM_CAP_MAX, ITEM_CAP_MIN, resumeBudget, setBudgetLimits } from "../../store/budget.ts";
 import { getRun, listRuns } from "../../store/runs.ts";
 import { errorResponse, readBoundedJson, validationErrorResponse } from "../http.ts";
 import { defineRouteModule } from "../route-modules.ts";
@@ -9,7 +9,7 @@ import { defineRouteModule } from "../route-modules.ts";
  * behind the local-UI guard (Host, cookie, same-origin) already applied to
  * everything under /api — none of these handlers re-check it.
  *
- *   GET  /api/runs                 the run log, newest first, bounded ({ runs, invalidCount })
+ *   GET  /api/runs                 the run log, newest first, bounded ({ runs, invalidCount, skippedFiles })
  *   GET  /api/runs/:runId          one run record + its file path; 404 without touching the
  *                                  filesystem when :runId is not a uuid
  *   GET  /api/runs/budget          the full internal budget state (limits, usage, pause)
@@ -19,6 +19,10 @@ import { defineRouteModule } from "../route-modules.ts";
  * The literal /budget routes are registered before the /:runId route so a
  * request for "budget" is never mistaken for a run id (it wouldn't validate
  * as a uuid anyway, but this keeps route resolution obvious either way).
+ *
+ * G8 (round-1 revision): every run record here also carries `absolutePath`
+ * (store/runs.ts) — local-API-only, never part of `GET /status`'s `budget`
+ * contribution below, which stays a plain `BudgetStatus` with no run data.
  */
 
 /** Well under the 1 KiB a `{dailyRunLimit, itemCap}` body ever needs; bounds the request before it is parsed. */
@@ -39,6 +43,12 @@ function budgetResponse(state: Awaited<ReturnType<typeof getBudgetState>>) {
     paused: state.paused,
     pausedReason: state.pausedReason ?? null,
     pausedSince: state.pausedSince ?? null,
+    // `corrupt`: the file is unreadable right now. `corruptOrigin`: this pause originated from a corrupt file,
+    // even if a since-repairing Save made the file itself valid again (`corrupt: false`) — Save keeps the pause
+    // (decision 2) but the UI still needs to know why, so its explanation doesn't go stale the instant the file
+    // is fixed (G9, round-1 revision).
+    corrupt: state.corrupt,
+    corruptOrigin: state.pausedReason === CORRUPT_BUDGET_REASON,
   };
 }
 
@@ -68,8 +78,8 @@ export default defineRouteModule({
     });
 
     router.get("/", async (c) => {
-      const { records, invalidCount } = await listRuns(ctx.workspace, ctx.clock);
-      return c.json({ runs: records, invalidCount });
+      const { records, invalidCount, skippedFiles } = await listRuns(ctx.workspace, ctx.clock);
+      return c.json({ runs: records, invalidCount, skippedFiles });
     });
 
     router.get("/:runId", async (c) => {

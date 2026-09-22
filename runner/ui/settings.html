@@ -12,35 +12,40 @@
     <!-- runner:nav -->
     <main class="page">
       <h1>Settings</h1>
-      <p class="lede">Provider, workspace, schedules, budget and pairing live here, one section per concern.</p>
+      <p class="lede">Provider, workspace, schedules and budget live here, one section per concern; pairing is on the Status page.</p>
 
       <!-- The page's one persistent live region: every section's success and error is announced here. -->
       <p id="status-message" role="status" aria-live="polite" class="status-message"></p>
 
       <section class="card" aria-labelledby="budget-title" id="budget-section">
         <div class="card-head">
-          <h2 id="budget-title">Budget</h2>
+          <h2 id="budget-title" tabindex="-1">Budget</h2>
         </div>
-        <p class="muted small">A daily run cap and a per-run item cap, so a busy day or a schedule can never burn quota silently. Exceeding either pauses runs with a reason, shown here and on the board.</p>
+        <p class="muted small">A daily run cap and a per-run item cap. Crossing the daily cap pauses new runs until tomorrow, with a reason shown here and on the board; the item cap just stops a run partway through a big batch, saving the rest for next time.</p>
 
         <div id="budget-pause" class="notice decision" hidden>
           <p class="small">
             <strong>Paused:</strong> <span id="budget-pause-reason"></span>
             <span id="budget-pause-since" class="muted"></span>
           </p>
-          <button class="button" type="button" id="budget-resume">Resume</button>
+          <p class="small muted" id="budget-corrupt-note" hidden>The limits shown are the defaults. Resume saves them and restarts runs; Save keeps runs paused.</p>
+          <button class="button secondary" type="button" id="budget-resume">Resume</button>
         </div>
+
+        <p class="small notice" id="budget-limit-note" hidden>Daily limit reached. New runs wait until tomorrow.</p>
 
         <p class="small" id="budget-usage">Runs used today: <span id="budget-usage-value">…</span></p>
 
-        <form id="budget-form">
+        <form id="budget-form" novalidate>
           <div class="field">
             <label for="daily-run-limit">Daily run limit</label>
-            <input type="number" id="daily-run-limit" name="dailyRunLimit" min="1" max="50" step="1" required inputmode="numeric" />
+            <input type="number" id="daily-run-limit" name="dailyRunLimit" min="1" max="50" step="1" required inputmode="numeric" aria-describedby="daily-run-limit-hint" />
+            <p class="hint small muted" id="daily-run-limit-hint">Whole number, 1 to 50.</p>
           </div>
           <div class="field">
             <label for="item-cap">Per-run item cap</label>
-            <input type="number" id="item-cap" name="itemCap" min="1" max="20" step="1" required inputmode="numeric" />
+            <input type="number" id="item-cap" name="itemCap" min="1" max="20" step="1" required inputmode="numeric" aria-describedby="item-cap-hint" />
+            <p class="hint small muted" id="item-cap-hint">Whole number, 1 to 20.</p>
           </div>
           <button class="button" type="submit" id="budget-save">Save</button>
         </form>

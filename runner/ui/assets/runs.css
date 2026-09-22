@@ -4,19 +4,34 @@
 /* The page's one persistent live region (role="status"): present throughout
    the page's life, empty and visually silent until there is a success or
    error to announce, so both sighted people and screen readers get the same
-   one message. */
+   one message. min-height + the :empty override below (this file loads
+   after runner.css, so it wins on equal specificity by source order)
+   reserve the region's line height even while empty, so a message appearing
+   never shifts the list below it out from under the pointer (P9). */
 .status-message {
   margin: 0 0 1rem;
   overflow-wrap: anywhere;
+  min-height: 1.4em;
 }
 .status-message:empty {
-  display: none;
+  display: block;
 }
+/* Foreground text with a destructive left-border marker, not red text alone
+   (measured 3.75:1 in light mode, below 4.5:1) — issue 2. */
 .status-message.error {
-  color: var(--destructive);
+  color: var(--foreground);
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.6rem;
 }
 .status-message.success {
   color: var(--muted-foreground);
+}
+
+/* A neutral badge for facts that aren't decisions (a catch-up run, a past paused record) — G9. Amber
+   (.badge.warn, runner.css) is reserved for the Settings page's *current* pause notice. Visually the same
+   plain secondary-background chip as .badge.ok, named for what it means on this page. */
+.badge.neutral {
+  background: var(--secondary);
 }
 
 .runs-list {
@@ -53,6 +68,13 @@
   gap: 0.25rem 1rem;
   color: var(--muted-foreground);
   font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+/* A long, unhyphenated model id must be able to shrink/wrap inside its flex item, not force the whole card to
+   scroll horizontally at 390px (measured scrollWidth 515-794px) — issue 5. */
+.run-meta > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .run-reason {
@@ -64,6 +86,14 @@
   margin-top: 0.5rem;
   font-size: 0.85rem;
   overflow-wrap: anywhere;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.run-path .button.small {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.55rem;
 }
 
 .run-json {
@@ -73,6 +103,10 @@
   cursor: pointer;
   font-size: 0.85rem;
   color: var(--muted-foreground);
+}
+.run-json summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 .run-json pre {
   margin: 0.5rem 0 0;

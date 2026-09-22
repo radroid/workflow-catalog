@@ -266,12 +266,24 @@ Settings. Fonts are Geist, self-hosted (`ui/assets/fonts`, SIL OFL).
 The **Runs page** (`ui/runs.html`, P08-A) lists every run this instance has
 made (`GET /api/runs`), newest first, bounded to 200 records / 14 days. Each
 entry shows the date and time, the kind as a readable label, an outcome pill
-with its reason, the duration, tokens in/out, the model, a catch-up badge,
-the item-cap note when a run stopped early ("stopped at the per-run cap
-(N); M jobs stay Saved"), the record's file path (`runs/<date>/<runId>.json`)
-so the person can open it, and a "View JSON" disclosure. A file that exists
-but fails to validate is skipped and counted, never crashes the list. Empty
-state: "No runs yet…".
+with its reason in plain language (an internal error code such as
+`MODEL_CALL_FAILED:` appears only in the "View JSON" disclosure, never the
+visible text), the duration, tokens in/out, the model, a catch-up badge, the
+item-cap note when a run stopped early ("stopped at the per-run cap (N); M
+jobs stay Saved"), a shortened form of the record's file path
+(`runs/<date>/<8 chars>….json`, the full relative path in the tooltip) with a
+"Copy path" button for the absolute path, and the "View JSON" disclosure. A
+record that never reached the model (paused, or the crash-safe placeholder)
+shows no duration/tokens/model line; one with no `finishedAt` at all (the
+runner stopped mid-run) shows a neutral "Did not finish (or still running)"
+pill instead of an outcome. Catch-up marks and past paused records use a
+neutral badge, not amber — amber is reserved for the *current* pause on the
+Settings page. A file that exists but fails to validate is skipped and
+named (up to 10 relative paths; the count still covers every one) rather
+than crashing the list; the same is true of a whole date directory that
+fails to list (a permissions problem, say) — it is skipped with a note, not
+a 500. Empty state: "No runs yet.", shown once, never echoed into the live
+region.
 
 The **Settings page** (`ui/settings.html`) holds one `<section>` per concern,
 each with its own script, so later packets can add a section without
@@ -279,13 +291,41 @@ touching another's. Today it has:
 
 - **Budget** (`ui/assets/settings-budget.js`, P08-A): the daily run limit
   (1–50, default 10) and the per-run item cap (1–20, default 5) as bounded
-  number inputs, runs used today, the pause with its reason and a Resume
-  button, and Save. Backed by `GET`/`POST /api/runs/budget` and
-  `POST /api/runs/budget/resume`. A corrupt `runs/budget.json` is reported
-  paused with the reason "budget settings unreadable (runs/budget.json)"
-  rather than crashing; Resume rewrites it with the default limits, Save
-  rewrites it with the submitted limits and keeps whatever pause was already
-  in effect.
+  number inputs with their range stated as hint text, runs used today, the
+  pause with its reason and a Resume button, and Save. An out-of-range or
+  non-numeric submission is caught client-side before any request: the field
+  gets `aria-invalid`, keeps focus, and the live region gets one plain
+  sentence — the server's raw 400 body is never shown. Backed by
+  `GET`/`POST /api/runs/budget` and `POST /api/runs/budget/resume`. A corrupt
+  `runs/budget.json` is reported paused with the reason "budget settings
+  unreadable (runs/budget.json)" rather than crashing, its path in `<code>`,
+  and a note that the limits shown are the defaults; Resume rewrites it with
+  the default limits and unpauses ("Resumed. The default limits (10 runs a
+  day, 5 jobs per run) were saved."); Save rewrites it with the submitted
+  limits but keeps it paused until Resume ("Saved. Runs stay paused until you
+  press Resume."), since decision 2 does not let an unrelated Save silently
+  clear a pause. **`paused` only ever means this manual/provider-limit pause
+  that needs a Resume — it is never set just because the daily limit was
+  reached.** A consumer that wants to know "is today's quota used up"
+  compares `runsUsedToday >= dailyRunLimit` itself (both fields are in the
+  contract); Settings shows this state as "Daily limit reached. New runs wait
+  until tomorrow." All budget-file writes (`pauseBudget`, `resumeBudget`,
+  `setBudgetLimits`, and `withRun`'s own paused/limit check + `startRun`) go
+  through one in-process serialization (`store/budget.ts`'s
+  `withBudgetLock`), so a Save racing a provider-limit pause can never lose
+  either one.
+
+Both pages share one persistent live region (`role="status"
+aria-live="polite"`) per page for every success and error, with section-
+specific wording ("Budget saved.", "Runs resumed.") that is re-announced even
+when repeated, and use `aria-disabled` rather than the `disabled` attribute
+on a busy button so focus is never dropped mid-action. `runTurn` (below)
+reads eve's response stream event by event rather than trusting a single
+aggregated result, because eve@0.63.0 can end an aborted turn quietly as
+"completed" with no thrown error (`docs/spec/research/eve-runtime.md` §8 item
+15) — every timeout is cancelled through the session, not the turn response,
+which eve does not reliably act on before a turn has started or once it is
+parked.
 
 Both pages share one persistent live region (`role="status"
 aria-live="polite"`) per page for every success and error, and use

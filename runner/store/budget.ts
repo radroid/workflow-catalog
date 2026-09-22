@@ -33,6 +33,33 @@ export const CORRUPT_BUDGET_REASON = "budget settings unreadable (runs/budget.js
 
 const SEGMENTS = ["runs", "budget.json"] as const;
 
+/**
+ * G4 (round-1 revision, reviewer issue 5): one in-process promise chain per
+ * workspace, so every budget-file read-modify-write (`pauseBudget`,
+ * `resumeBudget`, `setBudgetLimits`, and `run-harness.ts`'s `withRun`
+ * refusal check + `startRun`) is fully serialized. Without this, a Save
+ * racing a provider-limit pause could read-before-write past each other and
+ * silently lose one of the two (reproduced 15/40 trials in the round-1
+ * review's probe). A `WeakMap` keyed by the `Workspace` instance: no cross-
+ * test leakage, and correct for the one workspace a real runner process
+ * ever has. Purely in-memory — irrelevant across separate processes, but
+ * there is only ever one runner process per workspace.
+ */
+const budgetLocks = new WeakMap<Workspace, Promise<void>>();
+
+export function withBudgetLock<T>(workspace: Workspace, fn: () => Promise<T>): Promise<T> {
+  const tail = budgetLocks.get(workspace) ?? Promise.resolve();
+  const result = tail.then(fn, fn);
+  budgetLocks.set(
+    workspace,
+    result.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return result;
+}
+
 const budgetFileSchema = z
   .object({
     dailyRunLimit: z.number().int().min(DAILY_RUN_LIMIT_MIN).max(DAILY_RUN_LIMIT_MAX),
@@ -123,8 +150,10 @@ export async function getBudgetStatus(workspace: Workspace, clock: Clock): Promi
  * file's limits cannot be preserved; a missing one has none yet.
  */
 export async function pauseBudget(workspace: Workspace, clock: Clock, reason: string): Promise<void> {
-  const result = await readBudgetFile(workspace);
-  await writeBudgetFile(workspace, { ...existingLimits(result), paused: true, pausedReason: reason, pausedSince: clock.now().toISOString() });
+  await withBudgetLock(workspace, async () => {
+    const result = await readBudgetFile(workspace);
+    await writeBudgetFile(workspace, { ...existingLimits(result), paused: true, pausedReason: reason, pausedSince: clock.now().toISOString() });
+  });
 }
 
 /**
@@ -134,8 +163,10 @@ export async function pauseBudget(workspace: Workspace, clock: Clock, reason: st
  * readable pause keeps whatever limits were already set.
  */
 export async function resumeBudget(workspace: Workspace): Promise<void> {
-  const result = await readBudgetFile(workspace);
-  await writeBudgetFile(workspace, { ...existingLimits(result), paused: false });
+  await withBudgetLock(workspace, async () => {
+    const result = await readBudgetFile(workspace);
+    await writeBudgetFile(workspace, { ...existingLimits(result), paused: false });
+  });
 }
 
 export interface SetBudgetLimitsInput {
@@ -151,12 +182,14 @@ export interface SetBudgetLimitsInput {
  * the old one was in.
  */
 export async function setBudgetLimits(workspace: Workspace, input: SetBudgetLimitsInput): Promise<void> {
-  const result = await readBudgetFile(workspace);
-  const pause: Pick<BudgetFile, "paused" | "pausedReason" | "pausedSince"> =
-    result.kind === "ok"
-      ? { paused: result.file.paused, ...(result.file.pausedReason !== undefined ? { pausedReason: result.file.pausedReason } : {}), ...(result.file.pausedSince !== undefined ? { pausedSince: result.file.pausedSince } : {}) }
-      : result.kind === "invalid"
-        ? { paused: true, pausedReason: CORRUPT_BUDGET_REASON }
-        : { paused: false };
-  await writeBudgetFile(workspace, { dailyRunLimit: input.dailyRunLimit, itemCap: input.itemCap, ...pause });
+  await withBudgetLock(workspace, async () => {
+    const result = await readBudgetFile(workspace);
+    const pause: Pick<BudgetFile, "paused" | "pausedReason" | "pausedSince"> =
+      result.kind === "ok"
+        ? { paused: result.file.paused, ...(result.file.pausedReason !== undefined ? { pausedReason: result.file.pausedReason } : {}), ...(result.file.pausedSince !== undefined ? { pausedSince: result.file.pausedSince } : {}) }
+        : result.kind === "invalid"
+          ? { paused: true, pausedReason: CORRUPT_BUDGET_REASON }
+          : { paused: false };
+    await writeBudgetFile(workspace, { dailyRunLimit: input.dailyRunLimit, itemCap: input.itemCap, ...pause });
+  });
 }
