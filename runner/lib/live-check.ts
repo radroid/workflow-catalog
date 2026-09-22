@@ -1,4 +1,4 @@
-import { generateText } from "ai";
+import { streamText } from "ai";
 import { languageModelFor, type ModelSettings } from "../agent/lib/model.ts";
 import { evePathEnv } from "./codex.ts";
 import { API_KEY_ENV } from "./secret-store.ts";
@@ -10,6 +10,7 @@ import { API_KEY_ENV } from "./secret-store.ts";
  * the reply is kept except whether it worked.
  */
 export const LIVE_CHECK_PROMPT = "Reply with exactly: ok";
+export const LIVE_CHECK_INSTRUCTIONS = "You are checking that a model connection works. Follow the request exactly.";
 
 export interface LiveCheckResult {
   readonly ok: boolean;
@@ -37,12 +38,16 @@ export async function liveModelCheck(model: ModelSettings, options: LiveCheckOpt
   const keepAlive = setInterval(() => undefined, 1_000);
   const timeoutMs = options.timeoutMs ?? 90_000;
   try {
-    const result = await generateText({
+    // Called the way eve's harness calls a model: streamed, with
+    // instructions. ChatGPT's Codex endpoint answers a plain non-streamed
+    // call without instructions with "Bad Request" (seen on 0.63.0).
+    const result = streamText({
       model: languageModelFor(model),
+      instructions: LIVE_CHECK_INSTRUCTIONS,
       prompt: LIVE_CHECK_PROMPT,
       abortSignal: AbortSignal.timeout(timeoutMs),
     });
-    const text = result.text.trim().toLowerCase();
+    const text = (await result.text).trim().toLowerCase();
     return text.includes("ok") ? { ok: true } : { ok: false, detail: "The model answered, but not with the expected reply." };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

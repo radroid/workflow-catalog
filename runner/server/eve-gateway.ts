@@ -1,4 +1,4 @@
-import { Client } from "eve/client";
+import { Client, type MessageResult } from "eve/client";
 
 /**
  * The bridge's only way to eve: `eve/client` against `eve start` on
@@ -40,6 +40,26 @@ function shorten(text: string, max = 300): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+type TurnOutcome = Pick<MessageResult, "status" | "events" | "message" | "inputRequests">;
+
+/**
+ * Whether a check turn worked. A good turn ends with the session parked for
+ * the next message (status "waiting"). A failed model call shows up as
+ * step.failed or turn.failed (then "waiting"), or as session.failed
+ * (status "failed"); each carries { code, message }.
+ */
+export function interpretModelCheck(result: TurnOutcome): { ok: boolean; detail?: string } {
+  const failure = result.events.find((event) => event.type === "step.failed" || event.type === "turn.failed" || event.type === "session.failed");
+  if (failure || result.status === "failed") {
+    const reason = failure && "data" in failure ? (failure.data as { code?: string; message?: string }) : undefined;
+    const detail = reason?.message ? `${reason.code ? `${reason.code}: ` : ""}${reason.message}` : `The turn ended as "${result.status}".`;
+    return { ok: false, detail: shorten(detail) };
+  }
+  if (result.inputRequests.length > 0) return { ok: false, detail: "The model asked for input instead of answering." };
+  if (!(result.message ?? "").trim().toLowerCase().includes("ok")) return { ok: false, detail: "The model answered, but not with the expected reply." };
+  return { ok: true };
+}
+
 export function createEveGateway(options: { readonly password: string; readonly host?: string; readonly port?: number }): EveGateway {
   const url = `http://${options.host ?? EVE_HOST}:${options.port ?? EVE_PORT}`;
   const client = new Client({
@@ -74,19 +94,7 @@ export function createEveGateway(options: { readonly password: string; readonly 
       try {
         const { response } = await client.sessions.create({ message: MODEL_CHECK_PROMPT, signal });
         const result = await response.result();
-        const id = await modelId();
-        if (result.status !== "completed") {
-          // step.failed / turn.failed / session.failed carry { code, message }.
-          const failure = result.events.find(
-            (event) => event.type === "step.failed" || event.type === "turn.failed" || event.type === "session.failed",
-          );
-          const reason = failure && "data" in failure ? (failure.data as { code?: string; message?: string }) : undefined;
-          const detail = reason?.message ? `${reason.code ? `${reason.code}: ` : ""}${reason.message}` : `The turn ended as "${result.status}".`;
-          return { ok: false, modelId: id, detail: shorten(detail) };
-        }
-        const text = (result.message ?? "").trim().toLowerCase();
-        if (!text.includes("ok")) return { ok: false, modelId: id, detail: "The model answered, but not with the expected reply." };
-        return { ok: true, modelId: id };
+        return { ...interpretModelCheck(result), modelId: await modelId() };
       } catch (error) {
         return { ok: false, detail: shorten(signal.aborted ? `No answer within ${timeoutMs / 1000} s.` : (error as Error).message) };
       }

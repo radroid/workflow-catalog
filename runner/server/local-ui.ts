@@ -119,7 +119,7 @@ function messagePage(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} · Job assistant runner</title>
-<link rel="stylesheet" href="/ui/assets/runner.css"></head>
+<link rel="icon" href="data:,"><link rel="stylesheet" href="/ui/assets/runner.css"></head>
 <body><main class="page narrow"><h1>${escapeHtml(title)}</h1>${body}</main></body>
 </html>
 `;
