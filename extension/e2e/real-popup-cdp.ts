@@ -190,6 +190,44 @@ export async function launchWithExtensionDebugging(
   return { context, extId, bs, close };
 }
 
+/** Polls the popup's own DOM until it leaves the loading state: `preview`
+ * once a `renderPreview()` (a `button.primary`) exists, `fallback` once a
+ * `renderFallback()` (a `[role="alert"]`) does. Shared by real-popup.spec.ts
+ * and bridge-e2e.spec.ts -- both drive the real popup and need to know when
+ * it's done reading the tab before interacting with it further. */
+export async function waitForPopupState(session: RawCdpSession, timeoutMs = 8000): Promise<"preview" | "fallback"> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await session.evaluate<string>(
+      `document.querySelector("#app button.primary") ? "preview" : (document.querySelector("#app [role='alert']") ? "fallback" : "loading")`,
+    );
+    if (state === "preview" || state === "fallback") return state;
+    await sleep(100);
+  }
+  throw new Error("popup never left the loading state");
+}
+
+/** Real Tab key presses (CDP Input.dispatchKeyEvent -- a trusted input
+ * event, unlike a page-script-dispatched KeyboardEvent, which browsers
+ * don't honor for default actions like button activation) until focus
+ * lands on the Save button, bounded so a markup change that removes it
+ * fails loudly instead of looping forever. */
+export async function focusSaveButton(session: RawCdpSession): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const onSaveButton = await session.evaluate<boolean>(
+      `document.activeElement instanceof HTMLElement && document.activeElement.classList.contains("primary")`,
+    );
+    if (onSaveButton) return;
+    await session.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await sleep(50);
+  }
+  throw new Error("Tab never reached button.primary within 8 presses");
+}
+
+export async function pressEnter(session: RawCdpSession): Promise<void> {
+  await session.pressKey({ key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+}
+
 /** Playwright's `page` corresponds to a "page"-type CDP target;
  * Extensions.triggerAction wants the "tab"-type target for the same tab.
  * Bridges the two by matching URL. */

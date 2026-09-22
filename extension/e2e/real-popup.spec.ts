@@ -28,10 +28,13 @@ import type { JobCapture } from "@workflow-catalog/contracts";
 import { expect, extensionDist, test } from "./fixtures";
 import { startFixtureServer, type FixtureServerHandle } from "./fixture-server";
 import {
+  focusSaveButton,
   getTabTargetId,
   launchWithExtensionDebugging,
+  pressEnter,
   sleep,
   triggerRealPopup,
+  waitForPopupState,
   type RawCdpSession,
   type RealPopupHarness,
 } from "./real-popup-cdp";
@@ -89,18 +92,6 @@ async function assertNoAxeViolations(evaluate: (expression: string) => Promise<u
   expect(violations, `axe violations on ${label}:\n${JSON.stringify(violations, null, 2)}`).toEqual([]);
 }
 
-async function waitForPopupState(session: RawCdpSession, timeoutMs = 8000): Promise<"preview" | "fallback"> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const state = await session.evaluate<string>(
-      `document.querySelector("#app button.primary") ? "preview" : (document.querySelector("#app [role='alert']") ? "fallback" : "loading")`,
-    );
-    if (state === "preview" || state === "fallback") return state;
-    await sleep(100);
-  }
-  throw new Error("popup never left the loading state");
-}
-
 async function readKvPairs(session: RawCdpSession): Promise<Record<string, string>> {
   return session.evaluate<Record<string, string>>(`
     Object.fromEntries(
@@ -110,27 +101,6 @@ async function readKvPairs(session: RawCdpSession): Promise<Record<string, strin
       ]),
     )
   `);
-}
-
-/** Real Tab key presses (CDP Input.dispatchKeyEvent -- a trusted input
- * event, unlike a page-script-dispatched KeyboardEvent, which browsers
- * don't honor for default actions like button activation) until focus
- * lands on the Save button, bounded so a markup change that removes it
- * fails loudly instead of looping forever. */
-async function focusSaveButton(session: RawCdpSession): Promise<void> {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const onSaveButton = await session.evaluate<boolean>(
-      `document.activeElement instanceof HTMLElement && document.activeElement.classList.contains("primary")`,
-    );
-    if (onSaveButton) return;
-    await session.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
-    await sleep(50);
-  }
-  throw new Error("Tab never reached button.primary within 8 presses");
-}
-
-async function pressEnter(session: RawCdpSession): Promise<void> {
-  await session.pressKey({ key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
 }
 
 async function waitForDownload(dir: string, filename: string, timeoutMs = 5000): Promise<string> {

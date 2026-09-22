@@ -1,133 +1,51 @@
 // @vitest-environment node
 /**
  * P07-B acceptance gates, driven against the REAL P02 bridge -- not a fake.
- * `@workflow-catalog/runner` is an allowed devDependency for exactly this
- * (P07 packet allowlist: "A devDependency on @workflow-catalog/runner
- * (workspace:*) is fine if you drive the real bridge in tests"). This file
- * starts the actual `createBridgeApp` (runner/server/app.ts) listening on
- * `127.0.0.1:4310` -- the one port the manifest's host permission allows,
- * and the one this repo's rules say this session is the only agent using
- * this iteration -- against a fresh temp workspace per test, and drives it
+ * Starts the actual `createBridgeApp` (runner/server/app.ts) listening on
+ * `127.0.0.1:4310` against a fresh temp workspace per test, and drives it
  * with the extension's own real `createBridgeClient()`, the same code the
  * popup/options pages use. `afterEach` always closes the server.
  *
- * Nothing here touches the real HOME, the OS keychain, or a live model:
- * `Workspace.create` below writes only under a fresh `os.tmpdir()`
- * subdirectory (never `~/JobAssistant`), `RunnerContext` is built directly
- * (bypassing cli/setup.ts, cli/doctor.ts, cli/runner.ts and
- * lib/secret-store.ts entirely -- none of those are imported by anything
- * this file imports), and no `eve`/model gateway is ever passed to
- * `createRunnerContext`, so nothing here can dispatch a real model call.
- * This mirrors runner/test/helpers.ts's own `makeBridge()`, just with a
- * real listening socket instead of Hono's in-process `app.request`, since
- * a real extension can only ever reach the bridge over that socket.
+ * The harness itself (`startBridgeHarness`, the HOME/keychain isolation it
+ * documents, `withChromeOrigin`, `pairFictionalDevice`,
+ * `fictionalJobCapture`) lives in `../../e2e/real-bridge-harness.ts`,
+ * shared with `e2e/bridge-e2e.spec.ts` (Playwright, drives the real
+ * options/popup pages against the same kind of bridge) so that isolation
+ * is audited in one place, not two copies that could quietly drift apart.
  */
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import type { JobCapture } from "@workflow-catalog/contracts";
 import { DEVICE_TOKEN_TTL_MS } from "@workflow-catalog/runner/store/devices.ts";
-import { createBridgeApp, listen, type RunningBridge } from "@workflow-catalog/runner/server/app.ts";
-import { createRunnerContext, silentLogger, type RunnerContext } from "@workflow-catalog/runner/server/context.ts";
-import { ManualClock, MINUTE_MS } from "@workflow-catalog/runner/lib/clock.ts";
-import { Workspace } from "@workflow-catalog/runner/store/workspace.ts";
+import { MINUTE_MS } from "@workflow-catalog/runner/lib/clock.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createBridgeClient, type BridgeClient } from "./bridge-client";
+import {
+  cleanScratchWorkspaces,
+  clientForOrigin,
+  fictionalJobCapture,
+  pairFictionalDevice as pairFictionalDeviceAt,
+  startBridgeHarness,
+  withChromeOrigin,
+  type BridgeHarness,
+} from "../../e2e/real-bridge-harness";
 
 /** Fictional data only (docs/spec/implementation/fixtures-policy.md), the
  * same shape runner/test/helpers.ts uses for its own bridge tests. */
 const EXTENSION_ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
 const OTHER_EXTENSION_ORIGIN = "chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba";
-const PORT = 4310;
 
-interface Harness {
-  readonly ctx: RunnerContext;
-  readonly clock: ManualClock;
-  readonly bridge: RunningBridge;
-}
-
-let workspaceDirs: string[] = [];
-
-async function startHarness(): Promise<Harness> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wc-p07b-bridge-"));
-  workspaceDirs.push(root);
-  const clock = new ManualClock();
-  const workspace = await Workspace.create(path.join(root, "JobAssistant"), { packageVersion: "0.1.0-test", clock });
-  const ctx = createRunnerContext({ workspace, clock, packageVersion: "0.1.0-test", log: silentLogger });
-  // No route modules: job_capture has no handler until P04 (runner/README.md
-  // "The bridge": "journals a job_capture with no handler as no_handler"),
-  // which is exactly the real, shipped P02 behaviour this repo is at right
-  // now -- not a stand-in for a handler this test doesn't have.
-  const app = createBridgeApp({ ctx, modules: [], uiToken: undefined, port: PORT });
-  const bridge = await listen(app, PORT);
-  return { ctx, clock, bridge };
-}
-
-/** A BridgeClient bound to the real, listening harness bridge for one
- * origin/token pair -- the same `createBridgeClient()` the popup/options
- * pages use, just pointed at this test's own bridge.url instead of the
- * hard-coded default (still 127.0.0.1:4310; see PORT above). */
-function clientForOrigin(baseUrl: string, origin: string, token: string | null): BridgeClient {
-  return createBridgeClient({
-    baseUrl,
-    getToken: () => Promise.resolve(token ? { token } : null),
-  });
-}
-
-/** Wraps fetch just for the duration of one test so every request through
- * `client` carries `origin` the way Chrome would (POST/PUT/etc: its own
- * chrome-extension:// origin; GET/HEAD: none at all). Real browsers forbid
- * scripts from setting Origin; this Node test process stands in for what
- * Chrome already guarantees on the wire (runner/README.md "Origin as
- * Chrome sends it"), so the bridge's real Origin-checking code path is
- * genuinely exercised end to end. */
-function withChromeOrigin<T>(origin: string, run: () => Promise<T>): Promise<T> {
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
-    const method = (init.method ?? "GET").toUpperCase();
-    const headers = new Headers(init.headers);
-    if (method !== "GET" && method !== "HEAD") headers.set("origin", origin);
-    return realFetch(input, { ...init, headers });
-  }) as typeof fetch;
-  return run().finally(() => {
-    globalThis.fetch = realFetch;
-  });
-}
-
-let harness: Harness;
+let harness: BridgeHarness;
 
 beforeEach(async () => {
-  harness = await startHarness();
+  harness = await startBridgeHarness();
 });
 
 afterEach(async () => {
   await harness.bridge.close();
-  const dirs = workspaceDirs;
-  workspaceDirs = [];
-  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  await cleanScratchWorkspaces();
 });
 
-async function pairFictionalDevice(origin: string): Promise<{ deviceId: string; token: string }> {
-  const { code } = await harness.ctx.pairing.issue();
-  const result = await withChromeOrigin(origin, () => clientForOrigin(harness.bridge.url, origin, null).pair({ code }));
-  if (!result.ok) throw new Error(`pairDevice(${origin}) failed: ${result.error.code} ${result.error.message}`);
-  return result.value;
-}
-
-function fictionalJobCapture(overrides: Partial<JobCapture> = {}): JobCapture {
-  const text = overrides.text ?? "Northwind Labs is hiring a Staff Platform Engineer. Remote within the EU. Fictional posting for tests.";
-  return {
-    protocol: 1,
-    type: "job_capture",
-    eventId: randomUUID(),
-    url: "https://jobs.example/northwind-labs/staff-platform-engineer",
-    text,
-    extractorVersion: "extractor@1.0.0",
-    contentHash: "a".repeat(64),
-    occurredAt: "2026-09-22T08:59:00.000Z",
-    ...overrides,
-  };
+/** `pairFictionalDevice(origin)` bound to this file's `harness`, matching
+ * the shape every `it()` below already calls it with. */
+function pairFictionalDevice(origin: string): Promise<{ deviceId: string; token: string }> {
+  return pairFictionalDeviceAt(harness, origin);
 }
 
 describe("gate 1 (replay): the same job_capture sent twice", () => {
