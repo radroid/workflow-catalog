@@ -946,3 +946,30 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - If a command is refused by a deny rule or a permission check, stop and report. Never route around it.
 
 The P07-B escalation reached d0e2b2c, with CI green on every pushed head. Round 3 (Opus reviewer and UI critic) was dispatched at 16:05.
+
+## 2026-09-22 — P07-B peer review, round 3 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** a fresh Opus reviewer and a fresh Opus UI critic did a full review of PR #12 at d0e2b2c (the Opus escalation's revision 2), including everything round 2 never reached. The findings are in `logs/handoff/P07-B-round-3-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: REVISE — 1 issue.** The issue is documentation only: the README's manual smoke checklist still describes Save downloading a file.
+  - The chain is green at the head and on the merge.
+  - dist vitest 273, 0 skipped. CI e2e 32/32 with no retries.
+  - The guard is not weakened: planting a weakening makes the reviewer's probe fail.
+  - 16 of 18 race probes pass.
+  - Nits: a narrow pause window just after pairing, a `forgetInvalidToken` window, an untested ordering, a full queue without a file fallback, a screencast error handler, a guard test, and report counts.
+- **UI critic: VERDICT: REVISE — 5 issues.** Every round-2 item is fixed. About 110 axe audits are clean, active text is at least 7.6:1, and nothing scrolls sideways at 390. The issues:
+  1. The Pairing card keeps a stale outcome after a revoke.
+  2. The "something else on the port" alert contradicts the line below it.
+  3. The 409 message shows `eventId` developer text.
+  4. One command is outside `<code>`.
+  5. Amber is used for waiting and retries.
+
+**Action taken:** one combined revision 3 went to the same Opus escalation implementer, with decisions H1–H4:
+- **H1:** amber means the person must act, including the 401/403 re-pair pauses. Progress and retries are neutral. Red means the capture was not kept.
+- **H2:** refusals are plain sentences with a next step, with no field names or HTTP codes.
+- **H3:** reviewer nits 1 and 3–7 are fixed now; nit 2 is documented as a known limitation.
+- **H4:** retake the affected screenshots.
