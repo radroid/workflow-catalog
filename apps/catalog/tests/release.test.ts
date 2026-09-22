@@ -112,6 +112,43 @@ describe("fetchPackageRelease — error", () => {
     const result = await fetchPackageRelease(VERSION);
     expect(result.kind).toBe("error");
   });
+
+  // P09-B peer review, round 2 (low follow-up #2): when the cap trips,
+  // readCappedText used to release its lock on the reader (in a `finally`)
+  // without ever cancelling it — dropping this function's own reference to
+  // the stream, but never telling the underlying connection to stop. A
+  // custom ReadableStream whose `cancel()` records that it was called is
+  // the only way to prove the fix from outside the module: a plain
+  // Response body (as the test above uses) doesn't expose whether anyone
+  // downstream is still consuming the connection after this function gives
+  // up on it. This test fails against the pre-fix code (confirmed:
+  // temporarily reverted the `reader.cancel()` call locally, reran, watched
+  // `cancelCalled` stay false).
+  it("cancels the body reader once the cap trips, instead of only releasing its lock", async () => {
+    let cancelCalled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            // One chunk, comfortably over the 4096-byte cap, so the cap
+            // trips on the very first read() rather than needing the
+            // stream to be asked for more.
+            controller.enqueue(new TextEncoder().encode("a".repeat(50_000)));
+          },
+          cancel() {
+            cancelCalled = true;
+          },
+        });
+        return new Response(stream, { status: 200 });
+      }),
+    );
+
+    const result = await fetchPackageRelease(VERSION);
+
+    expect(result.kind).toBe("error");
+    expect(cancelCalled).toBe(true);
+  });
 });
 
 describe("fetchPackageRelease — timeout", () => {
@@ -166,6 +203,12 @@ describe("fetchPackageRelease — timeout", () => {
     const result = await pending;
 
     expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("unreachable");
+    // P09.1 (P09-B review round 2 follow-up): pin the actual message, not
+    // just the "error" kind — describeFetchError only produces this exact
+    // string for an AbortError, so this also proves the abort (not some
+    // other rejection) is what resolved the request.
+    expect(result.message).toBe("Request timed out.");
   });
 
   it("resolves to the error state within the timeout when the body stalls mid-stream, after some bytes", async () => {
@@ -188,5 +231,7 @@ describe("fetchPackageRelease — timeout", () => {
     const result = await pending;
 
     expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("unreachable");
+    expect(result.message).toBe("Request timed out.");
   });
 });

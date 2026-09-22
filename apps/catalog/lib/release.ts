@@ -130,7 +130,18 @@ async function readCappedText(body: ReadableStream<Uint8Array>, maxBytes: number
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        throw new Error(`Response body exceeded ${maxBytes} bytes.`);
+        const capError = new Error(`Response body exceeded ${maxBytes} bytes.`);
+        // P09-B peer review, round 2 (low follow-up #2): releaseLock() in
+        // the `finally` below only drops *this function's own reference*
+        // to the stream — it does not tell the underlying connection to
+        // stop. Without an explicit cancel, a misbehaving or malicious
+        // response could keep streaming to a socket nothing reads from
+        // again for the rest of its lifetime. cancel() first (best-effort:
+        // a stream that is already closed/errored can reject it, which
+        // must never mask the real capError below), then let `finally`
+        // release the lock as before.
+        await reader.cancel(capError).catch(() => {});
+        throw capError;
       }
       chunks.push(value);
     }
