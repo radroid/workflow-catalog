@@ -147,6 +147,29 @@ describe("local UI: JSON API protection", () => {
     expect(await bridge.ctx.pairing.outstanding()).toBe(0);
   });
 
+  it("answers only Sec-Fetch-Site: same-origin when the header is present, while pages and sign-in still open with none", async () => {
+    const bridge = await realBridge();
+    // Chrome marks an extension's fetch to 127.0.0.1:4310 `none` and sends the
+    // SameSite=Strict cookie with it (Chromium 153): the API must refuse it.
+    for (const site of ["none", "cross-site", "same-site"]) {
+      const read = await bridge.request("/api/devices", { headers: { cookie: COOKIE, "sec-fetch-site": site, "sec-fetch-mode": "cors" } });
+      expect(read.status, site).toBe(403);
+      expect(((await read.json()) as { error: { code: string } }).error.code).toBe("cross_site_request");
+      const write = await bridge.request("/api/pairing/codes", { method: "POST", headers: { ...SAME_ORIGIN, "sec-fetch-site": site }, body: "{}" });
+      expect(write.status, site).toBe(403);
+    }
+    expect(await bridge.ctx.pairing.outstanding()).toBe(0);
+    expect((await bridge.request("/api/devices", { headers: { cookie: COOKIE, "sec-fetch-site": "same-origin" } })).status).toBe(200);
+    // Navigations: the sign-in link and a page opened from the address bar or a terminal are `none`.
+    const navigate = { "sec-fetch-site": "none", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+    const { url } = await bridge.ctx.uiLogin.issue(BRIDGE);
+    const login = await bridge.request(url.slice(BRIDGE.length), { headers: navigate });
+    expect(login.status).toBe(303);
+    const page = await bridge.request("/ui/status", { headers: { ...navigate, cookie: COOKIE } });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("Runner status");
+  });
+
   it("refuses a form-encoded state change with 415", async () => {
     const bridge = await realBridge();
     const response = await bridge.request("/api/pairing/codes", {

@@ -213,10 +213,16 @@ JSON API are protected as follows:
   minutes and works once. It sets the cookie `wc_runner_ui` (HttpOnly,
   SameSite=Strict, Path=/, 30 days). Every page and every `/api/*` route
   needs that cookie.
-- **Same-origin API.** `/api/*` refuses any request the browser marks
-  `Sec-Fetch-Site: cross-site` or `same-site`. Cookies are not scoped by
-  port, so a page on another port of 127.0.0.1 is "same-site" and would
-  otherwise carry the cookie.
+- **Same-origin API.** When the browser sends `Sec-Fetch-Site`, `/api/*`
+  answers only `same-origin`, which is what the runner's own pages send.
+  - `cross-site` and `same-site` are refused. Cookies are not scoped by
+    port, so a page on another port of 127.0.0.1 is "same-site" and would
+    otherwise carry the cookie.
+  - `none` is refused too. Chrome sends the SameSite=Strict cookie with a
+    fetch from any extension that has host permission for the bridge, and
+    marks it `none` (measured on Chromium 153).
+  - Pages and the sign-in link are navigations, so they keep working with
+    `none` (a link opened from the terminal, or a typed address).
 - **State changes.** Any request other than GET and HEAD also needs an
   `Origin` equal to the bridge's own origin and a JSON `Content-Type`,
   which an HTML form cannot send.

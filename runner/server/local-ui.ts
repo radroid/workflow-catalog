@@ -18,9 +18,17 @@ import type { LoadedRouteModule } from "./route-modules.ts";
  *   sets the cookie `wc_runner_ui` = the install's UI token (RUNNER_UI_TOKEN
  *   in runner/.env.local): HttpOnly, SameSite=Strict, Path=/, 30 days.
  * - Pages (/ui/<page>) and /api/* need that cookie, compared in constant time.
- * - /api/* refuses a request the browser marks as cross-site or same-site
- *   (Sec-Fetch-Site): same-site includes other ports on 127.0.0.1, which the
- *   cookie alone cannot tell apart, because cookies are not scoped by port.
+ * - /api/* answers only what the browser marks `Sec-Fetch-Site: same-origin`
+ *   (when the header is present at all), so only the runner's own pages can
+ *   use it. That refuses:
+ *   - `cross-site` and `same-site`: same-site includes other ports on
+ *     127.0.0.1, which the cookie alone cannot tell apart, because cookies
+ *     are not scoped by port.
+ *   - `none`: Chrome sends the SameSite=Strict cookie with a fetch from any
+ *     extension that has host permission for 127.0.0.1:4310, marked `none`
+ *     (measured on Chromium 153), and a request typed into the address bar
+ *     is `none` too.
+ *   Pages and the sign-in link are navigations and keep working with `none`.
  * - State-changing /api/* requests (anything but GET/HEAD) also need an
  *   Origin equal to this server's own origin and a JSON Content-Type, which
  *   an HTML form on another site cannot send.
@@ -175,7 +183,7 @@ function apiGuard(uiToken: string | undefined): MiddlewareHandler {
   return async (c, next) => {
     const request = c.req.raw;
     const site = request.headers.get("sec-fetch-site");
-    if (site === "cross-site" || site === "same-site") {
+    if (site !== null && site !== "same-origin") {
       return errorResponse(403, "cross_site_request", "The runner's local API only answers its own pages.");
     }
     if (!SAFE_METHODS.has(request.method)) {
