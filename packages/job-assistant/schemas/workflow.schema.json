@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requiredSources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "resume",
+          "previousCoverLetters",
+          "portfolioSite",
+          "repositories",
+          "socialProfiles",
+          "workSamples",
+          "targetRolesAndPreferences"
+        ]
+      }
+    },
+    "connections": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "file_upload",
+          "pasted_text",
+          "url_import",
+          "github",
+          "social_export_files"
+        ]
+      }
+    },
+    "browserPermissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "activeTab",
+          "scripting",
+          "tabGroups",
+          "storage",
+          "sidePanel",
+          "alarms"
+        ]
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "capture_job",
+          "open_application_group",
+          "report_status"
+        ]
+      }
+    },
+    "schemas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "adapters": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "eve"
+        ]
+      }
+    },
+    "changelog": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "notes": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "version",
+          "date",
+          "notes"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "description",
+    "requiredSources",
+    "connections",
+    "browserPermissions",
+    "actions",
+    "schemas",
+    "adapters",
+    "changelog"
+  ],
+  "additionalProperties": false
+}

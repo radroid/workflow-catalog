@@ -7,16 +7,16 @@
  * build` additionally emits JSON Schema for each entry in `registry.ts` into
  * `packages/job-assistant/schemas/`.
  */
-export * from "./primitives";
-export * from "./claim";
-export * from "./source";
-export * from "./career-profile";
-export * from "./workspace";
-export * from "./job-snapshot";
-export * from "./application";
-export * from "./session";
-export * from "./run";
-export * from "./bridge-envelopes";
-export * from "./bridge-http";
-export * from "./workflow-manifest";
-export * from "./registry";
+export * from "./primitives.js";
+export * from "./claim.js";
+export * from "./source.js";
+export * from "./career-profile.js";
+export * from "./workspace.js";
+export * from "./job-snapshot.js";
+export * from "./application.js";
+export * from "./session.js";
+export * from "./run.js";
+export * from "./bridge-envelopes.js";
+export * from "./bridge-http.js";
+export * from "./workflow-manifest.js";
+export * from "./registry.js";

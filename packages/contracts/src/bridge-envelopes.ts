@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { httpUrlSchema, isoDateTimeSchema, nonEmptyStringSchema, protocolVersionSchema, uuidSchema } from "./primitives";
+import { httpUrlSchema, isoDateTimeSchema, nonEmptyStringSchema, protocolVersionSchema, uuidSchema } from "./primitives.js";
 
 /**
  * The four bridge envelopes, shaped per

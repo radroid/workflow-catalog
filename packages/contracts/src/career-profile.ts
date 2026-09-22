@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
-import { claimSchema } from "./claim";
-import { sourceSchema } from "./source";
+import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
+import { claimSchema } from "./claim.js";
+import { sourceSchema } from "./source.js";
 
 /**
  * A single preference or boundary statement the person owns. mvp-spec §5

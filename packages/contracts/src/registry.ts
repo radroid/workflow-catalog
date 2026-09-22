@@ -1,26 +1,26 @@
 import type { z } from "zod";
-import { claimSchema } from "./claim";
-import { sourceSchema } from "./source";
-import { careerProfileSchema } from "./career-profile";
-import { workspaceManifestSchema } from "./workspace";
-import { jobSnapshotSchema } from "./job-snapshot";
-import { applicationSchema } from "./application";
-import { sessionManifestSchema } from "./session";
-import { runRecordSchema } from "./run";
+import { claimSchema } from "./claim.js";
+import { sourceSchema } from "./source.js";
+import { careerProfileSchema } from "./career-profile.js";
+import { workspaceManifestSchema } from "./workspace.js";
+import { jobSnapshotSchema } from "./job-snapshot.js";
+import { applicationSchema } from "./application.js";
+import { sessionManifestSchema } from "./session.js";
+import { runRecordSchema } from "./run.js";
 import {
   applicationStatusChangedSchema,
   browserCommandResultSchema,
   jobCaptureSchema,
   openApplicationGroupSchema,
-} from "./bridge-envelopes";
+} from "./bridge-envelopes.js";
 import {
   commandsResponseSchema,
   eventsRequestSchema,
   pairRequestSchema,
   pairResponseSchema,
   statusResponseSchema,
-} from "./bridge-http";
-import { workflowManifestSchema } from "./workflow-manifest";
+} from "./bridge-http.js";
+import { workflowManifestSchema } from "./workflow-manifest.js";
 
 /**
  * Every schema this package publishes as JSON Schema, keyed by the file

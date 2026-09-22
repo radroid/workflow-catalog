@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { httpUrlSchema, isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
+import { httpUrlSchema, isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
 
 /**
  * CONTEXT.md: "Session manifest: The declarative list of browser tasks

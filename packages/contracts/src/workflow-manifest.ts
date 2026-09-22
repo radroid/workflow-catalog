@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { isoDateSchema, nonEmptyStringSchema, semverSchema } from "./primitives";
-import { sourceCategorySchema } from "./source";
+import { isoDateSchema, nonEmptyStringSchema, semverSchema } from "./primitives.js";
+import { sourceCategorySchema } from "./source.js";
 
 function noDuplicates<T>(arr: T[]): boolean {
   return new Set(arr).size === arr.length;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
+import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
 
 /** F10: the two schedules the MVP ships. */
 export const scheduleKindSchema = z.enum(["prepare_newly_saved_jobs", "review_open_applications"]);

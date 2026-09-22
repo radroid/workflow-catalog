@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isoDateTimeSchema, nonEmptyStringSchema, semverSchema } from "./primitives";
+import { isoDateTimeSchema, nonEmptyStringSchema, semverSchema } from "./primitives.js";
 
 /**
  * mvp-spec §5: `workspace.json` — `{ workspaceId, workflowInstanceId,

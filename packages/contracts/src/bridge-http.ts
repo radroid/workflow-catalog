@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { isoDateTimeSchema, nonEmptyStringSchema, semverSchema, uuidSchema } from "./primitives";
+import { isoDateTimeSchema, nonEmptyStringSchema, semverSchema, uuidSchema } from "./primitives.js";
 import {
   applicationStatusChangedSchema,
   browserCommandResultSchema,
   jobCaptureSchema,
   openApplicationGroupSchema,
-} from "./bridge-envelopes";
-import { scheduleKindSchema } from "./run";
+} from "./bridge-envelopes.js";
+import { scheduleKindSchema } from "./run.js";
 
 /**
  * mvp-spec §5, "Bridge (runner HTTP on 127.0.0.1:4310, loopback only)":
