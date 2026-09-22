@@ -1,6 +1,6 @@
 {
   "stage": "S3",
-  "stage_status": "paused",
+  "stage_status": "in-progress",
   "iter": 4,
   "pr_mode": true,
   "pr_size_policy": "fat",
@@ -10,11 +10,5 @@
     "path": "GOALS.md"
   },
   "smoke_test": "pnpm typecheck && pnpm test",
-  "integration_pr": 2,
-  "paused": {
-    "at": "2026-09-22T13:05:00-04:00",
-    "reason": "owner switching the orchestrator model",
-    "iter_in_progress": 5,
-    "handoff": "logs/handoff/2026-09-22-pause.md"
-  }
+  "integration_pr": 2
 }

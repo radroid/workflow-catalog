@@ -774,3 +774,94 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - `.loop/state.json` is marked `stage_status: paused`, with a pointer to the handoff.
 - `logs/latest.md` is rewritten as the resume handoff.
 - PR #2 is updated. Nothing merged during iter 005.
+
+## 2026-09-22 — Loop resumed by the new orchestrator [RESUMED]
+
+**Iter:** 005 (in progress)
+**Source:** owner
+**Severity:** info
+
+**Charter / context:** at 14:26 the owner restarted the loop on the new orchestrator model, from the pause handoff (`logs/handoff/2026-09-22-pause.md`).
+
+**What happened at the resume:**
+- `.loop/state.json` `stage_status` is back to `in-progress`. Its `paused` block was dropped; this log and the handoff keep the record.
+- The three old agent worktrees were clean, with nothing unpushed. They were removed, without force, so that fresh worktree agents could switch to `packet/P03`, `packet/P07-B` and `packet/P08-A`. The branches themselves are untouched.
+- Four fresh agents started:
+  - P03 round 2: an Opus reviewer and an Opus UI critic;
+  - an Opus escalation implementer for P07-B;
+  - a Sonnet successor for P08-A.
+- **Process fix** for genuine pauses being treated as injections: every prompt now carries a private code word for its agent, kept out of the repo, and every mid-round message carries it. A real stop also uses TaskStop.
+
+**P08-A decisions** on the predecessor's five open assumptions:
+1. **Provider limit.**
+   - Detect it primarily from `details.semanticErrorId`: `gateway-rate-limited` or `gateway-free-tier-rate-limited`.
+   - A `/\b429\b|rate.?limit/i` fallback on `code` or `message` applies only when no id is present, and is documented as a heuristic.
+   - Pausing is the conservative direction, and the harness never retries.
+2. **A corrupt `runs/budget.json`** fails closed as a pause (`budget settings unreadable (runs/budget.json)`), never a crash. Resume rewrites the defaults; Save keeps the pause.
+3. **`withRun`** resolves with the record and never rethrows.
+4. **`localDateString`** stays in `store/runs.ts` and uses the OS-local time zone. Tests must pass in any time zone; the implementer runs them under two.
+5. **The runs API** returns full records plus `path`, bounded to 200 records and 14 days.
+
+**Action taken:** iter-005 continues from the handoff.
+
+## 2026-09-22 — Provider session limit stopped all four iter-005 agents [FAILURE]
+
+**Iter:** 005
+**Source:** smoke-failure (provider usage limit)
+**Severity:** medium
+
+**Charter / context:** at about 14:45, roughly 20 minutes after the resume, all four agents stopped with HTTP 429 "You've hit your session limit · resets 2:50pm (America/Toronto)". The Opus and Sonnet agents stopped alike.
+**Verdict text / failure detail:** nothing was lost; every worktree was intact.
+- **P03 reviewer:** stopped mid-checklist. It had already found that `markdownError` is returned by the API but neither page reads it (R10).
+- **P03 UI critic:** stopped mid-screenshots. Its harness was left listening on 4340.
+- **P07-B escalation:** still investigating. One unpushed setup merge (36b78ba).
+- **P08-A:** mid-code. One unpushed resume-claim commit (269d21b), plus work in progress.
+
+**Action taken:**
+- At 14:52, after the reset, the owner re-kicked ("Continue").
+- All four agents resumed with SendMessage, keeping their context. Each message carried that agent's code word.
+- P08-A was told to push at its next green step.
+- Lesson carried from iter 004: four agents at once reached the session limit within about 20 minutes, so the budget of seven is a ceiling, not a target.
+
+## 2026-09-22 — P03 peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** high
+
+**Charter / context:** a fresh Opus reviewer and a fresh Opus UI critic reviewed PR #11 at 9584e93 (revision 1), with `logs/handoff/P03-revision-1.md` as the checklist.
+**Verdict text / failure detail:** the full findings are in `logs/handoff/P03-round-2-review.md`.
+- **Reviewer: VERDICT: REVISE — 6 issues.**
+  - What holds:
+    - the chain is green at the head (runner 279/279, eval 62 gates) and on the merge onto a9abb70;
+    - 38 of 49 mutations were killed.
+  - Issues:
+    1. R10 is reconciled on only three routes and is untested; hand edits are lost silently.
+    2. The new saved-text feature posts the prompt rendering back, which corrupts the source and defeats R7.
+    3. `ask_follow_up` confirms on any free text, even "no".
+    4. The store loses concurrent writes: 1 of 7 recorded.
+    5. The `ask_follow_up` eval copy is still a copy.
+    6. The report is still uncorrected.
+- **UI critic: VERDICT: REVISE — 9 issues.**
+  1. Focus is lost after claim and revision actions.
+  2. UUIDs and raw keys appear in announcements.
+  3. Each outcome is announced two or three times, and feedback is off-screen.
+  4. Readiness is wrong with zero claims, ambiguous to screen readers, and left stale after a withdrawal.
+  5. The new "excluded" badge fails contrast (3.85:1 light, 3.04:1 dark).
+  6. Drafts vanish on re-render.
+  7. The reason for Unavailable and N/A is lost when typed after the choice.
+  8. The withdrawal isn't explained, and Accept is a dead end.
+  9. 9 of 48 screenshots exist.
+  - Verified: C4, C5, C7, C8, C9, C10, Preferences.
+
+**Action taken:** revision 1 was the one revision round, so a fresh **Opus escalation implementer** took the combined list. Orchestrator decisions, in full in the handoff file:
+- **D8:** every profile write goes through one shared helper, with an in-process chain and a cross-process lock file `.runner/profile.lock` (bounded wait, then 503; stale after 30 s).
+- **D9:** reconcile before every mutation. Unparseable hand edits refuse writes and offer an explicit discard.
+- **D10:** only an explicit option changes a claim. Free text stays open, as a note.
+- **D11:** when approval is withdrawn, pending revisions are applied to the draft instead of dropped. This reaches the walkthrough's end state without losing the person's edit. Accept is never offered while unapproved.
+- **D12:** one live region, the sticky "Last action" line.
+- **D13:** raw paste-file text, and stable upload names (415 for other types).
+- **D14:** the hash is recorded only after a persisted extraction.
+- **D15:** an edit that adds an always-ask item re-opens the question.
+- **D16:** all 48 screenshots.
+- Contracts follow-up (for a later contracts packet): withdrawals are stored as `accepted` revisions, because the revision status list is closed.
