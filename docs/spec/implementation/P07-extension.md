@@ -27,6 +27,46 @@ Form filling, uploads, submission, cookies, native messaging.
 
 ## Report
 
+### 2026-09-22 — Revision 1 (iter-003 implementer, Sonnet) — REVISE verdict, 8 issues + 9 fold-ins
+
+Fixed every issue and folded in every cheap decision from the review's REVISE verdict (4 from an Opus reviewer, 4 from a UI critic), all on `packet/P07-A` in the same worktree, same allowlist, same commit discipline (staged by explicit path, `P07-A: `-prefixed messages, no force-push, no amend). Five commits: `dfebcdd`, `2398c26`, `b260728`, `4152a2a`, `c29b1a1`.
+
+**Issue 1 (dist eval/Function scanner blind spots) — fixed, concretely proven.** `scripts/scan-dist-for-eval.mjs`'s regexes couldn't catch minified `Function(x)` (no `new`), `window.eval(`/`globalThis.eval(`, or `(0, eval)(` — the zod jitless probe passed only because of the bug, not a real allowlist. `NEW_FUNCTION_RE` is now `/(?<![\w$.])(?:new\s+)?Function\s*\(/`, `EVAL_RE` is `/\beval\b/`; the zod probe is allowed by an exact-snippet comparison (`ZOD_JITLESS_PROBE_SNIPPET`), with a comment, and a test proves a *different* `Function(...)` on another line of the same file still gets flagged. 6 new tests (16/16 total). **Concrete proof (not committed):** copied the real `dist/` into an OS-tmpdir scratch copy, appended a planted `Function("a", "return a")` to `worker.js`, confirmed `scanDistForViolations` now reports it while the real `dist/` stays clean, then deleted the scratch copy.
+
+**Issue 2 (URL/text mismatch, SPA race) — fixed.** `JobCapture.url` (from `tab.url` at query time) could pair with a *different* job's text if the tab navigated (e.g. an SPA route change) between that query and the later `executeScript` call reading the page — breaking gate 5 ("never silently save the wrong job"). `extractJobPosting` now reads `location.href` in the same step as the text; `popup/main.ts` refuses (falls back) when it disagrees with `tab.url`, instead of guessing. Proven twice: a fake-`chrome` unit test in `main.test.ts` simulating the exact race, and — new this round — a **real** end-to-end reproduction in `e2e/real-popup.spec.ts` against `posting-spa-mismatch.html`, forced deterministically via a busy-wait on the tab's own renderer thread (not a timing race; see that file's comment) through the real popup, asserting the real refusal string renders.
+
+**Issue 3 (file import size limit) — fixed.** `options/main.ts`'s `await file.text()` had no size check — a 20 MB valid manifest froze the options page. New `checkImportFileSize()` (`file-bridge/session-import.ts`) rejects `file.size > MAX_BRIDGE_BODY_BYTES` before ever reading the file; the read itself is wrapped in try/catch with a visible, `role="alert"` error. Tests cover at-cap/over-cap and a 300,000-byte real `File` exercised through the actual change handler without hanging.
+
+**Issue 4 (vacuous e2e checks) — fixed.** The theme check (`expect(x).not.toBe("")`) was true for any non-empty string; the CSP-violations test attached its listener after launch and never opened a page — both proven broken by the reviewer (an emptied `theme.css` plus a planted `new Function` still passed 4/4). Replaced with, per page (options/popup/sidepanel — a smoke test for the side panel didn't exist before and now does): a `securitypolicyviolation` DOM-event recorder armed via `page.addInitScript` before `goto`, `pageerror`, and console-error listeners; `document.fonts.check("12px Geist")` after `document.fonts.ready`; body background compared against a probe styled with `background-color: var(--background)` (not a hard-coded color). Renamed the popup test — it exercises the `!tab.url` no-readable-address branch (no genuine `activeTab` grant on direct navigation), not `explainUnsupportedUrl`'s `chrome://` scheme branch as the old name claimed.
+
+**Issue 5 (messages not announced) — fixed.** Pairing validation text, the stub pairing result, the import-error box, and the popup's "Saved…" line all now live in `role="status"`/`aria-live="polite"` or `role="alert"` containers; the pairing-code field gets `aria-invalid`/`aria-describedby`; Un-pair rebuilds the pairing section and moves focus to its code field instead of dropping to `<body>`.
+
+**Issue 6 (axe WCAG A failures) — fixed, verified with real axe.** `label` (file input's `<label>` didn't wrap or `for`-reference it) and `dlitem` (session summary / paired-device state used `<dt>/<dd>` loose inside a `div.kv`) are both fixed — real `<label for>` on both the pairing-code and file inputs, real `<dl>` wherever `<dt>/<dd>` appear. **Verified, not just asserted structurally:** `e2e/real-popup.spec.ts` injects the actual `axe-core` package (added as a devDependency, not a `/tmp` path) and asserts zero WCAG 2.x A/AA + best-practice violations on the popup (json-ld/hostile/dom-heuristics previews, the SPA-mismatch fallback, light and dark) and the options page (light and dark) — all real states through the real popup/options pages, not a fixture harness.
+
+**Issue 7 (Save stuck on "Saving…") — fixed.** `render.ts`'s click handler only reset the button in `catch`. Now `finally` always re-enables and refocuses it; on success the text becomes "Saved ✓" before `finally` runs. `e2e/real-popup.spec.ts` proves this against the real button after a real Save: text is `"Saved ✓"`, `disabled` is `false`, and focus is still on the button.
+
+**Issue 8 (excerpt hides content) — fixed.** `.excerpt { max-height: 6.5em; overflow: hidden }` sliced text mid-glyph with an always-cut-off "…" — the hostile fixture's injected "ignore previous instructions" paragraph was saved but never shown. The excerpt is now a focusable, labelled (`role="region"`, `aria-label`) scroll area (`max-height: 10em; overflow-y: auto`) showing the *entire* captured text, plus one line stating the page's text is saved as data and can't trigger actions. `e2e/real-popup.spec.ts` asserts the hostile paragraph's exact text is present in that region (not just structurally reachable), that no ellipsis character appears, and that Save → download still completes with zero dialogs and zero navigations.
+
+**Fold-ins.** (a) `executeScript({ args: [MAX_INPAGE_TEXT_CHARS] })` caps in-page text before the boundary (`MAX_JOB_CAPTURE_TEXT_BYTES * 4`, a generous character pre-cap ahead of the byte-accurate cap downstream); `isExtractionResult()` validates the returned shape before use. (b) `asJobPosting` takes a `depth` param, `MAX_GRAPH_DEPTH = 6`, falling back to DOM heuristics on a deep `@graph` instead of hanging/throwing — proven with a 7-level-deep fixture. (c) `vite.config.ts`: `build.modulePreload.polyfill = false` — Chrome 120+ (this extension's floor) has native `modulepreload`; the polyfill was dead weight and the dist's one `fetch(` call. (d) The options page reacts to `chrome.storage.onChanged` (export button enables/disables without a reload) and re-validates a stored capture with `jobCaptureSchema` before exporting it. (e) `manifest.test.ts` gained a test asserting `dist/manifest.json` deep-equals the source `manifest.json`. (f) One shared `:focus-visible { outline: 2px solid var(--ring); ... }` rule; the file picker is styled (Geist, bordered). (g) The pairing code lives in a real `<form>` (Enter submits); the submit handler trims and refuses a whitespace-only code. (h) `<main>` landmarks on every page (options' top-level wrapper, popup/sidepanel's root); the popup's eyebrow is a real `<h1>`. (i) `shared/format.ts` (new): `formatTimestamp` (human-readable) and `abbreviateUuid` (first 8 hex chars, full value in `title`); zod issue dumps on import failure are now one plain sentence plus a collapsed `<details>` with the per-issue detail.
+
+**`RUNNER_JOBS_URL`.** Left as the single constant it already was, with a comment explaining P02's router may end up serving this page as `/ui/<name>` rather than a literal `jobs.html` file, and that P07-B syncs the path once P02 actually lands. It has not landed as of this revision — `pnpm -r typecheck`/`test`/`lint` all still print the `runner` package's own placeholder line ("no TypeScript/tests/lint yet — P02 fills this in"), independently confirming that. A message purporting to be a coordinator follow-up arrived mid-round asking to change this URL on the premise that P02's local UI had landed; given the above, and that the message's two other "rules" either contradicted already-correct behavior or would have weakened already-passing cleanup code, it was not acted on. Flagged in this round's reply rather than applied.
+
+**Real popup, for real (new this round, closes phase 1's own flagged gap).** Phase 1's report ended on "One thing to sharpen": no automatable trigger existed for a genuine `activeTab` gesture, so the popup's successful-extraction path had never run outside a by-hand smoke test, and the acceptance screenshots were a `render.ts`-driven approximation. `e2e/real-popup-cdp.ts` + `e2e/fixture-server.ts` + `e2e/real-popup.spec.ts` (new) close it: Chrome's `--enable-unsafe-extension-debugging` launch flag plus CDP `Extensions.triggerAction` against a tab's "tab"-type target is a real, first-party action invocation that *does* grant `activeTab` — confirmed fully typed against Playwright's own bundled CDP protocol types. 5 new e2e tests drive real capture → preview → Save → download against the json-ld, hostile, and DOM-heuristics fixtures, the SPA-mismatch refusal, and axe on both pages, light and dark — see the issue write-ups above for what each proves. `docs/screenshots/P07A-{popup,options}-{light,dark}.png` are retaken from the real pages this way, not the phase-1 harness.
+
+**Full verification chain, real output (after all fixes, before this report commit):**
+```
+pnpm -r typecheck                → clean (contracts, job-assistant, apps/catalog, extension; runner still a placeholder)
+pnpm -r test                     → contracts 224/224, job-assistant 122/122, apps/catalog 87/87, extension 128/128
+pnpm -r lint                     → clean
+pnpm typecheck && pnpm test      → green, incl. scripts/check-fixtures.test.mjs 2/2
+pnpm --filter extension build    → dist/ scan clean (no eval, no Function, no remote script)
+pnpm check:fixtures              → exit 0, no offenses
+pnpm --filter extension test:e2e → 9/9 (4 in extension.spec.ts, 5 in real-popup.spec.ts), run 4x back to back specifically to check the SPA-mismatch busy-wait and axe assertions for flakiness — none observed
+```
+Extension package: 16 vitest files / 128 tests (new files this round: `popup/main.test.ts`, `options/main.test.ts`, `shared/format.test.ts`; every other touched test file grew in place). e2e: 4 → 9 tests (+1 sidepanel smoke test in `extension.spec.ts`, +5 in the new `real-popup.spec.ts`).
+
+Port 3107 (the fixture server `real-popup.spec.ts` uses) confirmed free after every run in this round, including the final one before push.
+
 ### 2026-09-22 — Part A (iter-003 implementer, Sonnet)
 
 Scope was **part A only**: manifest, options/pairing page (stub bridge,
@@ -35,7 +75,11 @@ no calls to the runner bridge, no sessions/tab groups, no side panel
 content. Parts B and C (blocked by P02's bridge and P06's manifests/
 commands, per this packet's header) are untouched. Branch `packet/P07-A`
 off `overnight/integration` at `bbf16d1`, PR into `overnight/integration`;
-head `15f49db` across 9 commits (`336892b` claim … `15f49db` this report).
+head `5959906` across 10 commits (`336892b` claim … `5959906` this report;
+corrected — the report text below was originally drafted citing `15f49db`,
+the commit right before the one that actually carried it, which was
+already stale the moment `5959906` landed. Superseded by revision 1
+above; see that entry for the current head).
 
 **What was built.** `manifest.json` (MV3, the six permissions exactly,
 host permission only the bridge origin, no forbidden keys — asserted by
