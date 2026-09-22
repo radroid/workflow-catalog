@@ -449,6 +449,51 @@ describe("bridge: POST /pair", () => {
     finish();
     expect((await slow).status).toBe(401);
   });
+
+  /**
+   * The queue (`PairThrottle#exclusive` in extension-api.ts) chains every
+   * request's work onto `#tail`, then sets `#tail = run.catch(() =>
+   * undefined)` so a failed request never leaves `#tail` itself rejected for
+   * the next request to inherit. Nothing exercised a failure inside that
+   * work before: this plants one in `redeem` and checks both that the queue
+   * keeps working and that Node never sees an unhandled rejection. A rejected
+   * promise with no `.catch` (e.g. `#tail = run.then(() => undefined)`)
+   * would still leave *that* request's caller correctly awaited, but `#tail`
+   * itself would reject with nothing attached to it until, at the earliest,
+   * the next call to `exclusive` — too late for Node's unhandled-rejection
+   * check, which runs at the end of the microtask queue.
+   */
+  it("recovers from an error inside the /pair queue: 500 for that request, the next code still pairs, nothing left unhandled", async () => {
+    const bridge = await makeBridge();
+    const send = (code: string) =>
+      bridge.request("/pair", { method: "POST", headers: { origin: EXTENSION_ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    const redeem = bridge.ctx.pairing.redeem.bind(bridge.ctx.pairing);
+    let calls = 0;
+    vi.spyOn(bridge.ctx.pairing, "redeem").mockImplementation((input) => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(new Error("redeem: planted failure")) : redeem(input);
+    });
+    const rejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const broken = await send(WRONG);
+      expect(broken.status).toBe(500);
+      expect((await errorOf(broken)).code).toBe("internal_error");
+      // Give Node's unhandled-rejection check a full turn before the next
+      // request would give the queue a chance to attach a late handler.
+      await new Promise((resolve) => setImmediate(resolve));
+      const { code } = await bridge.ctx.pairing.issue();
+      const paired = await send(code);
+      expect(paired.status).toBe(200);
+      expect((await bridge.ctx.devices.list()).map((device) => device.origin)).toEqual([EXTENSION_ORIGIN]);
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+    expect(calls).toBe(2);
+    expect(rejections).toEqual([]);
+  });
 });
 
 describe("bridge: POST /events", () => {
