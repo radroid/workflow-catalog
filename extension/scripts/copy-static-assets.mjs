@@ -47,8 +47,13 @@ copyInto("theme.css", path.join(repoRoot, "docs/spec/visuals/theme.css"));
 // Resolve the installed `geist` package's own directory (rather than
 // hard-coding a node_modules path) so this keeps working under pnpm's
 // per-package symlink layout and across manager/hoisting differences.
-const geistPackageJson = require.resolve("geist/package.json");
-const geistRoot = path.dirname(geistPackageJson);
+// geist's package.json `exports` map only exposes subpaths under `./font*`
+// (meant for next/font, e.g. "geist/font/sans" -> "./dist/sans.js") — it
+// does not export `.` or `./package.json`, so neither resolves. Resolve a
+// subpath that *is* exported instead, and derive the package root from its
+// known location one level above `dist/`.
+const resolvedSansEntry = require.resolve("geist/font/sans"); // .../geist/dist/sans.js
+const geistRoot = path.resolve(path.dirname(resolvedSansEntry), "..");
 
 copyInto(
   "fonts/Geist-Variable.woff2",

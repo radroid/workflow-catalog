@@ -1,0 +1,10 @@
+@import "../shared/base.css";
+
+.panel {
+  padding: 16px;
+}
+
+.panel h1 {
+  font-size: 14px;
+  font-weight: 600;
+}

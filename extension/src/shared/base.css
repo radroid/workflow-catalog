@@ -1,0 +1,221 @@
+/*
+ * Base rules shared by every extension page. Design tokens themselves
+ * come from theme.css, loaded via a plain `<link rel="stylesheet"
+ * href="/theme.css">` in each page's <head> — a root-absolute href, which
+ * Vite's HTML transform leaves untouched, resolving against
+ * extension/public/theme.css (copied at build time from
+ * docs/spec/visuals/theme.css by scripts/copy-static-assets.mjs; never
+ * edited here). This file only *consumes* those tokens via var(...) and
+ * never redefines them.
+ *
+ * Font files are self-hosted the same way (extension/public/fonts/,
+ * copied from the pinned `geist` package) and referenced here with
+ * url("/fonts/...") — a root-absolute CSS url(), which Vite also leaves
+ * untouched rather than trying to bundle/hash it.
+ */
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+  /* theme.css has no --amber token by name, but --chart-1 is the exact
+   * same oklch(0.81 0.17 75.35) value docs/spec/visuals/index.html uses
+   * for its --amber, in both light and dark (chart-1 is the one token
+   * that doesn't change between the two theme.css blocks). Aliasing it
+   * here reads clearly at each call site below without hand-picking a
+   * color of our own. */
+  --amber: var(--chart-1);
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.pad {
+  padding: 14px 16px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  font-size: 12.5px;
+}
+
+.kv dt {
+  color: var(--muted-foreground);
+}
+
+.kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+button {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+button:hover {
+  background: var(--muted);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+button.primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+button.primary:hover {
+  opacity: 0.9;
+}
+
+button.ghost {
+  background: transparent;
+  box-shadow: none;
+  border-color: transparent;
+}
+
+input[type="text"] {
+  font: inherit;
+  font-size: 13px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  width: 100%;
+}
+
+.pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  white-space: nowrap;
+}
+
+.pill.ok {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+.pill.warn {
+  background: var(--amber);
+  color: #000;
+  border-color: var(--amber);
+}
+
+.pill.bad {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  border-color: var(--destructive);
+}
+
+.excerpt {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  max-height: 6.5em;
+  overflow: hidden;
+  line-height: 1.5;
+}
+
+.flash {
+  border-left: 3px solid var(--amber);
+  background: var(--muted);
+  padding: 8px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 12.5px;
+}
+
+.flash.bad {
+  border-left-color: var(--destructive);
+}
+
+a {
+  color: inherit;
+}
+
+.small {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
