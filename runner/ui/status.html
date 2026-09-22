@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Status · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <script type="module" src="/ui/assets/status.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1>Runner status</h1>
+      <p class="lede">The same checklist as <code>npm run doctor</code>. Everything here stays on this computer.</p>
+
+      <section class="card" aria-labelledby="checklist-title">
+        <div class="card-head">
+          <h2 id="checklist-title">Install checklist</h2>
+          <span class="muted small" id="checked-at"></span>
+        </div>
+        <ul class="checklist" id="checklist"><li><span></span><span class="muted">Loading…</span></li></ul>
+      </section>
+
+      <section class="card" aria-labelledby="model-title">
+        <div class="card-head">
+          <h2 id="model-title">Model</h2>
+          <button class="button secondary" type="button" id="check-model">Check the model</button>
+        </div>
+        <p id="model-summary" class="muted">Loading…</p>
+        <p class="muted small">A check sends one short fixed message ("Reply with exactly: ok") to the provider.</p>
+        <p id="model-result" class="small" hidden></p>
+      </section>
+
+      <section class="card" aria-labelledby="devices-title">
+        <div class="card-head">
+          <h2 id="devices-title">Paired browsers</h2>
+          <button class="button" type="button" id="new-code">New pairing code</button>
+        </div>
+        <div id="pairing-code" class="notice decision" hidden>
+          <p class="small">Enter this code on the extension's options page within 10 minutes. It works once.</p>
+          <p class="code-display" id="pairing-code-value"></p>
+          <p class="muted small" id="pairing-code-expiry"></p>
+        </div>
+        <table>
+          <thead><tr><th>Device</th><th>Paired</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="devices"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </section>
+
+      <section class="card" aria-labelledby="workspace-title">
+        <h2 id="workspace-title">Workspace</h2>
+        <p><code id="workspace-root"></code></p>
+        <p class="muted small">Everything the runner keeps about you is a file in this folder. Package version <span id="package-version"></span>.</p>
+        <p id="eve-status" class="muted small"></p>
+      </section>
+
+      <p id="page-error" class="error" role="alert" hidden></p>
+    </main>
+  </body>
+</html>

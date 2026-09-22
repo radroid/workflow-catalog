@@ -1,0 +1,24 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The runner only ever runs on Node 24 (engines), which has all of ES2024.
+    "lib": ["ES2024"],
+    "types": ["node", "eve/workflow-modules"],
+    // Scripts, the bridge and route modules run on Node 24's built-in type
+    // stripping (node --import ./lib/register-ts.mjs), so relative imports
+    // name their .ts file and only erasable syntax is allowed: no enums,
+    // namespaces or parameter properties, and type-only imports say `type`.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    // Typecheck the eve adapter from its source, so typecheck never depends
+    // on a build. The package's exports point at dist/, which only
+    // `eve extension build` writes (npm run runner and the eval run it before
+    // eve builds), and a fresh clone has no dist/ yet.
+    "paths": {
+      "@workflow-catalog/job-assistant-eve": ["../packages/job-assistant/adapters/eve/extension/extension.ts"]
+    }
+  },
+  "include": ["agent", "cli", "evals", "eval-agent", "lib", "server", "store", "test"]
+}

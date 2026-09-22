@@ -1,0 +1,9 @@
+{
+  "name": "runner-eval-agent",
+  "private": true,
+  "type": "module",
+  "description": "The runner's eval fixture agent: its own eve app root (eve docs, evals/overview.mdx: use mockModel in a dedicated fixture agent). Same tools, sandbox, extension mount and agent options as runner/agent, with a scripted mockModel. Not a pnpm workspace member and never installed on its own: eve and the adapter resolve from runner/node_modules. The eve dependency below is what marks this directory as an eve project root. Run the evals with `npm run eval` in runner/.",
+  "dependencies": {
+    "eve": "0.63.0"
+  }
+}
