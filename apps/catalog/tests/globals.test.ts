@@ -66,6 +66,18 @@ describe("catalog theme wiring", () => {
     expect(ghostRuleMatch?.[1]).toMatch(/background:\s*transparent/);
   });
 
+  it("gives the auto-focused 'Refused' alert a themed :focus ring, not the browser default", () => {
+    const alertRingMatch = /\.flash\.error:focus\s*{([^}]*)}/.exec(globalsCss);
+    expect(alertRingMatch, "expected a .flash.error:focus rule").not.toBeNull();
+    expect(alertRingMatch?.[1]).toMatch(/outline:\s*2px solid var\(--ring\)/);
+  });
+
+  it("fills the install checklist's toggle button solid when aria-pressed, not just its check-mark", () => {
+    const pressedMatch = /\.check-row button\[aria-pressed="true"\]\s*{([^}]*)}/.exec(globalsCss);
+    expect(pressedMatch, "expected a .check-row button[aria-pressed=\"true\"] rule").not.toBeNull();
+    expect(pressedMatch?.[1]).toMatch(/background:\s*var\(--foreground\)/);
+  });
+
   it("wraps command-block text instead of relying on horizontal scroll", () => {
     const commandBlockMatch = /pre\.command-block\s*{([^}]*)}/.exec(globalsCss);
     expect(commandBlockMatch).not.toBeNull();

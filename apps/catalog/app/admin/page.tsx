@@ -6,6 +6,7 @@ import { createInviteAction, dismissInviteFlashAction, ownerSignInAction, ownerS
 import { getDb } from "../../lib/db";
 import { listInvites, MAX_INVITES } from "../../lib/invites";
 import { adminErrorMessage } from "../../lib/error-messages";
+import { ErrorAlert } from "../../components/error-alert";
 
 export const metadata = { title: "Admin · workflow catalog" };
 
@@ -55,12 +56,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         <h1>Owner sign-in</h1>
         <p className="lede">Enter the owner secret to create and manage invite links.</p>
 
-        {error ? (
-          <div id="admin-error" className="flash error" role="alert" tabIndex={-1} autoFocus>
-            <span className="tag">Refused</span>
-            {error}
-          </div>
-        ) : null}
+        {error ? <ErrorAlert id="admin-error" message={error} /> : null}
 
         <form action={ownerSignInAction} className="card pad">
           <div className="field">
@@ -102,12 +98,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         </form>
       </div>
 
-      {error ? (
-        <div className="flash error" role="alert" tabIndex={-1} autoFocus>
-          <span className="tag">Refused</span>
-          {error}
-        </div>
-      ) : null}
+      {error ? <ErrorAlert message={error} /> : null}
 
       {flashToken ? (
         <div className="flash">

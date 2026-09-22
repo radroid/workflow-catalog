@@ -293,6 +293,20 @@ input[type="password"]:focus {
   border-left-color: var(--destructive);
 }
 
+/* The "Refused" flash boxes are tabIndex={-1} and focused programmatically
+   (see components/error-alert.tsx) right after a sign-in / accept-invite
+   refusal, so a keyboard/screen-reader user lands on the message
+   immediately. Without this rule the browser's own default focus
+   indicator shows instead (e.g. Chrome's blue ring), which doesn't match
+   either theme — same fix as the shared button/.button/a:focus-visible
+   rule earlier in this file, but plain :focus (matching the input rule
+   also earlier in this file): this box is focused programmatically, not by
+   a mouse click that :focus-visible would want to suppress the ring for. */
+.flash.error:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .flash .tag {
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -335,6 +349,18 @@ input[type="password"]:focus {
 }
 
 .check-mark.done {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+/* The checklist toggle's visible+accessible text is the constant word
+   "Done" in both states (see app/(gated)/install/page.tsx) — aria-pressed
+   carries the state for assistive tech, and this is the sighted-user
+   equivalent: a pressed item's button fills solid, same treatment as
+   .check-mark.done above, instead of relying on the (now-identical) text
+   alone to communicate which state a button is in. */
+.check-row button[aria-pressed="true"] {
   background: var(--foreground);
   color: var(--background);
   border-color: var(--foreground);

@@ -3,6 +3,7 @@ import { getDb } from "../../../lib/db";
 import { checkInviteToken } from "../../../lib/invites";
 import { DISPLAY_NAME_MAX_LENGTH } from "../../../lib/display-name";
 import { inviteErrorMessage } from "../../../lib/error-messages";
+import { ErrorAlert } from "../../../components/error-alert";
 
 export const metadata = { title: "Accept invite · workflow catalog" };
 
@@ -25,20 +26,12 @@ export default async function InvitePage({ params, searchParams }: InvitePagePro
       <h1>Join the pilot</h1>
 
       {status === "invalid" ? (
-        <div className="flash error" role="alert" tabIndex={-1} autoFocus>
-          <span className="tag">Refused</span>
-          This invite link is invalid or has already been used. Ask the owner for a new one.
-        </div>
+        <ErrorAlert message="This invite link is invalid or has already been used. Ask the owner for a new one." />
       ) : (
         <>
           <p className="lede">Choose a display name to sign in. It is the only thing the catalog stores about you.</p>
 
-          {error ? (
-            <div id="invite-error" className="flash error" role="alert" tabIndex={-1} autoFocus>
-              <span className="tag">Refused</span>
-              {error}
-            </div>
-          ) : null}
+          {error ? <ErrorAlert id="invite-error" message={error} /> : null}
 
           <form action={acceptInviteAction} className="card pad">
             <input type="hidden" name="token" value={token} />
