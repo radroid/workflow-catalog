@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { rename, symlink } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ManualClock, MINUTE_MS } from "../lib/clock.ts";
+import { sha256Hex } from "../lib/crypto.ts";
 import { COMMAND_LEASE_MS, CommandQueue } from "../store/commands.ts";
 import { DeviceRegistry } from "../store/devices.ts";
 import { PAIRING_CODE_TTL_MS, PairingCodes, formatPairingCode, normalizePairingCode } from "../store/pairing.ts";
 import { UiLoginLinks } from "../store/ui-login.ts";
-import { EXTENSION_ORIGIN, newWorkspace } from "./helpers.ts";
+import { EXTENSION_ORIGIN, newWorkspace, tempDir } from "./helpers.ts";
 
 describe("pairing codes", () => {
   it("expires at 10 minutes: valid one millisecond before, expired at the mark", async () => {
@@ -22,11 +25,12 @@ describe("pairing codes", () => {
     expect(await codes.redeem(late.code)).toBe("invalid");
   });
 
-  it("is single use, even when redeems race (APFS lets concurrent unlinks all succeed)", async () => {
+  // On macOS this catches both APFS behaviours described in store/one-time-codes.ts.
+  it("is single use, even when redeems race", async () => {
     const clock = new ManualClock();
     const workspace = await newWorkspace(clock);
     const codes = new PairingCodes(workspace, clock);
-    for (let round = 0; round < 20; round += 1) {
+    for (let round = 0; round < 100; round += 1) {
       const { code } = await codes.issue();
       const results = await Promise.all([codes.redeem(code), codes.redeem(code), codes.redeem(code), codes.redeem(code)]);
       expect(results.filter((result) => result === "ok")).toHaveLength(1);
@@ -34,6 +38,18 @@ describe("pairing codes", () => {
     }
     expect(await codes.outstanding()).toBe(0);
     expect(await workspace.list(".runner", "pairing")).toEqual([]);
+  });
+
+  it("refuses a code file that is a symlink, even to a valid record", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const codes = new PairingCodes(workspace, clock);
+    const { code } = await codes.issue();
+    const file = path.join(await workspace.resolveReal(".runner", "pairing"), `${sha256Hex(normalizePairingCode(code) ?? "")}.json`);
+    const outside = path.join(await tempDir(), "record.json");
+    await rename(file, outside);
+    await symlink(outside, file);
+    expect(await codes.redeem(code)).toBe("invalid");
   });
 
   it("is short, unambiguous, and forgiving about how it is typed", async () => {

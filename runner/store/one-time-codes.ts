@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { readFile, rename, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, rename, stat, unlink } from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import { MINUTE_MS, type Clock } from "../lib/clock.ts";
 import { sha256Hex } from "../lib/crypto.ts";
@@ -12,11 +14,16 @@ import type { Workspace } from "./workspace.ts";
  * `npm run pair`, `npm run ui`) is not the bridge process that redeems it.
  *
  * Single use: redeeming first renames the file to a name unique to this
- * attempt, and only the caller whose rename succeeds may use the code. Not
- * unlink(2): on macOS (APFS) several concurrent unlinks of one path can all
- * succeed, so "whoever deleted it" is not a safe claim (seen in this
- * package's race test). rename(2) of one source to distinct targets lets
- * exactly one caller win.
+ * attempt, and only the caller whose rename succeeds may use the code.
+ * Two macOS (APFS) behaviours shape this, both seen in this package's race
+ * test and confirmed with a stress run of 4 concurrent callers:
+ * - unlink(2) is not a claim: several concurrent unlinks of one path can
+ *   all succeed (about 70% of rounds).
+ * - The path renamed must be built from the directory, never resolved from
+ *   the file. realpath(3) names a file by asking for its current name, so a
+ *   caller that resolves the file while another renames it gets the claimed
+ *   name back and claims it a second time (3 in 32,000 rounds; 0 in 32,000
+ *   when only the directory is resolved).
  */
 const codeRecordSchema = z
   .object({
@@ -27,6 +34,16 @@ const codeRecordSchema = z
   .strict();
 
 export type RedeemResult = "ok" | "expired" | "invalid";
+
+/** Reads a file but not through a symlink: a link planted as a code file cannot make redeem read anything else. */
+async function readNoFollow(file: string): Promise<string> {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
 
 const CLAIM_SUFFIX = ".claimed";
 /** A claim file older than this was left by a crash between claim and delete. */
@@ -61,6 +78,11 @@ export class OneTimeCodes {
     return this.#workspace.state(this.#options.directory, name);
   }
 
+  /** A file in the codes directory: the directory resolved (confined to the workspace), the name joined. */
+  async #path(name: string): Promise<string> {
+    return path.join(await this.#workspace.resolveReal(...this.#directory()), name);
+  }
+
   /** Issues a new code. Returns it in canonical form. */
   async issue(): Promise<{ canonical: string; expiresAt: Date }> {
     const canonical = this.#options.generate();
@@ -82,7 +104,7 @@ export class OneTimeCodes {
   async redeem(input: string): Promise<RedeemResult> {
     const canonical = this.#options.normalize(input);
     if (!canonical) return "invalid";
-    const file = await this.#workspace.resolveReal(...this.#segments(`${sha256Hex(canonical)}.json`));
+    const file = await this.#path(`${sha256Hex(canonical)}.json`);
     const claimed = `${file}.${randomBytes(8).toString("hex")}${CLAIM_SUFFIX}`;
     try {
       await rename(file, claimed);
@@ -91,7 +113,7 @@ export class OneTimeCodes {
       throw error;
     }
     try {
-      const parsed = codeRecordSchema.safeParse(JSON.parse(await readFile(claimed, "utf8")));
+      const parsed = codeRecordSchema.safeParse(JSON.parse(await readNoFollow(claimed)));
       if (!parsed.success) return "invalid";
       return new Date(parsed.data.expiresAt).getTime() > this.#clock.now().getTime() ? "ok" : "expired";
     } catch {
@@ -123,12 +145,12 @@ export class OneTimeCodes {
     const now = this.#clock.now().getTime();
     for (const { name, record } of await this.#records()) {
       if (!record || new Date(record.expiresAt).getTime() <= now) {
-        await unlink(await this.#workspace.resolveReal(...this.#segments(name))).catch(() => undefined);
+        await unlink(await this.#path(name)).catch(() => undefined);
       }
     }
     for (const name of await this.#workspace.list(...this.#directory())) {
       if (!name.endsWith(CLAIM_SUFFIX)) continue;
-      const file = await this.#workspace.resolveReal(...this.#segments(name));
+      const file = await this.#path(name);
       const info = await stat(file).catch(() => undefined);
       if (info && Date.now() - info.mtimeMs > STALE_CLAIM_MS) await unlink(file).catch(() => undefined);
     }
