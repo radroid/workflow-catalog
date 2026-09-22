@@ -1,0 +1,36 @@
+{{!--
+  cover-letter.md.hbs — renders one prepared cover letter (mvp-spec §3 F7).
+  Same claim-citation contract as resume.md.hbs: any statement asserting
+  something about the person carries the claim ID(s) it cites. Purely
+  connective sentences (greeting, sign-off, "I'm excited about...") carry no
+  citation — see cover-letter-drafting/SKILL.md's boundary on this.
+
+  Render context:
+    {
+      person: { name, contact },  // see resume.md.hbs — not sourced from CareerProfile
+      job: { title, company },    // from JobSnapshot.structured
+      date: string,                // ISO-8601 date this was prepared
+      greeting: string,            // e.g. "Dear Northwind Labs hiring team,"
+      paragraphs: [
+        {
+          statements: [
+            { text: string, claimIds: [string, ...] } // claimIds may be empty
+                                                         // only for a connective sentence
+          ]
+        }
+      ],
+      signOff: string              // e.g. "Sincerely,"
+    }
+--}}
+{{date}}
+
+{{greeting}}
+
+{{#each paragraphs}}
+{{#each this.statements}}{{this.text}}{{#each this.claimIds}} `[{{this}}]`{{/each}} {{/each}}
+
+{{/each}}
+{{signOff}}
+
+{{person.name}}
+{{person.contact}}

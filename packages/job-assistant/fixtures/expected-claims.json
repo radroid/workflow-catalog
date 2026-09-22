@@ -1,0 +1,101 @@
+[
+  {
+    "id": "5e2907bb-bfba-49f8-8bb3-629d30b8f96b",
+    "text": "Led the payments infrastructure team at Northwind Labs, redesigning the ledger service that powers Northwind Labs' billing.",
+    "kind": "fact",
+    "status": "confirmed",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#senior-platform-engineer-northwind-labs",
+      "quote": "Led the payments infrastructure team, redesigning the ledger service that powers Northwind Labs' billing."
+    }
+  },
+  {
+    "id": "25e19ba4-189f-42a3-83c7-73da8c1545ff",
+    "text": "Grew signups 500% after launching the self-serve onboarding flow.",
+    "kind": "metric",
+    "status": "excluded",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#senior-platform-engineer-northwind-labs",
+      "quote": "Grew signups 500% after launching the self-serve onboarding flow."
+    },
+    "question": "What's the 500% figure measured against, and over what time period?",
+    "answeredAt": "2026-09-19T10:00:00.000Z"
+  },
+  {
+    "id": "169fa5e1-0050-47ce-aba2-22849eb21cc6",
+    "text": "Shipped the on-call rotation tooling used by three engineering teams.",
+    "kind": "fact",
+    "status": "confirmed",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#senior-platform-engineer-northwind-labs",
+      "quote": "Shipped the on-call rotation tooling used by three engineering teams."
+    }
+  },
+  {
+    "id": "402fb692-149d-47a5-b549-0e8367328656",
+    "text": "Cut the Harbor internal deployment pipeline's release time from a day to under an hour.",
+    "kind": "metric",
+    "status": "candidate",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#software-engineer-harbor",
+      "quote": "Cut the Harbor internal deployment pipeline's release time from a day to under an hour."
+    },
+    "question": "Was this measured for a specific service, and is 'a day' the median or the worst case before the change?"
+  },
+  {
+    "id": "76d49b1e-05d0-4a0c-8630-e0f8f1d50594",
+    "text": "Maintainer of Ledgerkit, an open-source ledger reconciliation library.",
+    "kind": "credential",
+    "status": "confirmed",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#open-source",
+      "quote": "Maintainer of Ledgerkit, an open-source ledger reconciliation library."
+    }
+  },
+  {
+    "id": "dcdbd2e7-ffc8-4d6a-8bfe-0f71f3512801",
+    "text": "B.S. Computer Science, Fernwood University, 2019.",
+    "kind": "credential",
+    "status": "confirmed",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#education",
+      "quote": "B.S. Computer Science, Fernwood University, 2019"
+    }
+  },
+  {
+    "id": "4cf1f0ef-d207-422e-884c-51c59263df0d",
+    "text": "Started at Northwind Labs in 2022.",
+    "kind": "date",
+    "status": "confirmed",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#senior-platform-engineer-northwind-labs",
+      "quote": "Senior Platform Engineer — Northwind Labs (2022–Present)"
+    }
+  },
+  {
+    "id": "4e30f4f7-3196-4ad1-ae82-e08066897b29",
+    "text": "Senior Platform Engineer at Northwind Labs.",
+    "kind": "title",
+    "status": "confirmed",
+    "source": "resume",
+    "evidence": {
+      "kind": "passage",
+      "ref": "resume.md#senior-platform-engineer-northwind-labs",
+      "quote": "Senior Platform Engineer — Northwind Labs (2022–Present)"
+    }
+  }
+]

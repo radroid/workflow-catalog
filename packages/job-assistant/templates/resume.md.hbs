@@ -1,0 +1,38 @@
+{{!--
+  resume.md.hbs — renders one prepared resume (mvp-spec §3 F7). Every
+  substantive statement carries the claim ID(s) it cites, so the validator
+  (and the person) can check each line against career-profile.json.
+
+  Render context:
+    {
+      person: { name, contact },  // not sourced from CareerProfile — P01 defines
+                                   // no identity schema; the caller (P05) supplies
+                                   // this. See the P01 report's modelling assumptions.
+      job: { title, company },    // from JobSnapshot.structured — either may be absent
+      sections: [
+        {
+          heading: string,        // e.g. "Experience", "Skills", "Education"
+          statements: [
+            { text: string, claimIds: [string, ...] } // never empty — resume-drafting
+                                                        // writes nothing without a citation
+          ]
+        }
+      ]
+    }
+--}}
+# {{person.name}}
+
+{{person.contact}}
+
+{{#if job.title}}
+Prepared for: {{job.title}}{{#if job.company}} at {{job.company}}{{/if}}
+{{/if}}
+
+{{#each sections}}
+## {{this.heading}}
+
+{{#each this.statements}}
+- {{this.text}} {{#each this.claimIds}}`[{{this}}]`{{/each}}
+{{/each}}
+
+{{/each}}

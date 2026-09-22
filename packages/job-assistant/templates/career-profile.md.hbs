@@ -1,0 +1,86 @@
+{{!--
+  career-profile.md.hbs — renders CareerProfile (career-profile.schema.json)
+  into the file the person owns and edits (mvp-spec §3 F5). Section order
+  and headings below are exact, per the P01 packet spec.
+
+  Render context (a view-model derived from CareerProfile, not the raw
+  schema shape — the renderer, not this template, partitions `claims[]` by
+  status; see the P01 report for why "Presentation that can change" isn't a
+  literal ClaimStatus value):
+    {
+      profileVersion: number | null,   // approval.version, or null if never approved
+      approvedAt: string | null,       // approval.at (ISO-8601), or null
+      confirmedClaims:      [{ id, text, kind, source }],
+      presentationClaims:   [{ id, text, kind, source }], // confirmed claims whose wording is still adjustable
+      needsDecisionClaims:  [{ id, text, kind, question }], // status: candidate | disputed, with an open question
+      excludedClaims:       [{ id, text, kind }],
+      boundaries:  [{ id, text }],
+      preferences: [{ id, text }],
+    }
+
+  Every claim/boundary/preference line carries its `id` in brackets so
+  editing this Markdown and re-parsing it round-trips into career-profile.json
+  (F5 accept: "round-trip property test") — P03 owns the parser.
+--}}
+# Career profile
+
+{{#if profileVersion}}
+Approved as version {{profileVersion}} on {{approvedAt}}.
+{{else}}
+Not yet approved — generation stays locked until every source is accounted for, no claim is left needing a decision, and you approve this profile.
+{{/if}}
+
+## Confirmed claims
+
+{{#each confirmedClaims}}
+- {{this.text}} `[{{this.id}}]`
+{{else}}
+_None yet._
+{{/each}}
+
+## Presentation that can change
+
+Confirmed, but how it's worded is still open — edit the wording here; the underlying claim doesn't change.
+
+{{#each presentationClaims}}
+- {{this.text}} `[{{this.id}}]`
+{{else}}
+_None._
+{{/each}}
+
+## Needs a decision
+
+{{#each needsDecisionClaims}}
+- {{this.text}} `[{{this.id}}]`
+  - **Question:** {{this.question}}
+{{else}}
+_Nothing waiting on you._
+{{/each}}
+
+## Excluded
+
+Kept here, visibly, so you can see what was left out and why — never used in a generated document.
+
+{{#each excludedClaims}}
+- {{this.text}} `[{{this.id}}]`
+{{else}}
+_None excluded._
+{{/each}}
+
+## Boundaries
+
+Rules generation must never cross — an invented metric, a changed date, a changed title, a changed credential.
+
+{{#each boundaries}}
+- {{this.text}} `[{{this.id}}]`
+{{else}}
+_None recorded yet._
+{{/each}}
+
+## Preferences
+
+{{#each preferences}}
+- {{this.text}} `[{{this.id}}]`
+{{else}}
+_None recorded yet._
+{{/each}}

@@ -1,0 +1,19 @@
+{
+  "jobId": "87c7a759-0ab6-439f-b8a3-6d5d870f1768",
+  "revision": 1,
+  "url": "https://jobs.example/postings/harbor-platform-engineer",
+  "capturedAt": "2026-09-21T09:47:32.000Z",
+  "extractorVersion": "extractor@0.1.0",
+  "contentHash": "5b63b908bb68748acd42de30211b331cc7a72084a157de5cebf216aa2f4328ce",
+  "text": "Platform Engineer — Harbor\n\nHarbor is looking for a Platform Engineer to join our developer experience team, improving build and deploy tooling used by every engineer at Harbor.\n\nRequirements:\n- 3+ years of experience with CI/CD systems\n- Experience with deployment pipeline design\n- Comfortable working directly with internal customers\n\nHarbor is based in the Bay Area with a hybrid policy.",
+  "structured": {
+    "title": "Platform Engineer",
+    "company": "Harbor",
+    "location": "Bay Area (hybrid)",
+    "requirements": [
+      "3+ years of experience with CI/CD systems",
+      "Experience with deployment pipeline design",
+      "Comfortable working directly with internal customers"
+    ]
+  }
+}

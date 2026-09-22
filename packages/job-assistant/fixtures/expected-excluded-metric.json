@@ -1,0 +1,14 @@
+{
+  "id": "25e19ba4-189f-42a3-83c7-73da8c1545ff",
+  "text": "Grew signups 500% after launching the self-serve onboarding flow.",
+  "kind": "metric",
+  "status": "excluded",
+  "source": "resume",
+  "evidence": {
+    "kind": "passage",
+    "ref": "resume.md#senior-platform-engineer-northwind-labs",
+    "quote": "Grew signups 500% after launching the self-serve onboarding flow."
+  },
+  "question": "What's the 500% figure measured against, and over what time period?",
+  "answeredAt": "2026-09-19T10:00:00.000Z"
+}
