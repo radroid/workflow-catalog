@@ -23,7 +23,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // this test's module graph, while unstableCacheMock's own call args are
 // exactly what the real unstable_cache would have been asked to register.
 const { unstableCacheMock } = vi.hoisted(() => ({
-  unstableCacheMock: vi.fn((fn: (...args: never[]) => unknown) => fn),
+  // Typed with all three of the real unstable_cache's parameters (even
+  // though the implementation only uses the first) so this mock's own
+  // call-args type isn't narrowed to a 1-tuple — the wiring test below
+  // destructures keyParts and options out of `.mock.calls[0]` too.
+  unstableCacheMock: vi.fn((fn: (...args: never[]) => unknown, _keyParts?: string[], _options?: { revalidate?: number | false }) => fn),
 }));
 
 vi.mock("next/cache", () => ({
