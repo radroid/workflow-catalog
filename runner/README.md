@@ -363,6 +363,7 @@ commands.
 - `since` only narrows commands never delivered: they must be created at or
   after it. Omitting `since` is always safe, because the lease already keeps
   one command from being handed out twice at once.
+- `HEAD /commands` is checked like a GET but leases nothing.
 
 `open_application_group` runs inside eve's process (`eve start`), not the
 bridge's, so there is no `ctx` and no `ctx.commands` there. The tool

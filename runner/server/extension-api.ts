@@ -21,7 +21,7 @@ import { buildEventRegistry, type LoadedRouteModule } from "./route-modules.ts";
  * The extension-facing bridge (mvp-spec §5), exactly four routes:
  *
  *   POST /pair       { code } → { deviceId, token }
- *   GET  /commands   ?since=<ISO datetime>, device-scoped, leased
+ *   GET  /commands   ?since=<ISO datetime>, device-scoped, leased (HEAD leases nothing)
  *   POST /events     job_capture | browser_command_result | application_status_changed
  *   GET  /status     { version, workspaceId, budget, schedules }
  *
@@ -309,6 +309,11 @@ export function extensionApi(options: ExtensionApiOptions): Hono {
         );
       }
       since = new Date(parsed.data);
+    }
+    // Hono answers HEAD with this GET handler. HEAD must not lease: a lease
+    // would hold the commands back from the next GET for 5 minutes.
+    if (c.req.method === "HEAD") {
+      return new Response(null, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...auth.cors } });
     }
     const commands = await ctx.commands.leasePending(auth.device.deviceId, since ? { since } : {});
     return jsonResponse(200, commandsResponseSchema.parse({ commands }), auth.cors);

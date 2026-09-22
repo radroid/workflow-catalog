@@ -700,6 +700,26 @@ describe("bridge: GET /commands", () => {
     expect(all.commands.map((c) => c.commandId)).toEqual([early.commandId]);
   });
 
+  it("answers HEAD like GET but leases nothing", async () => {
+    const bridge = await makeBridge();
+    const { deviceId, token } = await pairDevice(bridge);
+    const ours = command(deviceId);
+    await bridge.ctx.commands.enqueue(ours);
+    const head = await bridge.request("/commands", { method: "HEAD", headers: authed(token) });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    const untouched = await bridge.ctx.commands.get(ours.commandId);
+    expect(untouched?.deliveries).toBe(0);
+    expect(untouched?.lease).toBeUndefined();
+    // HEAD is authenticated and validated like GET.
+    expect((await bridge.request("/commands", { method: "HEAD" })).status).toBe(401);
+    expect((await bridge.request("/commands?since=yesterday", { method: "HEAD", headers: authed(token) })).status).toBe(400);
+    // So the next GET delivers the command at once, not 5 minutes later.
+    const polled = commandsResponseSchema.parse(await (await bridge.request("/commands", { headers: authed(token) })).json());
+    expect(polled.commands.map((c) => c.commandId)).toEqual([ours.commandId]);
+    expect((await bridge.ctx.commands.get(ours.commandId))?.deliveries).toBe(1);
+  });
+
   it("validates since: 400 with path [since] for a bad value or an unknown parameter", async () => {
     const bridge = await makeBridge();
     const { token } = await pairDevice(bridge);
