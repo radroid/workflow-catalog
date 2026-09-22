@@ -260,8 +260,37 @@ The **status page** (`ui/status.html`) shows:
 - the paired browsers, with Revoke and "New pairing code"
 - the workspace
 
-There is no Settings page yet. Revocation (mvp-spec §7.5) lives here until
-one exists. Fonts are Geist, self-hosted (`ui/assets/fonts`, SIL OFL).
+Revocation (mvp-spec §7.5) lives here until a pairing section joins
+Settings. Fonts are Geist, self-hosted (`ui/assets/fonts`, SIL OFL).
+
+The **Runs page** (`ui/runs.html`, P08-A) lists every run this instance has
+made (`GET /api/runs`), newest first, bounded to 200 records / 14 days. Each
+entry shows the date and time, the kind as a readable label, an outcome pill
+with its reason, the duration, tokens in/out, the model, a catch-up badge,
+the item-cap note when a run stopped early ("stopped at the per-run cap
+(N); M jobs stay Saved"), the record's file path (`runs/<date>/<runId>.json`)
+so the person can open it, and a "View JSON" disclosure. A file that exists
+but fails to validate is skipped and counted, never crashes the list. Empty
+state: "No runs yet…".
+
+The **Settings page** (`ui/settings.html`) holds one `<section>` per concern,
+each with its own script, so later packets can add a section without
+touching another's. Today it has:
+
+- **Budget** (`ui/assets/settings-budget.js`, P08-A): the daily run limit
+  (1–50, default 10) and the per-run item cap (1–20, default 5) as bounded
+  number inputs, runs used today, the pause with its reason and a Resume
+  button, and Save. Backed by `GET`/`POST /api/runs/budget` and
+  `POST /api/runs/budget/resume`. A corrupt `runs/budget.json` is reported
+  paused with the reason "budget settings unreadable (runs/budget.json)"
+  rather than crashing; Resume rewrites it with the default limits, Save
+  rewrites it with the submitted limits and keeps whatever pause was already
+  in effect.
+
+Both pages share one persistent live region (`role="status"
+aria-live="polite"`) per page for every success and error, and use
+`aria-disabled` rather than the `disabled` attribute on a busy button so
+focus is never dropped mid-action.
 
 ## Workspace layout
 
@@ -269,7 +298,9 @@ The spec §5 layout, plus `.runner/` for the bridge's own state:
 
 ```text
 workspace.json    { workspaceId, workflowInstanceId, packageVersion, createdAt }   (WorkspaceManifest)
-sources/ jobs/ applications/ sessions/ runs/ outbox/ inbox/
+sources/ jobs/ applications/ sessions/ outbox/ inbox/
+runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
+runs/budget.json                        daily run limit, per-run item cap, and the pause (P08-A); survives restart
 .runner/devices/<deviceId>.json         paired devices (token hash, origin, expiry)
 .runner/pairing/<sha256>.json           outstanding pairing codes
 .runner/ui-login/<sha256>.json          outstanding UI sign-in links
@@ -352,7 +383,8 @@ change ships with a fixture that proves it (`eval-agent/`).
 | P05 | `agent/tools/prepare_application.ts`, `store/applications.ts`, `validate/`, `export/`, `ui/application.html`, preparation skills |
 | P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
-| P08 | `agent/schedules/`, `store/runs.ts`, `scheduler/`, `ui/runs.html`, the schedules and budget sections of `ui/settings.html`, and `server/routes/runs.ts` for `status()` (budget, schedules) and `start()` (catch-up). |
+| P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn` — free functions over `ctx`, not yet called from a real route), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
+| P08-B | `agent/schedules/`, `scheduler/` (catch-up + fallback trigger), the schedules section of `ui/settings.html`, and `server/routes/runs.ts`'s `status()` for `schedules` and `start()` (catch-up). Calls into `run-harness.ts`'s `withRun` to actually run something. |
 | P10 | `upgrade/`, the upgrade section of `ui/settings.html`, and an optional `server/routes/upgrade.ts`. |
 
 **Commands.** `GET /commands` is already complete over
