@@ -4,12 +4,12 @@
  * shared/url.ts refuses `file:` outright -- and nothing else in this repo
  * serves these fixtures over HTTP.
  *
- * Port 3107 is fixed, not ephemeral: it's the port CLAUDE.md's revision
- * checklist names for a post-hoc cleanup check
- * (`lsof -ti tcp:3107 -sTCP:LISTEN | xargs kill`). real-popup.spec.ts's
- * own afterAll always closes this server; that checklist step is a
- * deliberate second line of defense for a process that got killed before
- * its own cleanup ran, not the primary way this gets shut down.
+ * Listens on port 0, so the OS picks a free ephemeral port and this can
+ * never collide with another harness, reviewer, or dev server on the same
+ * machine (a fixed port did: a concurrent run already held it). The chosen
+ * origin is handed back on the handle; specs build every fixture URL from
+ * `handle.origin`, never from a constant. real-popup.spec.ts's afterAll
+ * always closes the server, and it binds 127.0.0.1 only.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -19,16 +19,15 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesRoot = path.resolve(here, "../fixtures");
 
-export const FIXTURE_SERVER_PORT = 3107;
-export const FIXTURE_SERVER_ORIGIN = `http://127.0.0.1:${FIXTURE_SERVER_PORT}`;
-
 export interface FixtureServerHandle {
+  /** e.g. `http://127.0.0.1:54321` -- the port the OS actually assigned. */
+  readonly origin: string;
   close(): Promise<void>;
 }
 
 export function startFixtureServer(): Promise<FixtureServerHandle> {
   const server: Server = createServer((request, response) => {
-    const name = path.basename(new URL(request.url ?? "/", FIXTURE_SERVER_ORIGIN).pathname);
+    const name = path.basename(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
     const file = path.join(fixturesRoot, name);
     if (!name.endsWith(".html") || !existsSync(file)) {
       response.writeHead(404);
@@ -41,8 +40,15 @@ export function startFixtureServer(): Promise<FixtureServerHandle> {
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(FIXTURE_SERVER_PORT, "127.0.0.1", () => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close();
+        reject(new Error(`fixture server: expected a TCP address, got ${String(address)}`));
+        return;
+      }
       resolve({
+        origin: `http://127.0.0.1:${address.port}`,
         close: () => new Promise<void>((res) => server.close(() => res())),
       });
     });

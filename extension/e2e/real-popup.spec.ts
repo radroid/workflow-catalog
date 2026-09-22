@@ -12,8 +12,10 @@
  * Chromium context/extension instance and ONE fixture server: launching
  * the extension is the slow part of every one of these tests, and
  * playwright.config.ts's `fullyParallel: true` would otherwise dispatch
- * them to separate workers, each wanting its own copy of the fixed-port
- * fixture server and stepping on the shared download directory.
+ * them to separate workers, each launching its own browser and fixture
+ * server. The fixture server listens on an OS-assigned port (see
+ * fixture-server.ts); every fixture URL below is built from
+ * `fixtureServer.origin`.
  */
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -22,7 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JobCapture } from "@workflow-catalog/contracts";
 import { expect, extensionDist, test } from "./fixtures";
-import { FIXTURE_SERVER_ORIGIN, startFixtureServer, type FixtureServerHandle } from "./fixture-server";
+import { startFixtureServer, type FixtureServerHandle } from "./fixture-server";
 import {
   getTabTargetId,
   launchWithExtensionDebugging,
@@ -154,7 +156,7 @@ test.afterAll(async () => {
 
 test("captures, previews, and saves a real job posting through a genuine popup gesture (json-ld fixture)", async () => {
   const page = await harness.context.newPage();
-  await page.goto(`${FIXTURE_SERVER_ORIGIN}/posting-json-ld.html`);
+  await page.goto(`${fixtureServer.origin}/posting-json-ld.html`);
 
   const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
   const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
@@ -164,7 +166,7 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     expect(state).toBe("preview");
 
     const kv = await readKvPairs(popup);
-    expect(kv.URL).toBe(`${FIXTURE_SERVER_ORIGIN}/posting-json-ld.html`);
+    expect(kv.URL).toBe(`${fixtureServer.origin}/posting-json-ld.html`);
     expect(kv.Title).toBe("Staff Software Engineer");
     expect(kv.Company).toBe("Fernwood");
     expect(kv.Location).toBe("Remote, US");
@@ -228,7 +230,7 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     const downloaded = await waitForDownload(downloadDir, "job-capture.json");
     const capture = JSON.parse(downloaded) as JobCapture;
     expect(capture.type).toBe("job_capture");
-    expect(capture.url).toBe(`${FIXTURE_SERVER_ORIGIN}/posting-json-ld.html`);
+    expect(capture.url).toBe(`${fixtureServer.origin}/posting-json-ld.html`);
     expect(capture.text).toContain("Staff Software Engineer");
     rmSync(path.join(downloadDir, "job-capture.json"));
   });
@@ -245,7 +247,7 @@ test("shows the hostile posting's injected instruction as plain visible text, an
     dialogs.push(dialog.message());
     void dialog.dismiss();
   });
-  await page.goto(`${FIXTURE_SERVER_ORIGIN}/posting-hostile.html`);
+  await page.goto(`${fixtureServer.origin}/posting-hostile.html`);
   const originalUrl = page.url();
 
   const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
@@ -297,7 +299,7 @@ test("shows the hostile posting's injected instruction as plain visible text, an
 
 test("captures a posting through the DOM-heuristics path (no JSON-LD) end to end", async () => {
   const page = await harness.context.newPage();
-  await page.goto(`${FIXTURE_SERVER_ORIGIN}/posting-dom-heuristics.html`);
+  await page.goto(`${fixtureServer.origin}/posting-dom-heuristics.html`);
 
   const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
   const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
@@ -316,7 +318,7 @@ test("captures a posting through the DOM-heuristics path (no JSON-LD) end to end
 
 test("refuses to save when the tab navigates between reading its URL and reading its text (SPA route change, review issue 2)", async () => {
   const page = await harness.context.newPage();
-  await page.goto(`${FIXTURE_SERVER_ORIGIN}/posting-spa-mismatch.html`);
+  await page.goto(`${fixtureServer.origin}/posting-spa-mismatch.html`);
 
   const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
 

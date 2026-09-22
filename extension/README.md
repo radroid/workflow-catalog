@@ -123,8 +123,11 @@ resolve the tab's "tab"-type CDP target, trigger the action, attach to
 the popup's own target via a raw non-flattened session, since neither
 Playwright's `context.pages()` nor its typed `CDPSession` cover a target
 reached only through `Target.sendMessageToTarget`). `e2e/fixture-server.ts`
-serves `extension/fixtures/*.html` over `http://127.0.0.1:3107` (capture
-needs an http(s) page; `file:` is refused outright — see `shared/url.ts`).
+serves `extension/fixtures/*.html` over `http://127.0.0.1:<port>`, where
+the port is whatever free one the OS assigns (it listens on port 0, so it
+never collides with another harness); the specs read the origin from the
+server handle (capture needs an http(s) page; `file:` is refused outright —
+see `shared/url.ts`).
 `real-popup.spec.ts` drives real capture → preview → Save → download
 against the json-ld, hostile, and DOM-heuristics fixtures (including
 proving the hostile posting's injected instruction is fully visible, not
