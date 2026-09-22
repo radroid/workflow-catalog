@@ -1,0 +1,4 @@
+# Generated at build time by scripts/copy-static-assets.mjs (theme.css and
+# the self-hosted Geist woff2 files) and copied verbatim into dist/ by
+# `vite build`. Never hand-authored; nothing here is a source file.
+public/

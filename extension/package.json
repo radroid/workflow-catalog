@@ -1,10 +1,23 @@
 {
   "name": "@workflow-catalog/extension",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "typecheck": "echo '@workflow-catalog/extension: placeholder, no TypeScript yet (P07 fills this in)'",
-    "test": "echo '@workflow-catalog/extension: placeholder, no tests yet (P07 fills this in)'",
-    "lint": "echo '@workflow-catalog/extension: placeholder, nothing to lint yet (P07 fills this in)'"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "lint": "eslint . --max-warnings 0",
+    "build": "node scripts/copy-static-assets.mjs && vite build && node scripts/scan-dist-for-eval.mjs"
+  },
+  "dependencies": {
+    "@workflow-catalog/contracts": "workspace:*",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/chrome": "0.3.0",
+    "geist": "1.7.2",
+    "happy-dom": "20.14.5"
   }
 }
