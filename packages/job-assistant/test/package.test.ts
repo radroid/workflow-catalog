@@ -53,6 +53,14 @@ describe("adapters/eve/README.md", () => {
     expect(content).toContain("approval: always()");
   });
 
+  // Revision 2, nit E: docs/spec/research/eve-runtime.md §2 gives the path
+  // as eve/tools/approval.
+  it("imports the approval helpers from eve/tools/approval, per eve-runtime.md §2", () => {
+    const content = readFileSync(path.join(pkgRoot, "adapters/eve/README.md"), "utf8");
+    expect(content).toContain('import { always } from "eve/tools/approval"');
+    expect(content).not.toContain('from "eve/approval"');
+  });
+
   it("documents open_application_group's tool input as task IDs only, never a URL", () => {
     const content = readFileSync(path.join(pkgRoot, "adapters/eve/README.md"), "utf8");
     expect(content).toContain("taskIds");

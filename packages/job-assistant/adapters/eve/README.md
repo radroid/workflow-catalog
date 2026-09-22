@@ -121,8 +121,9 @@ only one with a real, person-visible side effect — so it is the only one
 needing eve's approval gate, and needs the strictest setting:
 `approval: always()`, every single invocation, never `once()` or
 `auto()`. eve-runtime.md §2: `approval` accepts
-`always() | once() | never() | auto()`; omitted defaults to `never()` — an
-omission here would be a mistake, not a neutral default.
+`always() | once() | never() | auto()`, imported from `eve/tools/approval`;
+omitted defaults to `never()` — an omission here would be a mistake, not a
+neutral default.
 
 Its input is deliberately narrower than the wire envelope
 (`OpenApplicationGroupPayload`, `bridge-envelopes.ts`, which carries
@@ -138,7 +139,7 @@ schema a hostile string could occupy to become a URL.
 ```ts
 // extension/tools/open_application_group.ts (illustrative — P02 implements)
 import { defineTool } from "eve/tools";
-import { always } from "eve/approval"; // illustrative import path — P02 confirms against the pinned eve API
+import { always } from "eve/tools/approval"; // path per docs/spec/research/eve-runtime.md §2 (Tools); P02 confirms it against eve@0.63.0
 import { z } from "zod";
 import { uuidSchema } from "@workflow-catalog/contracts";
 
