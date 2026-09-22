@@ -67,13 +67,16 @@ describe("bridge: authentication", () => {
   it("answers a valid token from the wrong Origin with 403", async () => {
     const bridge = await makeBridge();
     const { token } = await pairDevice(bridge);
-    for (const origin of [OTHER_EXTENSION_ORIGIN, "https://jobs.example", "null", "http://127.0.0.1:4310"]) {
-      const response = await bridge.request("/status", { headers: authed(token, origin) });
-      expect(response.status, origin).toBe(403);
-      expect((await errorOf(response)).code).toBe("origin_not_allowed");
+    for (const path of ["/status", "/commands"]) {
+      for (const origin of [OTHER_EXTENSION_ORIGIN, "https://jobs.example", "null", "http://127.0.0.1:4310"]) {
+        const response = await bridge.request(path, { headers: authed(token, origin) });
+        expect(response.status, `${path} ${origin}`).toBe(403);
+        expect((await errorOf(response)).code).toBe("origin_not_allowed");
+      }
     }
-    const noOrigin = await bridge.request("/status", { headers: { authorization: `Bearer ${token}` } });
-    expect(noOrigin.status).toBe(403);
+    const post = await postEvent(bridge, token, jobCapture(), OTHER_EXTENSION_ORIGIN);
+    expect(post.status).toBe(403);
+    expect(await bridge.ctx.journal.list()).toHaveLength(0);
   });
 
   it("stores only the token's hash", async () => {
@@ -99,6 +102,72 @@ describe("bridge: authentication", () => {
     const { token } = await pairDevice(bridge);
     bridge.clock.advance(30 * 24 * 60 * MINUTE_MS + 1);
     expect((await bridge.request("/status", { headers: authed(token) })).status).toBe(401);
+  });
+});
+
+describe("bridge: Origin as Chrome sends it", () => {
+  // Recorded from Chromium 153 (an MV3 extension page, its service worker and
+  // an alarm-driven fetch): GETs carry no Origin; POSTs carry the extension's.
+  const chromeGet = (token?: string): Record<string, string> => ({
+    ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+    "sec-fetch-site": "none",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+  });
+
+  it("accepts GET /status and GET /commands with no Origin on a valid token", async () => {
+    const bridge = await makeBridge();
+    const { token } = await pairDevice(bridge);
+    const status = await bridge.request("/status", { headers: chromeGet(token) });
+    expect(status.status).toBe(200);
+    expect(statusResponseSchema.parse(await status.json()).workspaceId).toBe(bridge.workspace.manifest.workspaceId);
+    // No Origin, so no CORS headers: an extension with host permission for the bridge does not need them.
+    expect(status.headers.get("access-control-allow-origin")).toBeNull();
+    const commands = await bridge.request(`/commands?since=${encodeURIComponent("2026-09-22T09:00:00.000Z")}`, { headers: chromeGet(token) });
+    expect(commands.status).toBe(200);
+    expect(commandsResponseSchema.parse(await commands.json())).toEqual({ commands: [] });
+    expect((await bridge.request("/status", { method: "HEAD", headers: chromeGet(token) })).status).toBe(200);
+  });
+
+  it("answers a GET with no Origin and a missing, unknown or revoked token with 401", async () => {
+    const bridge = await makeBridge();
+    const { deviceId, token } = await pairDevice(bridge);
+    await bridge.ctx.devices.revoke(deviceId);
+    for (const path of ["/status", "/commands"]) {
+      const missing = await bridge.request(path, { headers: chromeGet() });
+      expect(missing.status, path).toBe(401);
+      expect((await errorOf(missing)).code).toBe("token_missing");
+      for (const bad of ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", token]) {
+        const response = await bridge.request(path, { headers: chromeGet(bad) });
+        expect(response.status, path).toBe(401);
+        expect((await errorOf(response)).code).toBe("token_invalid");
+      }
+    }
+  });
+
+  it("refuses a GET whose Origin is present but not the paired one with 403", async () => {
+    const bridge = await makeBridge();
+    const { token } = await pairDevice(bridge);
+    for (const path of ["/status", "/commands"]) {
+      const response = await bridge.request(path, { headers: { ...chromeGet(token), origin: OTHER_EXTENSION_ORIGIN } });
+      expect(response.status, path).toBe(403);
+      expect((await errorOf(response)).code).toBe("origin_not_allowed");
+    }
+  });
+
+  it("refuses a POST /events with no Origin, even on a valid token, with 403", async () => {
+    const bridge = await makeBridge();
+    const { token } = await pairDevice(bridge);
+    const response = await bridge.request("/events", {
+      method: "POST",
+      headers: { ...chromeGet(token), "content-type": "application/json" },
+      body: JSON.stringify(jobCapture()),
+    });
+    expect(response.status).toBe(403);
+    expect((await errorOf(response)).code).toBe("origin_required");
+    expect(await bridge.ctx.journal.list()).toHaveLength(0);
+    // The same event with the paired Origin, as Chrome sends a POST, goes through.
+    expect((await postEvent(bridge, token, jobCapture())).status).toBe(202);
   });
 });
 

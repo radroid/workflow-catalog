@@ -27,9 +27,15 @@ import { buildEventRegistry, type LoadedRouteModule } from "./route-modules.ts";
  *
  * Checks, in order (the first that fails answers):
  *   Host (app.ts) → route (404) → declared Content-Length over 256 KiB (413)
- *   → bearer token (401) → Origin equals the device's paired origin (403)
- *   → Content-Type application/json (415) → streamed body over 256 KiB (413)
- *   → JSON and zod contract (400, with every issue's path).
+ *   → bearer token (401) → Origin (403) → Content-Type application/json (415)
+ *   → streamed body over 256 KiB (413) → JSON and zod contract (400, with
+ *   every issue's path).
+ * The Origin rule follows what Chrome sends (Chromium 153, measured from an
+ * extension page, its service worker and an alarm-driven fetch): no Origin
+ * on an extension's GET, `Origin: chrome-extension://<id>` on its POST.
+ *   - GET or HEAD with no Origin: accepted on the device token alone.
+ *   - Any Origin that is present must be the device's paired origin.
+ *   - POST must carry the paired origin.
  * /pair has no token yet: its Origin must be a chrome-extension:// origin,
  * which becomes the device's origin.
  *
@@ -42,6 +48,8 @@ export const PAIR_FAILURE_WINDOW_MS = 10 * MINUTE_MS;
 const CORS_ALLOW_HEADERS = "authorization, content-type";
 const CORS_MAX_AGE_S = "600";
 const BEARER = /^Bearer ([A-Za-z0-9_-]{1,512})$/;
+/** Methods that only read: HEAD is answered by the GET routes. */
+const READ_METHODS = new Set(["GET", "HEAD"]);
 const DEFAULT_BUDGET: BudgetStatus = { dailyRunLimit: 0, runsUsedToday: 0, paused: false };
 
 export interface ExtensionApiOptions {
@@ -122,7 +130,14 @@ export function extensionApi(options: ExtensionApiOptions): Hono {
         response: errorResponse(401, "token_invalid", "This device token is not valid (unknown, revoked or expired). Pair the extension again.", challenge),
       };
     }
-    if (origin !== device.origin) {
+    if (origin === null) {
+      // Chrome sends no Origin on an extension's GET, so the token alone
+      // authenticates a read. Anything that changes state must say where it
+      // comes from.
+      if (!READ_METHODS.has(request.method)) {
+        return { ok: false, response: errorResponse(403, "origin_required", "Send this request with the Origin of the extension this device paired from.") };
+      }
+    } else if (origin !== device.origin) {
       return { ok: false, response: errorResponse(403, "origin_not_allowed", "This request's Origin is not the extension origin this device paired from.", cors) };
     }
     return { ok: true, device, cors };

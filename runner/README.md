@@ -161,8 +161,15 @@ Each request passes these checks in order, and the first failure answers:
 4. **Token.** It must be `Authorization: Bearer <device token>`, else
    **401** with `WWW-Authenticate: Bearer`. The bridge stores token hashes
    only. Tokens last 30 days.
-5. **Origin.** It must equal the `chrome-extension://…` origin the device
-   paired from, else **403**. A request with no `Origin` is refused.
+5. **Origin.** Chrome sends no `Origin` on an extension's GET (from its
+   pages, its service worker and alarm-driven fetches alike; measured on
+   Chromium 153), and sends `Origin: chrome-extension://<id>` on its POST.
+   So:
+   - A GET (or HEAD) with no `Origin` is accepted on the device token alone.
+   - An `Origin` that is present must equal the origin the device paired
+     from, else **403** `origin_not_allowed`.
+   - A POST must carry that origin, else **403** (`origin_required` when it
+     is missing).
 6. **Content type.** It must be `application/json`, else **415**.
 7. **Streamed size.** More than 256 KiB of body gets **413**, counted as it
    streams, whatever the declared length said.

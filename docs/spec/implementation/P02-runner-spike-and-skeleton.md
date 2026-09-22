@@ -133,7 +133,7 @@ PR #8 (`packet/P02` → `overnight/integration`). CI: green. The PR body has the
 
 **Assumptions**
 - Only the bridge redeems codes; one listener on 4310 means one bridge. The file claim is safe across processes too.
-- Chrome sends `Origin` on the extension service worker's GETs. P07-B must confirm this; the bridge refuses a missing `Origin`.
+- ~~Chrome sends `Origin` on the extension service worker's GETs.~~ Wrong (corrected in revision 1, per review): Chromium 153 sends no `Origin` on an extension's GETs and sends it on POSTs. The bridge now accepts a GET without `Origin` on the device token alone; any `Origin` present must be the paired one, and every POST must carry it.
 - ChatGPT access comes through the Codex sign-in.
 - `eve eval`'s ephemeral loopback port is acceptable. eve picks it, and it stops with the eval.
 
