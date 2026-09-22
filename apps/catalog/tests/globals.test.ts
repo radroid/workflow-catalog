@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -85,6 +85,51 @@ describe("catalog theme wiring", () => {
     expect(body).toMatch(/white-space:\s*pre-wrap/);
     expect(body).toMatch(/overflow-wrap:\s*anywhere/);
     expect(body).not.toMatch(/overflow-x:\s*auto/);
+  });
+
+  // Regression guard for a real bug found while screenshotting the template
+  // page: className="row wrap" was meant to invoke a new flex-wrap modifier,
+  // but CSS class selectors match by whole token, not by which rule a human
+  // meant — it ALSO matched the pre-existing .wrap page-wrapper class
+  // (max-width/margin/64px padding), injecting unwanted padding into every
+  // pill row. Renamed to .row.multiline; this pins both halves of the fix.
+  it("names the pill-row wrap modifier .row.multiline, not .row.wrap (which would collide with .wrap, the page wrapper)", () => {
+    const multilineMatch = /\.row\.multiline\s*{([^}]*)}/.exec(globalsCss);
+    expect(multilineMatch, "expected a .row.multiline rule").not.toBeNull();
+    expect(multilineMatch?.[1]).toMatch(/flex-wrap:\s*wrap/);
+    expect(globalsCss).not.toMatch(/\.row\.wrap\b/);
+  });
+
+  it("lets long pill text wrap onto multiple lines inside .row.multiline, instead of forcing horizontal overflow", () => {
+    // Every other .pill use (version numbers, admin's used/unused status) is
+    // a couple of short words, where nowrap is correct — it's what keeps
+    // e.g. "UNUSED" from breaking mid-word. The template page's source and
+    // connection pills carry long explanatory phrases; a single nowrap flex
+    // item can't wrap itself onto a new row, so it forced the page wider
+    // than the viewport at 390px. Scoped to .row.multiline .pill rather
+    // than loosening the base .pill rule everywhere.
+    const overrideMatch = /\.row\.multiline \.pill\s*{([^}]*)}/.exec(globalsCss);
+    expect(overrideMatch, "expected a .row.multiline .pill override rule").not.toBeNull();
+    expect(overrideMatch?.[1]).toMatch(/white-space:\s*normal/);
+  });
+
+  it("has no remaining className=\"row wrap\" usage in app/ (the renamed class is row multiline)", () => {
+    const appDir = path.join(here, "../app");
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (entry.isFile() && entry.name.endsWith(".tsx")) {
+          if (/className="row wrap"/.test(readFileSync(full, "utf8"))) {
+            offenders.push(full);
+          }
+        }
+      }
+    };
+    walk(appDir);
+    expect(offenders).toEqual([]);
   });
 });
 

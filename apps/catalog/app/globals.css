@@ -150,8 +150,12 @@ section + section {
 /* A row of pills (template page: required sources, connections) or buttons
    (download + checksum link) that must never force horizontal scroll at
    narrow viewports — same reasoning as pre.command-block's white-space:
-   pre-wrap fix in part A, applied to a flex row instead of text. */
-.row.wrap {
+   pre-wrap fix in part A, applied to a flex row instead of text.
+   Named ".multiline", not ".wrap": ".wrap" already exists (the 720px
+   page-wrapper, "padding: 64px 28px") and CSS class selectors match by
+   whole token, not by which rule a human meant — "row wrap" as a
+   className would ALSO match .wrap and silently inherit its padding. */
+.row.multiline {
   flex-wrap: wrap;
 }
 
@@ -270,6 +274,22 @@ input[type="password"]:focus {
   border: 1px solid var(--border);
   background: var(--muted);
   white-space: nowrap;
+}
+
+/* Every existing .pill use (version numbers, admin's used/unused status) is
+   a couple of short words — nowrap is correct there, it's what keeps e.g.
+   "UNUSED" from ever breaking mid-word. The template page's source and
+   connection pills carry much longer explanatory phrases (see
+   lib/template-labels.ts); at 390px a long one has no room to stay on one
+   line, and since a single flex item can't wrap onto a new row by itself,
+   nowrap forced the whole page wider than the viewport — scrollWidth
+   (597px) exceeded clientWidth (390px), the exact "scrollable region" axe
+   flags as serious that part A's command-block fix was about. Scoped to
+   .row.multiline (only where long-phrase pills live) rather than changing
+   .pill itself. */
+.row.multiline .pill {
+  white-space: normal;
+  text-align: left;
 }
 
 .pill.ok {

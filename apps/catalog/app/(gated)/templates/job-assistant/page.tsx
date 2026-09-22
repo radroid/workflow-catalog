@@ -35,7 +35,7 @@ export default async function TemplatePage() {
           <>
             <p className="tight">Checksum &mdash; SHA-256 of the release tarball itself</p>
             <p className="mono break-all">{releaseResult.release.checksum}</p>
-            <div className="row wrap">
+            <div className="row multiline">
               <a className="button primary" href={releaseResult.release.tarballUrl}>
                 Download {releaseResult.release.tarballName}
               </a>
@@ -55,7 +55,7 @@ export default async function TemplatePage() {
 
       <h3>Sources</h3>
       <p className="lede tight">Every one of these is accounted for during onboarding &mdash; provided, unavailable, or not applicable, never silently skipped.</p>
-      <div className="row wrap">
+      <div className="row multiline">
         {workflowManifest.requiredSources.map((source) => (
           <span className="pill" key={source}>
             {SOURCE_CATEGORY_LABELS[source]}
@@ -64,7 +64,7 @@ export default async function TemplatePage() {
       </div>
 
       <h3>Connections</h3>
-      <div className="row wrap">
+      <div className="row multiline">
         {workflowManifest.connections.map((connection) => (
           <span className="pill" key={connection}>
             {CONNECTION_LABELS[connection]}
