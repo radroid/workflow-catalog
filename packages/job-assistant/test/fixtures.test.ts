@@ -4,10 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { claimSchema, jobSnapshotSchema } from "@workflow-catalog/contracts";
+import { claimSchema, jobSnapshotSchema, type Claim } from "@workflow-catalog/contracts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.resolve(here, "../fixtures");
+const followUpSkillPath = path.resolve(here, "../skills/follow-up-questions/SKILL.md");
 
 /** Schema lookup for fixtures/index.json's non-"raw-text" values. Keys match the manifest's schema-name strings exactly. */
 const SCHEMA_BY_NAME: Record<string, z.ZodType> = {
@@ -132,6 +133,58 @@ describe("expected-excluded-metric.json", () => {
     expect(match).toBeDefined();
     expect(match?.status).toBe("excluded");
     expect(match?.kind).toBe("metric");
+  });
+});
+
+/**
+ * Revision 2, fix C. follow-up-questions/SKILL.md always asks about metric,
+ * title and date claims, and about any claim whose text uses one of its
+ * always-ask words. So a confirmed claim of that sort must carry the question
+ * it was asked and when it was answered. The kinds and the words are read
+ * from the skill itself, so the skill and this test cannot drift apart.
+ */
+describe("confirmed claims follow follow-up-questions' always-ask rule", () => {
+  const skill = readFileSync(followUpSkillPath, "utf8");
+  const alwaysAskKinds = [
+    ...skill.matchAll(/^- Every claim with `kind: "(\w+)"` gets a question, no exceptions/gm),
+  ].map((match) => match[1]!);
+  const wordList = skill.match(/Always-ask words: ((?:`[^`]+`(?:, )?)+)/)?.[1] ?? "";
+  const alwaysAskWords = [...wordList.matchAll(/`([^`]+)`/g)].map((match) => match[1]!);
+
+  /** The skill's matching rule: a whole word (or phrase), in any letter case. */
+  function usesAlwaysAskWord(text: string): boolean {
+    return alwaysAskWords.some((word) =>
+      new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text),
+    );
+  }
+
+  const claims = Object.entries(readManifest())
+    .filter(([, schemaName]) => schemaName === "claim" || schemaName === "claim[]")
+    .flatMap(([file]) => {
+      const data = readFixture(file);
+      return (Array.isArray(data) ? data : [data]) as Claim[];
+    });
+  const alwaysAskConfirmed = claims.filter(
+    (claim) => claim.status === "confirmed" && (alwaysAskKinds.includes(claim.kind) || usesAlwaysAskWord(claim.text)),
+  );
+
+  it("reads the always-ask kinds and words from the skill", () => {
+    expect(alwaysAskKinds).toEqual(expect.arrayContaining(["metric", "title", "date"]));
+    expect(alwaysAskWords).toEqual(expect.arrayContaining(["led", "founded", "the only", "fastest"]));
+  });
+
+  it("matches whole words in any case, so 'Led' counts and 'ledger' does not", () => {
+    expect(usesAlwaysAskWord("Led the payments infrastructure team")).toBe(true);
+    expect(usesAlwaysAskWord("Maintainer of Ledgerkit, an open-source ledger reconciliation library.")).toBe(false);
+  });
+
+  it("every confirmed metric, title or date claim, and every confirmed claim using an always-ask word, carries question and answeredAt", () => {
+    expect(alwaysAskConfirmed.some((claim) => usesAlwaysAskWord(claim.text))).toBe(true);
+    for (const claim of alwaysAskConfirmed) {
+      const label = `${claim.id} (${claim.kind}) "${claim.text}"`;
+      expect(claim.question, `${label} has no question`).toBeTruthy();
+      expect(claim.answeredAt, `${label} has no answeredAt`).toBeTruthy();
+    }
   });
 });
 

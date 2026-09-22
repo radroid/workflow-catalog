@@ -9,7 +9,9 @@
       "kind": "passage",
       "ref": "resume.md#senior-platform-engineer-northwind-labs",
       "quote": "Led the payments infrastructure team, redesigning the ledger service that powers Northwind Labs' billing."
-    }
+    },
+    "question": "What was your role on the payments infrastructure team: its manager, its technical lead, or something else?",
+    "answeredAt": "2026-09-19T10:02:00.000Z"
   },
   {
     "id": "25e19ba4-189f-42a3-83c7-73da8c1545ff",
