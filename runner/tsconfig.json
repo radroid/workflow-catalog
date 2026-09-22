@@ -2,6 +2,8 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    // The runner only ever runs on Node 24 (engines), which has all of ES2024.
+    "lib": ["ES2024"],
     "types": ["node", "eve/workflow-modules"],
     // Scripts, the bridge and route modules run on Node 24's built-in type
     // stripping (node --import ./lib/register-ts.mjs), so relative imports

@@ -16,8 +16,11 @@ import { chatgpt, openai } from "eve/models/openai";
  * string. eve treats an agent config with a direct-provider model as a
  * runtime entry that the server evaluates again at start, while a static
  * gateway string would be compiled into the build (eve docs,
- * reference/typescript-api.md "Authored module lifecycle"). That is what
- * keeps a model change to `.env.local` plus a restart, with no rebuild.
+ * reference/typescript-api.md "Authored module lifecycle"). Checked on
+ * 0.63.0: the model call uses the value read at start. The build still
+ * records the build-time model id as metadata (`/eve/v1/info`,
+ * .eve/agent-summary.json), so `npm run runner` rebuilds whenever the
+ * provider or model differs from the last build (cli/runner.ts build stamp).
  *
  * ChatGPT has no default slug on purpose: eve's default, gpt-5.6-luna-fast,
  * is rejected for ChatGPT accounts (docs/spec/research/eve-spike.md). Setup
