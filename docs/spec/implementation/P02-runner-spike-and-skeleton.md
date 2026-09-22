@@ -1,7 +1,7 @@
 # P02 · Runner spike and skeleton
 
-Status: open
-Assignee: none
+Status: claimed
+Assignee: iter-003 implementer (Opus)
 Blocked by: P01
 Owns: runner/ (eve project), packages/job-assistant/adapters/eve/
 Spec: §8 runner platform notes, §5 bridge, F3
