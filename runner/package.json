@@ -1,0 +1,10 @@
+{
+  "name": "@workflow-catalog/runner",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "echo '@workflow-catalog/runner: placeholder, no TypeScript yet (P02 fills this in)'",
+    "test": "echo '@workflow-catalog/runner: placeholder, no tests yet (P02 fills this in)'",
+    "lint": "echo '@workflow-catalog/runner: placeholder, nothing to lint yet (P02 fills this in)'"
+  }
+}
