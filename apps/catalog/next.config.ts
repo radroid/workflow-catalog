@@ -19,6 +19,18 @@ const nextConfig: NextConfig = {
   // Keeps the dev-mode route badge out of acceptance screenshots (see
   // CLAUDE.md's screenshot authorization and P09-catalog-site.md §5).
   devIndicators: false,
+  // Next 16's dev server only accepts the dev-only /_next/hmr WebSocket
+  // handshake (and other dev-only asset requests) from an "allowed" origin,
+  // and localhost is allowed by default — 127.0.0.1 is not, even though
+  // it's the same machine. Browsing via 127.0.0.1 instead of localhost is
+  // what a P09-B revision round root-caused as this app's "dev server never
+  // hydrates" symptom (mistakenly attributed to the sandbox network in the
+  // original part-B report — see apps/catalog/README.md's Local
+  // development section and that report's correction). Belt and suspenders
+  // with documenting "browse localhost": this covers any tooling that
+  // defaults to 127.0.0.1 (e.g. some browser-automation launchers) without
+  // relying on every future person reading the README first.
+  allowedDevOrigins: ["127.0.0.1"],
   // docs/learn lives outside apps/catalog (two levels above this project
   // root); /learn and /learn/[...slug] read it with fs at request time, so
   // the production build's file trace needs to be told about it explicitly
