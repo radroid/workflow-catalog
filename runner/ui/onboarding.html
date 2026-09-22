@@ -12,39 +12,51 @@
   <body>
     <!-- runner:nav -->
     <main class="page">
-      <h1>Onboarding</h1>
-      <p class="lede">Account for every career source, extract claims from what you provide, and decide each one. Nothing is invented — a claim without your evidence gets a question, never a guess.</p>
-      <p id="last-action" class="small" role="status" hidden></p>
+      <h1 id="page-title" tabindex="-1">Onboarding</h1>
+      <p class="lede">Account for every career source, extract claims from what you provide, and decide each one. Nothing is invented: a claim without your evidence gets a question, never a guess.</p>
+
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div>
+      <p id="page-error" class="error" role="alert" hidden></p>
+
+      <section class="card problem" id="markdown-problem" aria-labelledby="markdown-problem-title" hidden>
+        <h2 id="markdown-problem-title">career-profile.md has an edit the runner can't read</h2>
+        <p id="markdown-problem-text"></p>
+        <p class="muted small">Until it is fixed, nothing can be saved. Fix the file in your editor and reload this page, or discard your edits: the file is rewritten from your profile and your edits to it are lost.</p>
+        <button class="button" type="button" id="markdown-discard">Discard my edits to career-profile.md</button>
+      </section>
+
+      <section class="card withdrawn" id="withdrawal" aria-labelledby="withdrawal-title" hidden>
+        <h2 id="withdrawal-title"></h2>
+        <div id="withdrawal-body"></div>
+      </section>
 
       <section class="card" aria-labelledby="readiness-title">
         <div class="card-head">
           <h2 id="readiness-title">Readiness</h2>
-          <button class="button" type="button" id="approve-button" aria-disabled="true">Approve career profile</button>
+          <button class="button" type="button" id="approve-button" aria-disabled="true" aria-describedby="readiness-lines approve-help">Approve career profile</button>
         </div>
-        <div class="readiness-lines" id="readiness-reasons"></div>
-        <p id="approve-result" class="small" tabindex="-1" hidden></p>
+        <ul class="readiness-lines" id="readiness-lines"></ul>
+        <p class="muted small" id="approve-help"></p>
+        <p class="notice decision small" id="revision-hint" hidden></p>
       </section>
 
       <section class="card" aria-labelledby="sources-title">
         <h2 id="sources-title">Sources</h2>
-        <p class="muted small">Mark each source provided (and paste, type, or upload a .txt/.md file with what you have), unavailable, or not applicable — with a reason if you have one. All seven need an answer before the profile can be approved.</p>
+        <p class="muted small">Mark each source provided, unavailable, or not applicable. For a provided source, paste its text or upload a .txt or .md file, then extract claims. For the other two, you can keep a reason. All seven need an answer before the profile can be approved.</p>
         <div id="sources"></div>
       </section>
 
       <section class="card" aria-labelledby="claims-title">
-        <h2 id="claims-title">Claims</h2>
-        <p class="muted small">Every claim starts as a candidate. A metric, title, date, superlative, role, or scope claim always gets a question before it can be confirmed.</p>
+        <h2 id="claims-title" tabindex="-1">Claims</h2>
+        <p class="muted small">Every claim starts as a candidate. A metric, title, date, superlative, role or scope claim always gets a question before it can be confirmed.</p>
         <div id="claims"></div>
       </section>
 
       <section class="card" aria-labelledby="statements-title">
-        <h2 id="statements-title">Preferences, boundaries &amp; presentation</h2>
-        <p class="muted small">Boundaries are rules generation must never cross. Preferences and presentation notes shape tone and wording — never a new fact. See the full current list, and edit existing text, on the <a href="/ui/profile">Profile</a> page.</p>
+        <h2 id="statements-title">Preferences, boundaries and presentation</h2>
+        <p class="muted small">Boundaries are rules generation must never cross. Preferences and presentation notes shape tone and wording, never a new fact. Edit the wording of existing ones on the <a href="/ui/profile">Profile</a> page.</p>
         <div id="statements"></div>
       </section>
-
-      <p id="page-error" class="error" role="alert" hidden></p>
-      <div aria-live="polite" class="visually-hidden" id="live-region"></div>
     </main>
   </body>
 </html>

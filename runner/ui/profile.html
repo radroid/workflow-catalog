@@ -12,34 +12,46 @@
   <body>
     <!-- runner:nav -->
     <main class="page">
-      <h1>Career profile</h1>
-      <p class="lede">The document that gets used to draft everything else. Confirmed claims only, and only after you approve it — an edit to an approved fact proposes a revision instead of changing it outright.</p>
-      <p id="last-action" class="small" role="status" hidden></p>
+      <h1 id="page-title" tabindex="-1">Career profile</h1>
+      <p class="lede">The document everything else is drafted from: confirmed claims only, and only once you approve it. After that, an edit proposes a revision instead of changing an approved fact outright.</p>
+
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div>
+      <p id="page-error" class="error" role="alert" hidden></p>
+
+      <section class="card problem" id="markdown-problem" aria-labelledby="markdown-problem-title" hidden>
+        <h2 id="markdown-problem-title">career-profile.md has an edit the runner can't read</h2>
+        <p id="markdown-problem-text"></p>
+        <p class="muted small">Until it is fixed, nothing can be saved. Fix the file in your editor and reload this page, or discard your edits: the file is rewritten from your profile and your edits to it are lost.</p>
+        <button class="button" type="button" id="markdown-discard">Discard my edits to career-profile.md</button>
+      </section>
+
+      <section class="card withdrawn" id="withdrawal" aria-labelledby="withdrawal-title" hidden>
+        <h2 id="withdrawal-title"></h2>
+        <div id="withdrawal-body"></div>
+      </section>
 
       <section class="card" aria-labelledby="status-title">
         <h2 id="status-title">Status</h2>
-        <p id="status-summary" class="muted"></p>
+        <p id="status-summary"></p>
       </section>
 
-      <section class="card" aria-labelledby="revisions-title" id="revisions-section" hidden>
-        <h2 id="revisions-title">Pending revisions</h2>
-        <p class="muted small">The current version stays in force until you accept a revision. Documents already prepared keep saying which version they used.</p>
+      <section class="card" aria-labelledby="revisions-title" id="revisions-section">
+        <h2 id="revisions-title" tabindex="-1">Pending revisions</h2>
+        <p class="muted small">An edit to an approved profile waits here. The current version stays in force until you accept it; documents already prepared keep saying which version they used.</p>
         <div id="revisions"></div>
       </section>
 
       <section class="card" aria-labelledby="markdown-title">
         <h2 id="markdown-title">career-profile.md</h2>
-        <p class="muted small">Every bullet ends with an id marker like <code>`[3f29a9d4-8b7e-4c1a-9e2f-6b8f1a2c3d4e]`</code> — edit the text before it and save; the marker itself must stay so your edit finds the right claim. Everything else (adding, removing, or moving a bullet) is not round-tripped: use the buttons on the <a href="/ui/onboarding">Onboarding</a> page for that.</p>
-        <label for="markdown-editor" class="visually-hidden">career-profile.md contents</label>
-        <textarea id="markdown-editor" class="markdown-editor" spellcheck="false"></textarea>
+        <p class="muted small" id="markdown-help">Each line ends with a marker in backticks. Edit the words before a marker, then save. Keep every marker exactly as it is: a line can't be added, removed or moved by editing the file, so use the <a href="/ui/onboarding">Onboarding</a> page for that.</p>
+        <label for="markdown-editor">The file's text</label>
+        <textarea id="markdown-editor" class="markdown-editor" spellcheck="false" aria-describedby="markdown-help"></textarea>
+        <p id="markdown-editor-error" class="field-error" hidden></p>
         <div class="markdown-actions">
-          <button class="button" type="button" id="save-markdown" aria-disabled="true">Save edits</button>
-          <p id="markdown-result" class="small" tabindex="-1" hidden></p>
+          <button class="button" type="button" id="save-markdown">Save edits</button>
+          <button class="button secondary" type="button" id="drop-markdown" hidden>Drop my unsaved changes</button>
         </div>
       </section>
-
-      <p id="page-error" class="error" role="alert" hidden></p>
-      <div aria-live="polite" class="visually-hidden" id="live-region"></div>
     </main>
   </body>
 </html>

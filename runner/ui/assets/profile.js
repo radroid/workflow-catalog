@@ -1,235 +1,319 @@
-/* global document, HTMLElement */
-// The profile page: approval status, pending revisions, and career-profile.md's
-// editable, round-tripping text (store/profile-markdown.ts renders and
-// parses it; this page is just a thin client over server/routes/onboarding.ts).
+/* global document, HTMLElement, HTMLTextAreaElement, ResizeObserver, requestAnimationFrame */
+// The Profile page (P03): approval status, pending revisions, and
+// career-profile.md's editable text. store/profile-markdown.ts renders and
+// reads the file; this page is a thin client over server/routes/onboarding.ts,
+// which also decodes every revision record for it (pendingRevisions,
+// withdrawal), so nothing here parses a stored summary.
 //
-// P03 revision 1 (UI critic C1, C2, C6, polish): this file previously had no
-// announce()/live-region usage at all, no stable ids to restore focus by
-// after a reload() rebuild, and a "Saved. N claim(s)" message that did not
-// say whether an edit to an already-approved fact had actually been applied
-// or only proposed as a revision. See onboarding.js's header comment for the
-// shared C1/C2 design (stable ids + captureFocus/restoreFocus, a single
-// announce() outcome channel, aria-disabled + a busy guard instead of the
-// disabled attribute) — mirrored here rather than shared, since this page
-// cannot import onboarding.js and both are plain browser ES modules with no
-// shared non-runner.css module to put it in.
+// P03 revision 2 (UI critic round 2, D9, D11, D12): one live region (the
+// sticky "Last action" line); focus moves to the next revision's Accept, else
+// the revisions heading, after a decision; Accept and Reject are never offered
+// while the profile is unapproved; a withdrawn approval is explained; the
+// editor keeps unsaved text across refreshes and sends the hash of the text it
+// loaded, so a stale copy is refused rather than saved over a newer file.
+// The helpers shared with onboarding.js are repeated here: both are plain
+// browser modules and a shared asset would sit outside this packet's Owns.
 import { el, formatTime, getJson, postJson } from "./runner.js";
 
 const $ = (id) => document.getElementById(id);
 
-const CLAIM_EDIT_PREFIX = "claim-edit:";
-const STATEMENT_EDIT_PREFIX = "statement-edit:";
+const STATEMENT_LABEL = { boundary: "boundary", preference: "preference", presentation: "presentation note" };
 
-/** Mirrors store/profile-reducer.ts's decodeClaimEditSummary: this page cannot import that server module, so the same small, documented format is read here too. */
-function decodeClaimEditSummary(summary) {
-  if (!summary.startsWith(CLAIM_EDIT_PREFIX)) return undefined;
-  const rest = summary.slice(CLAIM_EDIT_PREFIX.length);
-  const newline = rest.indexOf("\n");
-  if (newline === -1) return undefined;
-  const claimId = rest.slice(0, newline);
-  const text = rest.slice(newline + 1);
-  if (!claimId || !text) return undefined;
-  return { claimId, text };
+let view = null; // the last GET /api/onboarding
+let loadedMarkdown = null; // the file text the editor was last filled with
+let baseHash = null; // its hash, sent with a save (D9)
+const busy = new Set();
+
+function quote(text, max = 60) {
+  const line = text.replace(/\s+/g, " ").trim();
+  return `“${line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line}”`;
 }
 
-/**
- * Mirrors store/profile-reducer.ts's decodeStatementEditSummary (P03
- * revision 1, C6). Before this existed, a proposed boundary/preference/
- * presentation edit fell through renderRevisions' "else" branch and showed
- * the raw encoded summary verbatim (e.g. "statement-edit:boundary\n<uuid>\n...")
- * — exactly the kind of internal value a person reading this page should
- * never have to see.
- */
-function decodeStatementEditSummary(summary) {
-  if (!summary.startsWith(STATEMENT_EDIT_PREFIX)) return undefined;
-  const rest = summary.slice(STATEMENT_EDIT_PREFIX.length);
-  const firstNewline = rest.indexOf("\n");
-  if (firstNewline === -1) return undefined;
-  const kind = rest.slice(0, firstNewline);
-  if (kind !== "boundary" && kind !== "preference" && kind !== "presentation") return undefined;
-  const rest2 = rest.slice(firstNewline + 1);
-  const secondNewline = rest2.indexOf("\n");
-  if (secondNewline === -1) return undefined;
-  const statementId = rest2.slice(0, secondNewline);
-  const text = rest2.slice(secondNewline + 1);
-  if (!statementId || !text) return undefined;
-  return { kind, statementId, text };
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
-const STATEMENT_KIND_LABELS = { boundary: "Boundary", preference: "Preference", presentation: "Presentation note" };
+// ---------------------------------------------------------------------------
+// Feedback (D12)
+// ---------------------------------------------------------------------------
 
-/** Mirrors store/profile-types.ts's statementField — see that file's own doc comment; the browser cannot import it. */
-function statementField(kind) {
-  return kind === "boundary" ? "boundaries" : kind === "preference" ? "preferences" : "presentation";
+const TAGS = { done: "Last action", refused: "Refused", working: "Working" };
+
+function lastAction(message, tone = "done") {
+  const node = $("last-action");
+  const tag = node.querySelector(".tag");
+  const text = node.querySelector(".text");
+  const apply = () => {
+    node.className = `last-action ${tone}`;
+    tag.textContent = TAGS[tone];
+    text.textContent = message;
+  };
+  if (text.textContent === message && tag.textContent === TAGS[tone]) {
+    text.textContent = "";
+    requestAnimationFrame(apply);
+  } else {
+    apply();
+  }
 }
 
-let state = null;
-
-/** C2: every outcome (success or failure) goes through this — the polite live region, and a persistent visible line reload()'s rebuild does not discard. */
-function announce(message, isError = false) {
-  $("live-region").textContent = message;
-  const last = $("last-action");
-  last.hidden = false;
-  last.className = isError ? "small error" : "small";
-  last.textContent = message;
+function trackLastActionHeight() {
+  const node = $("last-action");
+  const update = () => document.documentElement.style.setProperty("--last-action-offset", `${Math.ceil(node.getBoundingClientRect().height) + 16}px`);
+  new ResizeObserver(update).observe(node);
+  update();
 }
 
-function showError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  const node = $("page-error");
-  node.textContent = message;
-  node.hidden = false;
-  announce(message, true);
+function setEditorError(message) {
+  const editor = $("markdown-editor");
+  const node = $("markdown-editor-error");
+  node.hidden = !message;
+  node.textContent = message ?? "";
+  if (message) {
+    editor.setAttribute("aria-invalid", "true");
+    editor.setAttribute("aria-describedby", "markdown-help markdown-editor-error");
+  } else {
+    editor.removeAttribute("aria-invalid");
+    editor.setAttribute("aria-describedby", "markdown-help");
+  }
 }
 
-function clearError() {
-  $("page-error").hidden = true;
+// ---------------------------------------------------------------------------
+// Actions and focus
+// ---------------------------------------------------------------------------
+
+function actionButton(id, text, { secondary = false, attrs = {} } = {}, work) {
+  const button = el("button", { className: secondary ? "button secondary" : "button", text, attrs: { type: "button", id, ...attrs } });
+  button.setAttribute("aria-disabled", String(busy.has(id)));
+  if (work) button.addEventListener("click", () => run(id, work));
+  return button;
 }
 
-/** C1: aria-disabled (not the disabled attribute) so an in-flight button never drops out of the tab order — see onboarding.css's [aria-disabled="true"] rule (mirrored in profile.css) for why. */
-function setBusy(button, busy) {
-  button.setAttribute("aria-disabled", busy ? "true" : "false");
+function setBusy(id, on) {
+  $(id)?.setAttribute("aria-disabled", on ? "true" : "false");
 }
 
-function isBusy(button) {
-  return button.getAttribute("aria-disabled") === "true";
+async function run(id, work) {
+  if (busy.has(id)) return;
+  busy.add(id);
+  setBusy(id, true);
+  try {
+    await work();
+  } catch (error) {
+    lastAction(messageOf(error), "refused");
+    await refresh(id).catch(() => render(id));
+  } finally {
+    busy.delete(id);
+    setBusy(id, false);
+  }
 }
 
 function captureFocus() {
   const active = document.activeElement;
-  if (!(active instanceof HTMLElement) || active === document.body) return null;
-  const scope = active.closest("[id^='revision-']");
-  return { id: active.id || null, scopeId: scope && scope !== active ? scope.id : null };
+  if (!(active instanceof HTMLElement) || !active.id) return null;
+  return { id: active.id, selection: active instanceof HTMLTextAreaElement ? [active.selectionStart, active.selectionEnd] : null };
 }
 
-function restoreFocus(saved) {
-  if (!saved) return;
-  const target = (saved.id && document.getElementById(saved.id)) || (saved.scopeId && document.getElementById(saved.scopeId));
-  if (target instanceof HTMLElement) target.focus();
+function restoreFocus(plan, saved) {
+  const planned = typeof plan === "function" ? plan() : plan;
+  const target = (planned && $(planned)) || (saved && $(saved.id));
+  if (!(target instanceof HTMLElement)) return;
+  if (document.activeElement !== target) target.focus();
+  if (saved?.selection && target.id === saved.id && typeof target.setSelectionRange === "function") target.setSelectionRange(...saved.selection);
 }
 
-function shortId(id) {
-  return id.slice(0, 8);
+// ---------------------------------------------------------------------------
+// Load and render
+// ---------------------------------------------------------------------------
+
+async function refresh(focusPlan) {
+  view = await getJson("/api/onboarding");
+  render(focusPlan);
 }
 
-async function reload() {
+function render(focusPlan) {
+  if (!view) return;
   const saved = captureFocus();
-  state = await getJson("/api/onboarding");
+  renderMarkdownProblem();
+  renderWithdrawal();
   renderStatus();
   renderRevisions();
-  $("markdown-editor").value = state.markdown;
-  $("save-markdown").setAttribute("aria-disabled", "false");
-  restoreFocus(saved);
+  renderEditor();
+  restoreFocus(focusPlan, saved);
+}
+
+const UNREADABLE_PREFIX = "career-profile.md has an edit the runner can't read. ";
+
+function renderMarkdownProblem() {
+  const problem = view.markdownError;
+  $("markdown-problem").hidden = !problem;
+  $("markdown-problem-text").textContent = problem ? problem.replace(UNREADABLE_PREFIX, "") : "";
+}
+
+function withdrawalCause(withdrawal) {
+  const cause = withdrawal.cause;
+  if (!cause) return "the profile changed";
+  if (cause.kind === "statement") return `a new ${STATEMENT_LABEL[cause.statementKind]} ${quote(cause.statementText)} was added`;
+  const change = { disputed: "got an open question", confirmed: "was confirmed", answered: "was answered", reopened: "changed and needs your answer" }[cause.change];
+  return `the claim ${quote(cause.claimText)} ${change}`;
+}
+
+/** D11: which version, what changed, which revision was applied, and what to do next. */
+function renderWithdrawal() {
+  const withdrawal = view.withdrawal;
+  $("withdrawal").hidden = !withdrawal;
+  if (!withdrawal) return;
+  $("withdrawal-title").textContent = `Approval of version ${withdrawal.version} was withdrawn`;
+  const parts = [el("p", { text: `On ${formatTime(withdrawal.at)}, ${withdrawalCause(withdrawal)}, so version ${withdrawal.version} is no longer in force and generation is locked.` })];
+  if (withdrawal.applied.length > 0) {
+    parts.push(
+      el("p", { text: withdrawal.applied.length === 1 ? "Your proposed revision was applied to the draft, so it isn't lost:" : "Your proposed revisions were applied to the draft, so they aren't lost:" }),
+      el("ul", { className: "applied-list" }, ...withdrawal.applied.map((item) => el("li", { text: `To the ${item.target === "claim" ? "claim" : STATEMENT_LABEL[item.target]}: ${quote(item.text, 90)}` }))),
+    );
+  }
+  const open = view.readiness.pendingClaims.length > 0;
+  parts.push(
+    el(
+      "p",
+      { className: "withdrawal-next" },
+      document.createTextNode(open ? "Answer the open question on the " : "Review the change on the "),
+      el("a", { text: "Onboarding page", attrs: { href: "/ui/onboarding" } }),
+      document.createTextNode(", then approve again."),
+    ),
+  );
+  $("withdrawal-body").replaceChildren(...parts);
 }
 
 function renderStatus() {
   const node = $("status-summary");
-  node.textContent = state.approval
-    ? `Approved as version ${state.approval.version} on ${formatTime(state.approval.at)}.`
-    : "Not yet approved — generation stays locked until every source is accounted for, no claim is left needing a decision, and you approve this profile on the Onboarding page.";
+  if (view.approval) {
+    node.replaceChildren(`Approved as version ${view.approval.version} on ${formatTime(view.approval.at)}. Generation is unlocked.`);
+  } else if (view.withdrawal) {
+    node.replaceChildren(`Not approved: approval of version ${view.withdrawal.version} was withdrawn, as explained above. Generation is locked.`);
+  } else {
+    node.replaceChildren(
+      "Not approved yet. Generation stays locked until every source is accounted for, every claim is decided, and you approve the profile on the ",
+      el("a", { text: "Onboarding page", attrs: { href: "/ui/onboarding" } }),
+      ".",
+    );
+  }
 }
+
+// ---------------------------------------------------------------------------
+// Pending revisions (issue 8, D11)
+// ---------------------------------------------------------------------------
 
 function renderRevisions() {
-  const section = $("revisions-section");
+  const pending = view.pendingRevisions ?? [];
   const container = $("revisions");
-  container.replaceChildren();
-  const pending = state.revisions.filter((revision) => revision.status === "proposed");
-  section.hidden = pending.length === 0;
-  if (pending.length === 0) return;
-
-  for (const revision of pending) {
-    const decodedClaim = decodeClaimEditSummary(revision.summary);
-    const decodedStatement = decodedClaim ? undefined : decodeStatementEditSummary(revision.summary);
-    const claim = decodedClaim ? state.claims.find((c) => c.id === decodedClaim.claimId) : undefined;
-    const statement = decodedStatement ? state[statementField(decodedStatement.kind)].find((s) => s.id === decodedStatement.statementId) : undefined;
-    const card = el("div", { className: "revision", attrs: { id: `revision-${revision.id}`, tabindex: "-1" } });
-
-    if (decodedClaim && claim) {
-      card.append(
-        el(
-          "p",
-          { className: "revision-diff" },
-          el("span", { className: "old", text: claim.text }),
-          document.createTextNode(" → "),
-          el("span", { className: "new", text: decodedClaim.text }),
-        ),
-      );
-      card.append(el("p", { className: "revision-meta", text: `Proposed ${formatTime(revision.proposedAt)} · claim ${shortId(decodedClaim.claimId)}` }));
-    } else if (decodedStatement && statement) {
-      card.append(
-        el(
-          "p",
-          { className: "revision-diff" },
-          el("span", { className: "muted small", text: `${STATEMENT_KIND_LABELS[decodedStatement.kind]}: ` }),
-          el("span", { className: "old", text: statement.text }),
-          document.createTextNode(" → "),
-          el("span", { className: "new", text: decodedStatement.text }),
-        ),
-      );
-      card.append(el("p", { className: "revision-meta", text: `Proposed ${formatTime(revision.proposedAt)} · ${STATEMENT_KIND_LABELS[decodedStatement.kind].toLowerCase()} ${shortId(decodedStatement.statementId)}` }));
-    } else {
-      // Last resort only (an id this page's own state no longer has a
-      // matching claim/statement for) — never the routine path.
-      card.append(el("p", { className: "revision-diff", text: "A change was proposed to something no longer in the current profile." }));
-      card.append(el("p", { className: "revision-meta", text: `Proposed ${formatTime(revision.proposedAt)}` }));
-    }
-
-    const accept = el("button", { className: "button", text: "Accept", attrs: { type: "button", id: `revision-accept-${revision.id}` } });
-    const reject = el("button", { className: "button secondary", text: "Reject", attrs: { type: "button", id: `revision-reject-${revision.id}` } });
-    const decide = async (action) => {
-      if (isBusy(accept) || isBusy(reject)) return;
-      clearError();
-      setBusy(accept, true);
-      setBusy(reject, true);
-      try {
-        const outcome = await postJson(`/api/onboarding/revisions/${revision.id}/${action}`, {});
-        announce(outcome.message, !outcome.ok);
-        await reload();
-      } catch (error) {
-        showError(error);
-        setBusy(accept, false);
-        setBusy(reject, false);
-      }
-    };
-    accept.addEventListener("click", () => decide("accept"));
-    reject.addEventListener("click", () => decide("reject"));
-    card.append(el("div", { className: "revision-actions" }, accept, reject));
-    container.append(card);
+  if (pending.length === 0) {
+    container.replaceChildren(
+      el("p", { className: "empty", text: view.approval ? "No pending revisions." : "No pending revisions. Until the profile is approved, an edit to the file applies directly." }),
+    );
+    return;
   }
+  container.replaceChildren(el("ul", { className: "revision-list" }, ...pending.map(revisionCard)));
 }
 
-$("save-markdown").addEventListener("click", async () => {
-  const button = $("save-markdown");
-  if (isBusy(button)) return;
-  clearError();
-  const result = $("markdown-result");
-  // Polish: whether this save applies directly or only proposes a revision
-  // depends on approval *before* the request (once approved, every edit
-  // through this route becomes a revision — store/profile-markdown.ts's
-  // header comment). Captured now, since `state` is about to be replaced by
-  // reload() regardless of which branch this turns out to be.
-  const wasApproved = Boolean(state.approval);
-  setBusy(button, true);
-  result.hidden = false;
-  result.className = "small";
-  result.textContent = "Saving…";
-  try {
-    const outcome = await postJson("/api/onboarding/markdown", { markdown: $("markdown-editor").value });
-    const message = wasApproved
-      ? "Saved. Changes to already-approved facts were proposed as revisions above — accept them to apply. Any not-yet-approved sections were saved directly."
-      : `Saved. ${outcome.claims.length} claim(s) in the profile.`;
-    result.textContent = message;
-    announce(message);
-    await reload();
-    result.focus?.();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    result.className = "small error";
-    result.textContent = message;
-    announce(message, true);
-  } finally {
-    setBusy(button, false);
+function revisionCard(revision) {
+  const what = revision.target === "claim" ? "claim" : STATEMENT_LABEL[revision.target];
+  const card = el(
+    "li",
+    { className: "revision", attrs: { id: `revision-card-${revision.id}`, tabindex: "-1" } },
+    el("p", { className: "revision-meta", text: `To the ${what}, proposed ${formatTime(revision.proposedAt)}` }),
+    el("p", { className: "revision-line" }, el("span", { className: "revision-label", text: "Now: " }), el("span", { className: "old", text: revision.before })),
+    el("p", { className: "revision-line" }, el("span", { className: "revision-label", text: "Proposed: " }), el("span", { className: "new", text: revision.after })),
+  );
+  if (view.approval) {
+    const name = `the revision to the ${what} ${quote(revision.before, 50)}`;
+    card.append(
+      el(
+        "div",
+        { className: "revision-actions" },
+        actionButton(`revision-accept-${revision.id}`, "Accept", { attrs: { "aria-label": `Accept ${name}` } }, () => decideRevision(revision.id, "accept")),
+        actionButton(`revision-reject-${revision.id}`, "Reject", { secondary: true, attrs: { "aria-label": `Reject ${name}` } }, () => decideRevision(revision.id, "reject")),
+      ),
+    );
+  } else {
+    card.append(el("p", { className: "muted small", text: "The profile isn't approved, so this revision has nothing to change yet." }));
   }
+  return card;
+}
+
+/** Issue 1: the next revision's Accept, else the revisions heading. */
+function revisionFocusTarget(decidedId, order) {
+  const remaining = new Set((view.pendingRevisions ?? []).map((revision) => revision.id));
+  if (remaining.has(decidedId) && view.approval) return `revision-accept-${decidedId}`;
+  const index = order.indexOf(decidedId);
+  const next = [...order.slice(index + 1), ...order.slice(0, Math.max(index, 0))].find((id) => remaining.has(id));
+  return next && view.approval ? `revision-accept-${next}` : "revisions-title";
+}
+
+async function decideRevision(revisionId, action) {
+  const order = (view.pendingRevisions ?? []).map((revision) => revision.id);
+  const outcome = await postJson(`/api/onboarding/revisions/${revisionId}/${action}`, {});
+  lastAction(outcome.message, outcome.ok ? "done" : "refused");
+  await refresh(() => revisionFocusTarget(revisionId, order));
+}
+
+// ---------------------------------------------------------------------------
+// The career-profile.md editor
+// ---------------------------------------------------------------------------
+
+function isDirty() {
+  return loadedMarkdown !== null && $("markdown-editor").value !== loadedMarkdown;
+}
+
+function renderEditor() {
+  if (!isDirty()) {
+    $("markdown-editor").value = view.markdown;
+    loadedMarkdown = view.markdown;
+    baseHash = view.markdownHash;
+  }
+  $("drop-markdown").hidden = !isDirty();
+}
+
+$("markdown-editor").addEventListener("input", () => {
+  if (!$("markdown-editor-error").hidden) setEditorError(null);
+  $("drop-markdown").hidden = !isDirty();
 });
 
-reload().catch(showError);
+$("save-markdown").addEventListener("click", () =>
+  run("save-markdown", async () => {
+    try {
+      const outcome = await postJson("/api/onboarding/markdown", { markdown: $("markdown-editor").value, base: baseHash });
+      setEditorError(null);
+      loadedMarkdown = null; // show the file as saved
+      lastAction(outcome.message, "done");
+    } catch (error) {
+      setEditorError(messageOf(error));
+      lastAction(messageOf(error), "refused");
+    }
+    await refresh("save-markdown");
+  }),
+);
+
+$("drop-markdown").addEventListener("click", () =>
+  run("drop-markdown", async () => {
+    loadedMarkdown = null;
+    setEditorError(null);
+    await refresh("markdown-editor");
+    lastAction("Your unsaved changes were dropped. The box shows the file as it is now.", "done");
+  }),
+);
+
+$("markdown-discard").addEventListener("click", () =>
+  run("markdown-discard", async () => {
+    const outcome = await postJson("/api/onboarding/markdown/discard", {});
+    loadedMarkdown = null;
+    setEditorError(null);
+    lastAction(outcome.message, "done");
+    await refresh("page-title");
+  }),
+);
+
+trackLastActionHeight();
+refresh().catch((error) => {
+  const node = $("page-error");
+  node.textContent = `The profile couldn't load: ${messageOf(error)} Reload the page to try again.`;
+  node.hidden = false;
+});
