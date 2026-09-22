@@ -1,6 +1,7 @@
-import { unlink } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { readFile, rename, stat, unlink } from "node:fs/promises";
 import { z } from "zod";
-import type { Clock } from "../lib/clock.ts";
+import { MINUTE_MS, type Clock } from "../lib/clock.ts";
 import { sha256Hex } from "../lib/crypto.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -10,8 +11,12 @@ import type { Workspace } from "./workspace.ts";
  * stored. Files, because the process that issues a code (`npm run setup`,
  * `npm run pair`, `npm run ui`) is not the bridge process that redeems it.
  *
- * Single use: redeeming deletes the file, and unlink(2) succeeds for exactly
- * one caller, so two simultaneous redeems of one code cannot both win.
+ * Single use: redeeming first renames the file to a name unique to this
+ * attempt, and only the caller whose rename succeeds may use the code. Not
+ * unlink(2): on macOS (APFS) several concurrent unlinks of one path can all
+ * succeed, so "whoever deleted it" is not a safe claim (seen in this
+ * package's race test). rename(2) of one source to distinct targets lets
+ * exactly one caller win.
  */
 const codeRecordSchema = z
   .object({
@@ -22,6 +27,10 @@ const codeRecordSchema = z
   .strict();
 
 export type RedeemResult = "ok" | "expired" | "invalid";
+
+const CLAIM_SUFFIX = ".claimed";
+/** A claim file older than this was left by a crash between claim and delete. */
+const STALE_CLAIM_MS = MINUTE_MS;
 
 export interface OneTimeCodeOptions {
   /** The state subdirectory, e.g. "pairing". */
@@ -73,16 +82,23 @@ export class OneTimeCodes {
   async redeem(input: string): Promise<RedeemResult> {
     const canonical = this.#options.normalize(input);
     if (!canonical) return "invalid";
-    const segments = this.#segments(`${sha256Hex(canonical)}.json`);
-    const parsed = codeRecordSchema.safeParse(await this.#workspace.readJson(...segments).catch(() => undefined));
-    if (!parsed.success) return "invalid";
+    const file = await this.#workspace.resolveReal(...this.#segments(`${sha256Hex(canonical)}.json`));
+    const claimed = `${file}.${randomBytes(8).toString("hex")}${CLAIM_SUFFIX}`;
     try {
-      await unlink(await this.#workspace.resolveReal(...segments));
+      await rename(file, claimed);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return "invalid";
       throw error;
     }
-    return new Date(parsed.data.expiresAt).getTime() > this.#clock.now().getTime() ? "ok" : "expired";
+    try {
+      const parsed = codeRecordSchema.safeParse(JSON.parse(await readFile(claimed, "utf8")));
+      if (!parsed.success) return "invalid";
+      return new Date(parsed.data.expiresAt).getTime() > this.#clock.now().getTime() ? "ok" : "expired";
+    } catch {
+      return "invalid";
+    } finally {
+      await unlink(claimed).catch(() => undefined);
+    }
   }
 
   async #records(): Promise<Array<{ name: string; record: z.infer<typeof codeRecordSchema> | undefined }>> {
@@ -102,13 +118,19 @@ export class OneTimeCodes {
     return (await this.#records()).filter(({ record }) => record && new Date(record.expiresAt).getTime() > now).length;
   }
 
-  /** Deletes expired or unreadable code files. */
+  /** Deletes expired or unreadable code files, and claims a crash left behind. */
   async purgeExpired(): Promise<void> {
     const now = this.#clock.now().getTime();
     for (const { name, record } of await this.#records()) {
       if (!record || new Date(record.expiresAt).getTime() <= now) {
         await unlink(await this.#workspace.resolveReal(...this.#segments(name))).catch(() => undefined);
       }
+    }
+    for (const name of await this.#workspace.list(...this.#directory())) {
+      if (!name.endsWith(CLAIM_SUFFIX)) continue;
+      const file = await this.#workspace.resolveReal(...this.#segments(name));
+      const info = await stat(file).catch(() => undefined);
+      if (info && Date.now() - info.mtimeMs > STALE_CLAIM_MS) await unlink(file).catch(() => undefined);
     }
   }
 }

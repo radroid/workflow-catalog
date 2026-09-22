@@ -16,7 +16,7 @@
     "eval": "node --import ./lib/register-ts.mjs cli/eval.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . --max-warnings 0 --ignore-pattern '.eve/**' --ignore-pattern '.output/**' --ignore-pattern '.nitro/**' --ignore-pattern 'eval-agent/.eve/**' --ignore-pattern 'eval-agent/.output/**'",
-    "test": "vitest run"
+    "test": "vitest run && node --import ./lib/register-ts.mjs cli/eval.ts"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",
