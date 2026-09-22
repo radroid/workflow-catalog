@@ -64,3 +64,30 @@ export async function getLastJobCapture(): Promise<JobCapture | null> {
 export async function setLastJobCapture(capture: JobCapture): Promise<void> {
   await chrome.storage.session.set({ [LAST_JOB_CAPTURE_KEY]: capture });
 }
+
+const PAIRING_ORIGIN_MISMATCH_KEY = "pairingOriginMismatch";
+
+/**
+ * P07-B revision 1, B3: a 403 `origin_not_allowed` on `job_capture`'s
+ * `POST /events` means the stored token belongs to a different install --
+ * but `GET /status` (what the options page's own Status section calls)
+ * never carries an Origin header at all (Chrome doesn't send one on a GET),
+ * so the bridge can never refuse *that* call for a mismatched origin: the
+ * options page would otherwise have no way to ever learn about a 403 the
+ * popup's own POST observed. This flag is that channel -- set by
+ * bridge-client.ts's `onOriginMismatch` hook the moment a 403 happens
+ * anywhere, read by the options page's Status section, and cleared on the
+ * next successful pairing or explicit Un-pair (both mean "start over").
+ */
+export async function setPairingOriginMismatch(value: boolean): Promise<void> {
+  if (value) {
+    await chrome.storage.session.set({ [PAIRING_ORIGIN_MISMATCH_KEY]: true });
+  } else {
+    await chrome.storage.session.remove(PAIRING_ORIGIN_MISMATCH_KEY);
+  }
+}
+
+export async function getPairingOriginMismatch(): Promise<boolean> {
+  const result = await chrome.storage.session.get(PAIRING_ORIGIN_MISMATCH_KEY);
+  return result[PAIRING_ORIGIN_MISMATCH_KEY] === true;
+}

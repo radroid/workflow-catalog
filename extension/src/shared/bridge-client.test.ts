@@ -153,22 +153,42 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
     expect(result.ok).toBe(true);
   });
 
-  it("postEvent carries a 401 token_invalid through (expired/revoked token: re-pair)", async () => {
+  it("postEvent carries a 401 token_invalid through (expired/revoked token: re-pair), and calls onTokenInvalid so a dead token stops being offered as paired (P07-B revision 1, B3)", async () => {
     stubFetch(() => jsonResponse(401, { ok: false, error: { code: "token_invalid", message: "This device token is not valid (unknown, revoked or expired). Pair the extension again." } }));
-    const result = await pairedClient().postEvent(CAPTURE);
+    let calls = 0;
+    const client = createBridgeClient({ getToken: () => Promise.resolve({ token: "device-token" }), onTokenInvalid: () => { calls += 1; return Promise.resolve(); } });
+    const result = await client.postEvent(CAPTURE);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.status).toBe(401);
     expect(result.error.code).toBe("token_invalid");
+    expect(calls).toBe(1);
   });
 
-  it("postEvent carries a 403 origin_not_allowed through (wrong extension or device: re-pair)", async () => {
+  it("postEvent carries a 403 origin_not_allowed through (wrong extension or device: re-pair), and calls onOriginMismatch so the options page can learn about it even though GET /status never would (P07-B revision 1, B3)", async () => {
     stubFetch(() => jsonResponse(403, { ok: false, error: { code: "origin_not_allowed", message: "This request's Origin is not the extension origin this device paired from." } }));
-    const result = await pairedClient().postEvent(CAPTURE);
+    let calls = 0;
+    const client = createBridgeClient({ getToken: () => Promise.resolve({ token: "device-token" }), onOriginMismatch: () => { calls += 1; return Promise.resolve(); } });
+    const result = await client.postEvent(CAPTURE);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.status).toBe(403);
     expect(result.error.code).toBe("origin_not_allowed");
+    expect(calls).toBe(1);
+  });
+
+  it("postEvent calls neither hook on a 413 or other non-401/403 failure", async () => {
+    stubFetch(() => jsonResponse(413, { ok: false, error: { code: "body_too_large", message: "too big" } }));
+    let tokenInvalidCalls = 0;
+    let originMismatchCalls = 0;
+    const client = createBridgeClient({
+      getToken: () => Promise.resolve({ token: "device-token" }),
+      onTokenInvalid: () => { tokenInvalidCalls += 1; return Promise.resolve(); },
+      onOriginMismatch: () => { originMismatchCalls += 1; return Promise.resolve(); },
+    });
+    await client.postEvent(CAPTURE);
+    expect(tokenInvalidCalls).toBe(0);
+    expect(originMismatchCalls).toBe(0);
   });
 
   it("postEvent classifies the runner being down as network_error", async () => {
@@ -178,6 +198,37 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
     if (result.ok) return;
     expect(result.error.code).toBe("network_error");
     expect(result.error.status).toBeUndefined();
+  });
+
+  it("postEvent classifies a request that never answers (AbortSignal.timeout firing) as network_error with a distinct 'isn't responding' message (P07-B revision 1, B4)", async () => {
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject((init.signal as AbortSignal).reason as Error);
+        });
+      });
+    }) as typeof fetch;
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("network_error");
+    expect(result.error.message).toBe("The runner isn't responding.");
+  }, 10_000);
+
+  it("postEvent rejects a 200 whose body doesn't say ok:true (defence against something other than the bridge answering on the port) (P07-B revision 1, B4)", async () => {
+    stubFetch(() => jsonResponse(200, { unrelated: "shape" }));
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("invalid_response");
+  });
+
+  it("postEvent rejects a 200 whose eventId doesn't match the one just sent (a genuine bridge response meant for a different request) (P07-B revision 1, B4)", async () => {
+    stubFetch(() => jsonResponse(200, { ok: true, eventId: "not-the-event-id-we-sent", type: "job_capture", duplicate: false, outcome: "journaled" }));
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("invalid_response");
   });
 
   it("getStatus sends no query and returns the validated StatusResponse", async () => {

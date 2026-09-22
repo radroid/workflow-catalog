@@ -22,7 +22,7 @@ import {
   type PairResponse,
   type StatusResponse,
 } from "@workflow-catalog/contracts";
-import { getDeviceToken } from "./storage";
+import { clearDeviceToken, getDeviceToken, setPairingOriginMismatch } from "./storage";
 
 /** Loopback only (mvp-spec §5); the manifest's one host permission. */
 export const BRIDGE_ORIGIN = "http://127.0.0.1:4310";
@@ -61,6 +61,20 @@ const NETWORK_ERROR: BridgeError = {
   code: "network_error",
   message: "Can't reach the runner. Is it running? Start it with `npm run runner`.",
 };
+
+/** P07-B revision 1, B4: distinguished from NETWORK_ERROR's "is it running"
+ * wording -- a request that connected but never answered is a different
+ * fact for a person debugging it than one that never connected at all,
+ * even though both are `code: "network_error"` (the outbox/popup still
+ * queue-and-retry both exactly the same way, see shared/outbox.ts). */
+const TIMEOUT_ERROR: BridgeError = {
+  code: "network_error",
+  message: "The runner isn't responding.",
+};
+
+/** A runner that accepts the TCP connection but never answers must not
+ * leave "Pairing…"/"Saving…" disabled forever (P07-B revision 1, B4). */
+const REQUEST_TIMEOUT_MS = 5000;
 
 const NOT_PAIRED: BridgeError = {
   code: "not_paired",
@@ -102,9 +116,15 @@ function looksLikeWireErrorBody(value: unknown): value is WireErrorBody {
 async function request(baseUrl: string, path: string, init: RequestInit): Promise<BridgeResult<unknown>> {
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}${path}`, init);
-  } catch {
-    return { ok: false, error: NETWORK_ERROR };
+    response = await fetch(`${baseUrl}${path}`, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (error) {
+    // AbortSignal.timeout's own abort reason is a DOMException named
+    // "TimeoutError" (WHATWG signal-abort/timeout spec); fetch rejects with
+    // that same reason. Nothing else here ever aborts this request, so any
+    // other rejection (typically a TypeError "Failed to fetch") is a real
+    // connection failure, not a slow answer.
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+    return { ok: false, error: timedOut ? TIMEOUT_ERROR : NETWORK_ERROR };
   }
 
   let body: unknown;
@@ -130,20 +150,48 @@ export interface CreateBridgeClientOptions {
   readonly baseUrl?: string;
   /** Overridable for tests only; defaults to shared/storage.ts's getDeviceToken. */
   readonly getToken?: () => Promise<{ token: string } | null>;
+  /**
+   * Called once whenever an authenticated request comes back 401
+   * (`token_invalid`: unknown, revoked or expired) -- overridable for
+   * tests only; defaults to shared/storage.ts's `clearDeviceToken`. P07-B
+   * revision 1, B3: a dead token must stop being offered as "paired"
+   * anywhere in the UI, not just get a one-time error message -- clearing
+   * it here, in the one place every authenticated route already funnels
+   * through, means Pairing and Status both naturally show "not paired" on
+   * their next render, wherever the 401 was actually observed.
+   */
+  readonly onTokenInvalid?: () => Promise<void>;
+  /**
+   * Called once whenever an authenticated request comes back 403
+   * (`origin_not_allowed`) -- overridable for tests only; defaults to
+   * shared/storage.ts's `setPairingOriginMismatch(true)`. P07-B revision 1,
+   * B3: `GET /status` never carries an Origin header (Chrome doesn't send
+   * one on a GET), so the options page's own status check can never itself
+   * observe this -- this is the only channel that lets it react to a 403
+   * `job_capture`'s `POST /events` saw.
+   */
+  readonly onOriginMismatch?: () => Promise<void>;
 }
 
 /** The real, `fetch`-backed `BridgeClient`. */
 export function createBridgeClient(options: CreateBridgeClientOptions = {}): BridgeClient {
   const baseUrl = options.baseUrl ?? BRIDGE_ORIGIN;
   const getToken = options.getToken ?? getDeviceToken;
+  const onTokenInvalid = options.onTokenInvalid ?? clearDeviceToken;
+  const onOriginMismatch = options.onOriginMismatch ?? (() => setPairingOriginMismatch(true));
 
   async function authedRequest(path: string, init: RequestInit = {}): Promise<BridgeResult<unknown>> {
     const stored = await getToken();
     if (!stored) return { ok: false, error: NOT_PAIRED };
-    return request(baseUrl, path, {
+    const result = await request(baseUrl, path, {
       ...init,
       headers: { ...(init.headers ?? {}), authorization: `Bearer ${stored.token}` },
     });
+    if (!result.ok) {
+      if (result.error.status === 401) await onTokenInvalid();
+      else if (result.error.status === 403) await onOriginMismatch();
+    }
+    return result;
   }
 
   return {
@@ -166,8 +214,19 @@ export function createBridgeClient(options: CreateBridgeClientOptions = {}): Bri
         body: JSON.stringify(event),
       });
       if (!result.ok) return result;
-      const value = result.value as { duplicate?: unknown } | undefined;
-      return { ok: true, value: { duplicate: value?.duplicate === true } };
+      // P07-B revision 1, B4: a capture counts as delivered only when the
+      // body itself says so -- not just a 2xx status. Whatever answers on
+      // 127.0.0.1:4310 might not be this bridge at all (another local
+      // process bound to the port before the runner started); trusting any
+      // 200 there would silently empty the outbox of a capture nothing
+      // real ever received. `eventId` echoing the one just sent, not just
+      // `ok: true`, additionally rules out a genuine bridge response meant
+      // for a different, unrelated request.
+      const value = result.value as { ok?: unknown; eventId?: unknown; duplicate?: unknown } | undefined;
+      if (value?.ok !== true || value.eventId !== event.eventId) {
+        return { ok: false, error: invalidResponse("events") };
+      }
+      return { ok: true, value: { duplicate: value.duplicate === true } };
     },
 
     async getCommands(since) {
