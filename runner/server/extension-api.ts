@@ -77,14 +77,27 @@ const PAIR_THROTTLE_MAX_ORIGINS = 1_000;
  *   wrong codes. A code issued at or before the oldest of them has absorbed
  *   the whole budget and is withdrawn (see /pair). A code issued later starts
  *   with a fresh budget, whichever process issued it.
+ * Both limits hold exactly under concurrent requests: /pair reads the body
+ * first, then checks, redeems, records and withdraws inside `exclusive`, one
+ * request at a time. Checked before the redeem's awaits instead, every
+ * request already in flight would pass before any failure was recorded.
  */
 class PairThrottle {
   readonly #failures = new Map<string, number[]>();
   readonly #wrongCodes: number[] = [];
   readonly #ctx: RunnerContext;
+  /** The end of the /pair queue (the pattern in store/commands.ts). */
+  #tail: Promise<unknown> = Promise.resolve();
 
   constructor(ctx: RunnerContext) {
     this.#ctx = ctx;
+  }
+
+  /** Runs `work` once every earlier call's work has settled, so /pair requests are judged one at a time. */
+  exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.#tail.then(work, work);
+    this.#tail = run.catch(() => undefined);
+    return run;
   }
 
   /**
@@ -228,19 +241,25 @@ export function extensionApi(options: ExtensionApiOptions): Hono {
       return errorResponse(403, "origin_not_allowed", "Pairing is only accepted from a Chrome extension (Origin chrome-extension://<id>).");
     }
     const cors = responseCors(origin);
-    const retryAfter = throttle.retryAfterSeconds(origin);
-    if (retryAfter > 0) {
-      return errorResponse(429, "too_many_attempts", "Too many wrong pairing codes. Wait, then issue a new code with `npm run pair`.", {
-        ...cors,
-        "retry-after": String(retryAfter),
-      });
-    }
+    // The body first, outside the queue below, so a slow body holds up only
+    // its own request (the 256 KiB cap and the server's timeouts bound it).
     const body = await readBoundedJson(request, MAX_BRIDGE_BODY_BYTES, cors);
     if (!body.ok) return body.response;
     const parsed = pairRequestSchema.safeParse(body.value);
     if (!parsed.success) return validationErrorResponse(parsed.error, cors);
-    const redeemed = await ctx.pairing.redeem(parsed.data.code);
-    if (redeemed !== "ok") {
+    const code = parsed.data.code;
+    // Then check, redeem, record and withdraw one request at a time, so each
+    // request is judged after every earlier failure was recorded.
+    const refused = await throttle.exclusive(async (): Promise<Response | undefined> => {
+      const retryAfter = throttle.retryAfterSeconds(origin);
+      if (retryAfter > 0) {
+        return errorResponse(429, "too_many_attempts", "Too many wrong pairing codes. Wait, then issue a new code with `npm run pair`.", {
+          ...cors,
+          "retry-after": String(retryAfter),
+        });
+      }
+      const redeemed = await ctx.pairing.redeem(code);
+      if (redeemed === "ok") return undefined;
       throttle.fail(origin);
       if (redeemed === "expired") {
         return errorResponse(401, "pairing_code_expired", "This pairing code has expired (codes last 10 minutes). Run `npm run pair` for a new one.", cors);
@@ -258,7 +277,8 @@ export function extensionApi(options: ExtensionApiOptions): Hono {
         "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run `npm run pair` for a new one.",
         cors,
       );
-    }
+    });
+    if (refused) return refused;
     const { device, token } = await ctx.devices.register(origin);
     ctx.log.info(`Paired device ${device.deviceId} (${origin}).`);
     return jsonResponse(200, pairResponseSchema.parse({ deviceId: device.deviceId, token }), cors);

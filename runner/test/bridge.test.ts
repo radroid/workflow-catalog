@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { MAX_BRIDGE_BODY_BYTES, commandsResponseSchema, statusResponseSchema, type OpenApplicationGroup } from "@workflow-catalog/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MINUTE_MS } from "../lib/clock.ts";
 import { PAIR_CODE_GUESS_BUDGET, PAIR_FAILURE_LIMIT } from "../server/extension-api.ts";
 import { defineRouteModule, EventRejectedError, type LoadedRouteModule } from "../server/route-modules.ts";
-import { EXTENSION_ORIGIN, OTHER_EXTENSION_ORIGIN, authed, jobCapture, makeBridge, pairDevice, postEvent } from "./helpers.ts";
+import { EXTENSION_ORIGIN, OTHER_EXTENSION_ORIGIN, authed, jobCapture, makeBridge, pairDevice, postEvent, type TestBridge } from "./helpers.ts";
 
 async function errorOf(response: Response): Promise<{ code: string; message: string; issues?: Array<{ path: Array<string | number>; message: string }> }> {
   const body = (await response.json()) as { error: { code: string; message: string } };
@@ -331,6 +331,123 @@ describe("bridge: POST /pair", () => {
     expect(await bridge.ctx.pairing.outstanding()).toBe(1);
     const paired = await bridge.request("/pair", { method: "POST", headers: { origin: EXTENSION_ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ code }) });
     expect(paired.status).toBe(200);
+  });
+
+  /**
+   * Holds every pairing-code redeem until `release()`, like a slow disk, so
+   * that a whole burst of /pair requests is in flight before any is judged.
+   * `redeemed()` lists the codes in the order they were judged.
+   */
+  function holdRedeems(bridge: TestBridge): { release: () => Promise<void>; redeemed: () => string[] } {
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const redeem = bridge.ctx.pairing.redeem.bind(bridge.ctx.pairing);
+    const spy = vi.spyOn(bridge.ctx.pairing, "redeem").mockImplementation(async (input) => {
+      await gate;
+      return redeem(input);
+    });
+    return {
+      // Every request sent so far reads its body first, then the gate opens.
+      release: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        open();
+      },
+      redeemed: () => spy.mock.calls.map(([input]) => input),
+    };
+  }
+
+  async function statusesOf(responses: Array<Promise<Response>>): Promise<number[]> {
+    return Promise.all(responses.map(async (response) => (await response).status));
+  }
+
+  function tally(statuses: readonly number[]): Record<number, number> {
+    const counts: Record<number, number> = {};
+    for (const status of statuses) counts[status] = (counts[status] ?? 0) + 1;
+    return counts;
+  }
+
+  it(`holds the per-code budget under concurrency: 150 wrong codes in flight use it up before the real code, sent last`, async () => {
+    const bridge = await makeBridge();
+    const send = (code: string, origin: string) =>
+      bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    const { code } = await bridge.ctx.pairing.issue();
+    const held = holdRedeems(bridge);
+    const wrong = Array.from({ length: 150 }, (_, index) => send(WRONG, extensionOrigin(index + 1)));
+    const real = send(code, EXTENSION_ORIGIN);
+    await held.release();
+    expect(tally(await statusesOf(wrong))).toEqual({ 401: 150 });
+    // The 100th wrong code withdrew the code, so the real one is refused.
+    const refused = await real;
+    expect(refused.status).toBe(401);
+    expect((await errorOf(refused)).message).toContain("withdrawn after too many wrong tries");
+    expect(await bridge.ctx.pairing.outstanding()).toBe(0);
+    expect(await bridge.ctx.devices.list()).toEqual([]);
+  });
+
+  it(`holds the per-origin limit under concurrency: 30 wrong codes at once from one origin get exactly ${PAIR_FAILURE_LIMIT} × 401 and ${30 - PAIR_FAILURE_LIMIT} × 429`, async () => {
+    const bridge = await makeBridge();
+    const send = (code: string, origin: string) =>
+      bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    const { code } = await bridge.ctx.pairing.issue();
+    const held = holdRedeems(bridge);
+    const responses = Array.from({ length: 30 }, () => send(WRONG, OTHER_EXTENSION_ORIGIN));
+    await held.release();
+    expect(tally(await statusesOf(responses))).toEqual({ 401: PAIR_FAILURE_LIMIT, 429: 30 - PAIR_FAILURE_LIMIT });
+    // Only the checked codes were tried, so the code still has budget left and pairs.
+    expect(held.redeemed()).toHaveLength(PAIR_FAILURE_LIMIT);
+    expect((await send(code, EXTENSION_ORIGIN)).status).toBe(200);
+  });
+
+  it("pairs a valid code racing 50 concurrent wrong codes from other origins, whether it is judged first, in the middle or last", async () => {
+    // 50 wrong codes cannot use up the budget of 100, so the outcome must not
+    // depend on the order: the lock only orders requests, it never refuses one.
+    for (const position of [0, 25, 50]) {
+      const bridge = await makeBridge();
+      const send = (code: string, origin: string) =>
+        bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+      const { code } = await bridge.ctx.pairing.issue();
+      const held = holdRedeems(bridge);
+      const responses: Array<Promise<Response>> = [];
+      for (let index = 0; index <= 50; index += 1) {
+        responses.push(index === position ? send(code, EXTENSION_ORIGIN) : send(WRONG, extensionOrigin(index + 1)));
+      }
+      await held.release();
+      const statuses = await statusesOf(responses);
+      expect(held.redeemed().indexOf(code), `judged at position ${position}`).toBe(position);
+      expect(statuses[position], `valid code at position ${position}`).toBe(200);
+      expect(tally(statuses.filter((_, index) => index !== position))).toEqual({ 401: 50 });
+      expect((await bridge.ctx.devices.list()).map((device) => device.origin)).toEqual([EXTENSION_ORIGIN]);
+    }
+  });
+
+  it("reads the body before the queue: a body still arriving holds up no other pairing request", async () => {
+    const bridge = await makeBridge();
+    const send = (code: string, origin: string) =>
+      bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    const { code } = await bridge.ctx.pairing.issue();
+    const encoder = new TextEncoder();
+    let finish: () => void = () => undefined;
+    const trickle = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"code":'));
+        finish = () => {
+          controller.enqueue(encoder.encode(JSON.stringify(WRONG) + "}"));
+          controller.close();
+        };
+      },
+    });
+    const slow = bridge.request("/pair", {
+      method: "POST",
+      headers: { origin: OTHER_EXTENSION_ORIGIN, "content-type": "application/json" },
+      body: trickle,
+      duplex: "half",
+    } as RequestInit & { headers: Record<string, string> });
+    // While that body is still arriving, the real extension pairs.
+    expect((await send(code, EXTENSION_ORIGIN)).status).toBe(200);
+    finish();
+    expect((await slow).status).toBe(401);
   });
 });
 
