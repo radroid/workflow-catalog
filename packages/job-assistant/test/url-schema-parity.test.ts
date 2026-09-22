@@ -156,11 +156,10 @@ describe("emitted JSON Schema enforces the same http(s)-only URL restriction zod
  * Schema keyword can count. The emitted text fields carry a looser
  * `maxLength` instead (the byte cap minus the 2 quote bytes, in code points)
  * plus a description; the other `POST /events` caps lower to
- * `maxLength`/`maxItems` exactly. So the emitted schemas must never reject a
- * body zod accepts, and must agree with zod wherever JSON Schema can express
- * the cap.
+ * `maxLength`/`maxItems` exactly. So no emitted cap may reject a body zod
+ * accepts, and each must agree with zod wherever JSON Schema can express it.
  */
-describe("emitted JSON Schema carries the POST /events size caps and is never stricter than zod", () => {
+describe("emitted JSON Schema carries the POST /events size caps, none stricter than zod's", () => {
   const validateCapture = ajvValidatorFor("job-capture");
   const validateEvents = ajvValidatorFor("events-request");
   const validateResult = ajvValidatorFor("browser-command-result");

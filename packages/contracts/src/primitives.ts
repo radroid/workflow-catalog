@@ -106,7 +106,7 @@ export const MAX_APPLICATION_GROUP_SIZE = 20;
 /**
  * mvp-spec §5: every bridge request has a "body size cap 256 KB", taken here
  * as 256 KiB. The bridge rejects a larger body before parsing it. The
- * `POST /events` bodies are capped so that every body zod accepts also
+ * `POST /events` bodies are capped so that every JSON body zod accepts also
  * serializes within this (see the caps in bridge-envelopes.ts and
  * `bridge-body-size.test.ts`).
  */

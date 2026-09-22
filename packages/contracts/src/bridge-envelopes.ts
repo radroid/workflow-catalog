@@ -29,7 +29,7 @@ import {
 
 /**
  * Size caps for the three `POST /events` bodies (`EventsRequest`,
- * bridge-http.ts). With them, every body zod accepts serializes
+ * bridge-http.ts). With them, every JSON body zod accepts serializes
  * (`JSON.stringify`, UTF-8) to at most `MAX_BRIDGE_BODY_BYTES`
  * (primitives.ts), the bridge's 256 KiB body cap from mvp-spec §5. A body the
  * extension has validated never bounces off that cap.

@@ -12,7 +12,7 @@ import { eventsRequestSchema } from "./bridge-http";
 import { httpUrlSchema, MAX_APPLICATION_GROUP_SIZE, MAX_BRIDGE_BODY_BYTES } from "./primitives";
 
 /**
- * Revision 2, fix A: every `POST /events` body zod accepts must serialize
+ * Revision 2, fix A: every `POST /events` JSON body zod accepts must serialize
  * (`JSON.stringify`, UTF-8) to at most MAX_BRIDGE_BODY_BYTES, the bridge's
  * 256 KiB body cap (mvp-spec §5). Revision 1 capped `text` by raw UTF-8
  * bytes, which misses JSON escaping, and left `url`, `extractorVersion`,
