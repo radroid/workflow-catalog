@@ -12,7 +12,7 @@ import type { ExtractedStructuredHints } from "../capture/extractor";
 import { bridgeClient, type BridgeError } from "../shared/bridge-client";
 import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
-import { enqueueCapture } from "../shared/outbox";
+import { enqueueCapture, failureAction } from "../shared/outbox";
 import { setLastJobCapture } from "../shared/storage";
 
 // P02's local UI serves /ui/<name> (runner/server/local-ui.ts: `<uiDir>/<page>.html`
@@ -50,85 +50,79 @@ export function formatBytes(byteLength: number): string {
   return `${(byteLength / 1024).toFixed(1)} KB`;
 }
 
-/** What `sendToBridge` tells the caller to show: the status sentence, and
- * whether the two secondary actions (manual file export, jump to Settings)
- * should be offered for this outcome. */
+/** What `sendToBridge` tells the caller to show: whether the capture is
+ * now the runner's (`sent`), safely queued in this browser (`queued`), or
+ * neither (`not_sent`); the status sentence and its tone; and whether the
+ * two secondary actions (manual file export, jump to Settings) should be
+ * offered for this outcome. */
 interface SendOutcome {
+  readonly kind: "sent" | "queued" | "not_sent";
   readonly message: string;
-  readonly problem: boolean;
+  /** `.flash.ok` (neutral), `.flash` (amber: waiting, nothing to do) or
+   * `.flash.bad` (needs the person). */
+  readonly tone: "ok" | "wait" | "bad";
   readonly offerFileSave: boolean;
   readonly offerSettings: boolean;
 }
 
-function ok(message: string): SendOutcome {
-  return { message, problem: false, offerFileSave: false, offerSettings: false };
+const FLASH_CLASS: Record<SendOutcome["tone"], string> = { ok: "flash ok", wait: "flash", bad: "flash bad" };
+
+/** Why a capture was queued paused -- only a person can fix these (see
+ * shared/outbox.ts's `failureAction`). */
+function pausedMessage(error: BridgeError): string {
+  if (error.status === 401) return "Your pairing expired or was revoked. Pair again in Settings and it's sent.";
+  if (error.status === 403) return "This pairing belongs to a different install. Pair again in Settings.";
+  return "Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.";
 }
 
-function queued(message: string, offerSettings: boolean): SendOutcome {
-  return { message, problem: true, offerFileSave: true, offerSettings };
+/** Why a capture was queued for the worker's automatic retry. */
+function retryMessage(error: BridgeError): string {
+  if (error.code === "invalid_response" || error.code === "unknown_error") {
+    return "Something other than the runner answered on its port — queued. It'll be sent once the runner answers.";
+  }
+  if (error.code === "token_replaced") return "Queued — this browser was just paired again. It'll be sent shortly.";
+  return "The runner isn't reachable right now — it'll be sent automatically once it's back.";
 }
 
 /**
  * Posts `capture` to the bridge as a `job_capture` event and classifies the
- * result (P07-B revision 1, B3 -- branches on status/code instead of one
- * blanket "isn't reachable right now" for every failure; E1 -- the bridge
- * is tried first and nothing is downloaded here at all, unlike part A's
- * design, which always exported a file before ever trying the bridge):
+ * result with the same `failureAction` the worker's retry flush uses
+ * (P07-B revision 2: one classification, so Save and the retry can never
+ * disagree about the same failure). E1 (revision 1): the bridge is tried
+ * first and nothing is downloaded here at all.
  *
- * - Reachable and accepted (including a replay the bridge reports
- *   `duplicate: true` for -- gate 1: still just "sent", not an error):
- *   says so, offers neither secondary action -- the runner already has it.
- * - Not paired yet (E2, supersedes part A's "don't queue before ever
- *   pairing" design): queues the capture (paused -- see shared/outbox.ts)
- *   so it's sent the moment pairing succeeds, and offers both a manual
- *   file export and a way to Settings to pair.
- * - 401 (token invalid: expired or revoked) or 403 (origin_not_allowed:
- *   this pairing belongs to a different browser/install): queues the
- *   capture paused -- retrying the exact same request against the exact
- *   same dead token/wrong origin can only repeat the same refusal, so
- *   shared/outbox.ts stops spending alarms on it until a fresh pairing
- *   flushes it again (E2) -- and offers both secondary actions.
- * - Any other 4xx (400 invalid body, 409 event id conflict, 413 too large,
- *   422, ...): never queued (retrying an identical, already-refused
- *   request cannot ever succeed) and shows the bridge's own specific
- *   message, with only the file-export secondary action offered (Settings
- *   cannot fix this class of failure).
- * - network_error (the runner isn't running, or didn't answer in time) or
- *   a 5xx: queues the capture for the worker's alarm-driven retry
- *   (shared/outbox.ts) and says so, so Save never silently loses a capture
- *   just because the runner was unreachable for a moment.
+ * - Accepted (including a replay the bridge reports `duplicate: true` for
+ *   -- gate 1: still just "sent", not an error): says so, offers neither
+ *   secondary action -- the runner already has it.
+ * - `pause` (not paired yet -- E2; or the bridge refused this browser's
+ *   token, 401, or origin, 403): queues the capture paused, so it's sent
+ *   the moment a pairing succeeds, and offers both a manual file export and
+ *   a way to Settings to pair.
+ * - `retry` (the runner isn't running or didn't answer in time, a 5xx,
+ *   something other than the runner answered on its port, or a pairing
+ *   replaced the token mid-request): queues the capture for the worker's
+ *   alarm-driven retry and says so -- Save never loses a capture just
+ *   because the runner wasn't there for a moment.
+ * - `drop` (the bridge itself refused this exact request: 400, 409, 413,
+ *   ...): not queued -- resending it can never succeed -- and not "saved"
+ *   either (revision 2, C3): shows the bridge's own specific message and
+ *   offers the file export.
  */
 async function sendToBridge(capture: JobCapture): Promise<SendOutcome> {
   const result = await bridgeClient.postEvent(capture);
   if (result.ok) {
-    return ok("Sent to the runner.");
+    return { kind: "sent", message: "Sent to the runner.", tone: "ok", offerFileSave: false, offerSettings: false };
   }
   const error: BridgeError = result.error;
-  if (error.code === "not_paired") {
-    await enqueueCapture(capture, error);
-    return queued("Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.", true);
+  const action = failureAction(error);
+  if (action === "drop") {
+    return { kind: "not_sent", message: error.message, tone: "bad", offerFileSave: true, offerSettings: false };
   }
-  if (error.status === 401) {
-    await enqueueCapture(capture, error);
-    return queued("Your pairing expired or was revoked. Pair again in Settings and it's sent.", true);
+  await enqueueCapture(capture, error);
+  if (action === "pause") {
+    return { kind: "queued", message: pausedMessage(error), tone: "bad", offerFileSave: true, offerSettings: true };
   }
-  if (error.status === 403) {
-    await enqueueCapture(capture, error);
-    return queued("This pairing belongs to a different install. Pair again in Settings.", true);
-  }
-  if (error.code === "network_error" || (error.status !== undefined && error.status >= 500)) {
-    await enqueueCapture(capture, error);
-    return queued("The runner isn't reachable right now — it'll be sent automatically once it's back.", false);
-  }
-  // Any other 4xx (the bridge's own message is already specific --
-  // runner/server/http.ts's validationErrorResponse names the exact
-  // field, body_too_large names the byte cap, ...), or invalid_response
-  // (something answered on the port but not with a shape this bridge
-  // would ever send -- B4's "any 200 from whatever holds 4310" concern):
-  // shown verbatim, never queued. Resending an identical request, or one
-  // a wrong process on the port already mangled once, cannot succeed by
-  // retrying.
-  return { message: error.message, problem: true, offerFileSave: true, offerSettings: false };
+  return { kind: "queued", message: retryMessage(error), tone: "wait", offerFileSave: true, offerSettings: false };
 }
 
 export function renderPreview(
@@ -179,7 +173,10 @@ export function renderPreview(
   // no-focus-loss rule below (B7 carry-forward) already forbids. A plain
   // in-closure guard makes a repeat click an inert no-op without touching
   // focus at all; `aria-disabled` (unlike `disabled`) still tells a screen
-  // reader it's inert without removing it from the tab order.
+  // reader it's inert without removing it from the tab order, and
+  // base.css makes it look inert (revision 2 polish). Only once the
+  // capture really is the runner's or queued: a `not_sent` outcome leaves
+  // the button as it was (revision 2, C3).
   let saved = false;
 
   saveButton.addEventListener("click", () => {
@@ -196,12 +193,16 @@ export function renderPreview(
         await setLastJobCapture(capture);
         const outcome = await sendToBridge(capture);
         status.textContent = outcome.message;
-        status.className = outcome.problem ? "flash bad" : "flash";
+        status.className = FLASH_CLASS[outcome.tone];
         fileButton.hidden = !outcome.offerFileSave;
         settingsButton.hidden = !outcome.offerSettings;
-        saveButton.textContent = "Saved ✓";
-        saveButton.setAttribute("aria-disabled", "true");
-        saved = true;
+        if (outcome.kind === "not_sent") {
+          saveButton.textContent = "Save this job";
+        } else {
+          saveButton.textContent = "Saved ✓";
+          saveButton.setAttribute("aria-disabled", "true");
+          saved = true;
+        }
       } catch (error) {
         status.textContent = `Couldn't save: ${error instanceof Error ? error.message : String(error)}`;
         status.className = "flash bad";

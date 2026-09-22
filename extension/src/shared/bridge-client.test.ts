@@ -226,7 +226,8 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe("network_error");
-    expect(result.error.message).toBe("The runner isn't responding.");
+    // P07-B revision 2 polish: the same distinct opening, now with a next step.
+    expect(result.error.message).toBe("The runner isn't responding. Wait a moment and try again, or restart it with `npm run runner`.");
   }, 10_000);
 
   it("postEvent rejects a 200 whose body doesn't say ok:true (defence against something other than the bridge answering on the port) (P07-B revision 1, B4)", async () => {
@@ -243,6 +244,20 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe("invalid_response");
+  });
+
+  it("P07-B revision 2, B5: postEvent rejects a 200 that echoes the right eventId but doesn't say ok:true", async () => {
+    // The wrong-body test above lacks eventId too, so it passed with the
+    // ok:true check deleted; this body isolates that check.
+    for (const body of [
+      { eventId: CAPTURE.eventId, duplicate: false },
+      { ok: "true", eventId: CAPTURE.eventId, duplicate: false },
+      { ok: false, eventId: CAPTURE.eventId, duplicate: false },
+    ]) {
+      stubFetch(() => jsonResponse(200, body));
+      const result = await pairedClient().postEvent(CAPTURE);
+      expect(result, JSON.stringify(body)).toEqual({ ok: false, error: { code: "invalid_response", message: expect.any(String) } });
+    }
   });
 
   it("getStatus sends no query and returns the validated StatusResponse", async () => {
@@ -269,6 +284,40 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
     expect(result.error.status).toBe(429);
   });
 
+  it("P07-B revision 2, B4: the hooks get the token the bridge refused", async () => {
+    stubFetch(() => jsonResponse(401, { ok: false, error: { code: "token_invalid", message: "not valid" } }));
+    const refused: string[] = [];
+    const client = createBridgeClient({
+      getToken: () => Promise.resolve({ token: "device-token" }),
+      onTokenInvalid: (token) => {
+        refused.push(token);
+        return Promise.resolve();
+      },
+    });
+    await client.getStatus();
+    expect(refused).toEqual(["device-token"]);
+    expect(calls, "the same token again would only be refused again").toHaveLength(1);
+  });
+
+  it("P07-B revision 2, B4: a 401 or 403 that isn't in the bridge's envelope (something else on the port) calls no hook and is not retried", async () => {
+    for (const status of [401, 403]) {
+      calls = [];
+      stubFetch(() => new Response("<html>not the bridge</html>", { status, headers: { "content-type": "text/html" } }));
+      let hookCalls = 0;
+      const client = createBridgeClient({
+        getToken: () => Promise.resolve({ token: "device-token" }),
+        onTokenInvalid: () => { hookCalls += 1; return Promise.resolve(); },
+        onOriginMismatch: () => { hookCalls += 1; return Promise.resolve(); },
+      });
+      const result = await client.postEvent(CAPTURE);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatchObject({ status, code: "unknown_error" });
+      expect(hookCalls, `HTTP ${status}`).toBe(0);
+      expect(calls).toHaveLength(1);
+    }
+  });
+
   it("getCommands appends ?since= only when given, and validates the response", async () => {
     stubFetch((url) => {
       expect(url).toBe(`${BRIDGE_ORIGIN}/commands`);
@@ -283,5 +332,102 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
       return jsonResponse(200, { commands: [] });
     });
     await pairedClient().getCommands("2026-09-22T09:00:00.000Z");
+  });
+});
+
+describe("P07-B revision 2, B4: a refusal for a token that a new pairing replaced mid-request", () => {
+  /** The stored token, as the options page's pairing would change it. */
+  function tokenStore(initial: string | null) {
+    let current = initial;
+    return {
+      get: () => Promise.resolve(current === null ? null : { token: current }),
+      set: (next: string | null) => {
+        current = next;
+      },
+    };
+  }
+
+  function authorizations(): Array<string | undefined> {
+    return calls.map((call) => (call.init.headers as Record<string, string>).authorization);
+  }
+
+  const ACCEPTED = { ok: true, eventId: CAPTURE.eventId, type: "job_capture", duplicate: false, outcome: "journaled" };
+
+  for (const [status, code] of [
+    [401, "token_invalid"],
+    [403, "origin_not_allowed"],
+  ] as const) {
+    it(`probe P5: a ${status} ${code} for the old token, after a pairing stored a new one, is retried once with the new token and runs no hook`, async () => {
+      const store = tokenStore("old-token");
+      stubFetch((_url, init) => {
+        if ((init.headers as Record<string, string>).authorization === "Bearer old-token") {
+          store.set("new-token"); // the pairing finished while this request was in flight
+          return jsonResponse(status, { ok: false, error: { code, message: "refused" } });
+        }
+        return jsonResponse(200, ACCEPTED);
+      });
+      let hookCalls = 0;
+      const client = createBridgeClient({
+        getToken: store.get,
+        onTokenInvalid: () => { hookCalls += 1; return Promise.resolve(); },
+        onOriginMismatch: () => { hookCalls += 1; return Promise.resolve(); },
+      });
+
+      const result = await client.postEvent(CAPTURE);
+
+      expect(result).toEqual({ ok: true, value: { duplicate: false } });
+      expect(authorizations()).toEqual(["Bearer old-token", "Bearer new-token"]);
+      expect(hookCalls, "the old token's refusal must not clear or flag the new pairing").toBe(0);
+    });
+  }
+
+  it("a retry refused because the token was replaced yet again returns token_replaced (retryable), and runs no hook", async () => {
+    const store = tokenStore("token-one");
+    stubFetch((_url, init) => {
+      const auth = (init.headers as Record<string, string>).authorization;
+      store.set(auth === "Bearer token-one" ? "token-two" : "token-three");
+      return jsonResponse(401, { ok: false, error: { code: "token_invalid", message: "refused" } });
+    });
+    let hookCalls = 0;
+    const client = createBridgeClient({ getToken: store.get, onTokenInvalid: () => { hookCalls += 1; return Promise.resolve(); } });
+
+    const result = await client.postEvent(CAPTURE);
+
+    expect(result).toEqual({ ok: false, error: { code: "token_replaced", message: expect.any(String) } });
+    expect(authorizations()).toEqual(["Bearer token-one", "Bearer token-two"]);
+    expect(hookCalls).toBe(0);
+  });
+
+  it("a retry refused for the new token, still stored, runs the hook with the new token", async () => {
+    const store = tokenStore("old-token");
+    stubFetch((_url, init) => {
+      if ((init.headers as Record<string, string>).authorization === "Bearer old-token") store.set("new-token");
+      return jsonResponse(401, { ok: false, error: { code: "token_invalid", message: "refused" } });
+    });
+    const refused: string[] = [];
+    const client = createBridgeClient({ getToken: store.get, onTokenInvalid: (token) => { refused.push(token); return Promise.resolve(); } });
+
+    const result = await client.postEvent(CAPTURE);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatchObject({ status: 401, code: "token_invalid" });
+    expect(refused).toEqual(["new-token"]);
+  });
+
+  it("a 401 after the token was removed mid-request (Un-pair) is returned as-is, without a retry", async () => {
+    const store = tokenStore("device-token");
+    stubFetch(() => {
+      store.set(null);
+      return jsonResponse(401, { ok: false, error: { code: "token_invalid", message: "refused" } });
+    });
+    const client = createBridgeClient({ getToken: store.get, onTokenInvalid: () => Promise.resolve() });
+
+    const result = await client.postEvent(CAPTURE);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("token_invalid");
+    expect(calls).toHaveLength(1);
   });
 });

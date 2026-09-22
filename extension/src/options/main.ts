@@ -4,14 +4,13 @@ import { bridgeClient, type BridgeError } from "../shared/bridge-client";
 import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
 import { abbreviateUuid, formatTimestamp } from "../shared/format";
-import { flushOutbox, listQueuedCaptures } from "../shared/outbox";
+import { listQueuedCaptures, resumeAfterPairing } from "../shared/outbox";
 import {
-  clearDeviceToken,
+  forgetPairing,
   getDeviceToken,
   getLastJobCapture,
   getPairingOriginMismatch,
-  setDeviceToken,
-  setPairingOriginMismatch,
+  recordPairing,
   type StoredDeviceToken,
 } from "../shared/storage";
 import { applyColorScheme } from "../shared/theme-init";
@@ -148,8 +147,7 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
   unpairButton.toggleAttribute("disabled", !paired);
   unpairButton.addEventListener("click", () => {
     void (async () => {
-      await clearDeviceToken();
-      await setPairingOriginMismatch(false);
+      await forgetPairing();
       setPairingStatus("Un-paired. You can pair again below.", false);
       const fresh = pairingSection(null, true);
       replaceSection("pairing", fresh);
@@ -205,13 +203,10 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
         return;
       }
       const token: StoredDeviceToken = { deviceId: result.value.deviceId, token: result.value.token, pairedAt: new Date().toISOString() };
-      await setDeviceToken(token);
-      // A fresh pairing can only ever make a previous 401/403 stale (E2 +
-      // B3's "after a new pairing, flush"): clear any stored origin
-      // mismatch and give every paused outbox entry (not_paired/401/403)
-      // one more real attempt.
-      await setPairingOriginMismatch(false);
-      await flushOutbox(bridgeClient, { includePaused: true });
+      // Stores the token and clears whatever the old pairing's failures
+      // flagged (an origin mismatch, an expired token): a fresh pairing can
+      // only ever make those stale.
+      await recordPairing(token);
       setPairingStatus("Paired.", false);
       const fresh = pairingSection(token, true);
       replaceSection("pairing", fresh);
@@ -220,6 +215,11 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
       // Pair button, which the old querySelector("button") picked, even
       // though it's no longer the relevant action once paired).
       fresh.querySelector<HTMLButtonElement>('[data-action="unpair"]')?.focus();
+      // E2 + B3's "after a new pairing, flush" (revision 1), made durable
+      // by B2 (revision 2): lift every pause in storage, arm the retry
+      // alarm, then flush -- if this page closes mid-flush, the worker's
+      // alarm delivers the rest.
+      await resumeAfterPairing(bridgeClient);
       await refreshStatusSection();
     })();
   });

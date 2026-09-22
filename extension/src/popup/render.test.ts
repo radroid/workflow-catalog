@@ -333,7 +333,9 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         await vi.waitFor(() => expect(button.disabled).toBe(false));
 
         expect(status?.textContent).toBe("Sent to the runner.");
-        expect(status?.className).toBe("flash");
+        // P07-B revision 2 polish: a success is the neutral .flash.ok, not
+        // the amber "waiting" edge.
+        expect(status?.className).toBe("flash ok");
         expect(fileButton.hidden, "E1: nothing to export manually once the bridge already has it").toBe(true);
         expect(calls).toHaveLength(1);
         expect(calls[0]?.url).toBe(`${BRIDGE_ORIGIN}/events`);
@@ -458,6 +460,80 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         expect(fileButton.hidden).toBe(false);
         expect(settingsButton.hidden).toBe(true);
         expect(await listQueuedCaptures()).toEqual([]);
+        // P07-B revision 2, C3: nothing was sent or queued, so the button
+        // must not claim "Saved ✓" or go inert.
+        expect(button.textContent).toBe("Save this job");
+        expect(button.hasAttribute("aria-disabled")).toBe(false);
+      });
+
+      it("P07-B revision 2, C3: a real 409 is not 'Saved ✓' -- the bridge's message as a problem, the file export offered, the button still live, nothing queued", async () => {
+        const fake = installFakeChrome({ deviceToken: { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T00:00:00.000Z" } });
+        let posts = 0;
+        globalThis.fetch = (() => {
+          posts += 1;
+          return Promise.resolve(
+            new Response(JSON.stringify({ ok: false, error: { code: "event_id_conflict", message: "This eventId was already used for a different event." } }), {
+              status: 409,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }) as typeof fetch;
+
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        expect(built.ok).toBe(true);
+        if (!built.ok) return;
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+        const fileButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Save as a file") as HTMLButtonElement;
+
+        button.click();
+        await vi.waitFor(() => expect(status?.textContent).not.toBe(""));
+        await vi.waitFor(() => expect(button.disabled).toBe(false));
+
+        expect(status?.textContent).toBe("This eventId was already used for a different event.");
+        expect(status?.className).toBe("flash bad");
+        expect(button.textContent).toBe("Save this job");
+        expect(button.hasAttribute("aria-disabled")).toBe(false);
+        expect(fileButton.hidden).toBe(false);
+        expect(await listQueuedCaptures()).toEqual([]);
+        expect(fake.alarms.has("job-capture-retry")).toBe(false);
+        expect(document.activeElement).toBe(button);
+
+        // Still live: pressing it again really tries again.
+        button.click();
+        await vi.waitFor(() => expect(posts).toBe(2));
+      });
+
+      it("P07-B revision 2, B3: a 200 that isn't the bridge's answer (invalid_response) queues the capture for retry instead of dropping it", async () => {
+        const fake = installFakeChrome({ deviceToken: { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T00:00:00.000Z" } });
+        globalThis.fetch = (() => Promise.resolve(new Response("<html>another program</html>", { status: 200, headers: { "content-type": "text/html" } }))) as typeof fetch;
+
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        expect(built.ok).toBe(true);
+        if (!built.ok) return;
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+        const settingsButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Open settings") as HTMLButtonElement;
+
+        button.click();
+        await vi.waitFor(() => expect(button.textContent).toBe("Saved ✓"));
+
+        expect(status?.textContent).toBe("Something other than the runner answered on its port — queued. It'll be sent once the runner answers.");
+        expect(status?.className, "amber: waiting on the runner, nothing for the person to fix").toBe("flash");
+        expect(settingsButton.hidden).toBe(true);
+        const queued = await listQueuedCaptures();
+        expect(queued.map((entry) => entry.capture.eventId)).toEqual([built.capture.eventId]);
+        expect(queued[0]?.pausedReason).toBeUndefined();
+        expect(queued[0]?.lastErrorCode).toBe("invalid_response");
+        expect(fake.alarms.has("job-capture-retry")).toBe(true);
       });
 
       it("the 'Save as a file' secondary action, when offered, downloads on its own explicit click", async () => {

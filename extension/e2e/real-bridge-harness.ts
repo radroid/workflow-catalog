@@ -27,9 +27,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+import type { Server } from "node:http";
+import { createRequire } from "node:module";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { JobCapture } from "@workflow-catalog/contracts";
 import { ManualClock } from "@workflow-catalog/runner/lib/clock.ts";
 import { createBridgeApp, listen, type RunningBridge } from "@workflow-catalog/runner/server/app.ts";
@@ -44,43 +47,87 @@ import { createBridgeClient, type BridgeClient } from "../src/shared/bridge-clie
  * extension pages) must keep asking for exactly this port. */
 export const BRIDGE_PORT = 4310;
 
+type BridgeApp = ReturnType<typeof createBridgeApp>;
+
+/** The slice of `@hono/node-server`'s `serve` this file uses -- the same
+ * adapter `runner/server/app.ts`'s `listen()` serves the bridge with. */
+type NodeServe = (
+  options: { fetch: BridgeApp["fetch"]; port: number; hostname: string },
+  listeningListener?: (info: AddressInfo) => void,
+) => Server;
+
+/** `@hono/node-server` is the runner's dependency, not this package's
+ * (pnpm doesn't hoist it), so it is resolved from the runner package --
+ * the one version the real bridge runs on. */
+async function loadNodeServe(): Promise<NodeServe> {
+  const requireHere = createRequire(import.meta.url);
+  const requireFromRunner = createRequire(requireHere.resolve("@workflow-catalog/runner/package.json"));
+  const loaded = (await import(pathToFileURL(requireFromRunner.resolve("@hono/node-server")).href)) as {
+    serve?: NodeServe;
+    default?: { serve?: NodeServe };
+  };
+  const serve = loaded.serve ?? loaded.default?.serve;
+  if (!serve) throw new Error("real-bridge-harness: @hono/node-server has no serve()");
+  return serve;
+}
+
 /**
- * A free TCP port on 127.0.0.1, discovered by briefly binding a throwaway
- * server to port 0 (the OS assigns one) and reading it back. P07-B
- * revision 1, B1: `src/shared/bridge-client.realbridge.test.ts` never
- * drives a real browser and has no reason to claim 4310 specifically --
- * doing so anyway was a real, observed failure (11/11 of that file's tests
- * failing twice, plus an afterEach TypeError) when something else already
- * held it, e.g. an owner's own `npm run runner` during the smoke test.
- * `runner/server/app.ts`'s own `listen()` accepts an explicit port but
- * builds its returned `url` from the port it was *asked* for, not the one
- * actually bound (so asking it for port 0 directly would report
- * "http://127.0.0.1:0", not the real port) -- out of this packet's
- * allowlist to fix there, so the discovery happens here instead, and the
- * one real port number this resolves to is then passed to both
- * `createBridgeApp` and `listen` explicitly, which is all either needs.
+ * Serves a bridge on 127.0.0.1 port 0 and reads back the port the OS
+ * assigned, holding it from the first moment. P07-B revision 1, B1:
+ * `src/shared/bridge-client.realbridge.test.ts` never drives a real
+ * browser and has no reason to claim 4310 specifically -- doing so anyway
+ * was a real, observed failure (11/11 of that file's tests failing twice,
+ * plus an afterEach TypeError) when something else already held it, e.g.
+ * an owner's own `npm run runner` during the smoke test.
+ *
+ * P07-B revision 2 (reviewer nit): revision 1 found a free port by binding
+ * a throwaway server to port 0, closing it, then binding the bridge to
+ * that number -- anything else could take the port in between. The
+ * runner's own `listen()` can't be asked for port 0 (it builds its `url`
+ * from the port it was given and never exposes the bound one), so this
+ * binds with the same `serve` itself. The app is built once the port is
+ * known, because the bridge's Host-header allowlist needs it; the server's
+ * fetch reaches it through a late binding. No request can arrive before
+ * then: nothing knows the port until the listening callback has run.
  */
-export function findEphemeralPort(): Promise<number> {
+async function listenOnEphemeralPort(buildApp: (port: number) => BridgeApp): Promise<{ app: BridgeApp; port: number; bridge: RunningBridge }> {
+  const serve = await loadNodeServe();
+  let app: BridgeApp | undefined;
   return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (address === null || typeof address === "string") {
-        probe.close();
-        reject(new Error("findEphemeralPort: could not read back a bound port"));
-        return;
-      }
-      const { port } = address;
-      probe.close((closeError) => (closeError ? reject(closeError) : resolve(port)));
-    });
+    const server = serve(
+      {
+        fetch: (...args) => (app ? app.fetch(...args) : new Response(null, { status: 503 })),
+        port: 0,
+        hostname: "127.0.0.1",
+      },
+      (info) => {
+        server.off("error", reject);
+        const built = buildApp(info.port);
+        app = built;
+        resolve({
+          app: built,
+          port: info.port,
+          bridge: {
+            url: `http://127.0.0.1:${info.port}`,
+            close: () =>
+              new Promise<void>((done) => {
+                server.close(() => done());
+                // Idle keep-alive sockets must not hold the shutdown open
+                // (the same as runner/server/app.ts's listen()).
+                server.closeAllConnections();
+              }),
+          },
+        });
+      },
+    );
+    server.once("error", reject);
   });
 }
 
 export interface BridgeHarness {
   readonly ctx: RunnerContext;
   readonly clock: ManualClock;
-  readonly app: ReturnType<typeof createBridgeApp>;
+  readonly app: BridgeApp;
   readonly port: number;
   /** Mutable: closed and re-`listen()`-ed in place by the offline/reconnect
    * gate-4 scenario, reusing the same `app`/`ctx` so the device stays
@@ -91,14 +138,14 @@ export interface BridgeHarness {
 const workspaceDirs: string[] = [];
 
 export interface StartBridgeHarnessOptions {
-  /** Defaults to BRIDGE_PORT (4310) -- pass `await findEphemeralPort()`
-   * for a vitest-only harness that never needs to be the one real
-   * extension's fixed bridge origin (P07-B revision 1, B1). */
-  readonly port?: number;
+  /** Defaults to BRIDGE_PORT (4310). `"ephemeral"` binds port 0 and uses
+   * whichever port the OS assigned (`listenOnEphemeralPort`) -- for a
+   * vitest-only harness that never needs to be the one real extension's
+   * fixed bridge origin (P07-B revision 1, B1). */
+  readonly port?: number | "ephemeral";
 }
 
 export async function startBridgeHarness(options: StartBridgeHarnessOptions = {}): Promise<BridgeHarness> {
-  const port = options.port ?? BRIDGE_PORT;
   const root = await mkdtemp(path.join(os.tmpdir(), "wc-p07b-bridge-"));
   workspaceDirs.push(root);
   const clock = new ManualClock();
@@ -108,7 +155,13 @@ export async function startBridgeHarness(options: StartBridgeHarnessOptions = {}
   // "The bridge": "journals a job_capture with no handler as no_handler"),
   // which is exactly the real, shipped P02 behaviour this repo is at right
   // now -- not a stand-in for a handler this harness doesn't have.
-  const app = createBridgeApp({ ctx, modules: [], uiToken: undefined, port });
+  const buildApp = (port: number): BridgeApp => createBridgeApp({ ctx, modules: [], uiToken: undefined, port });
+  if (options.port === "ephemeral") {
+    const { app, port, bridge } = await listenOnEphemeralPort(buildApp);
+    return { ctx, clock, app, port, bridge };
+  }
+  const port = options.port ?? BRIDGE_PORT;
+  const app = buildApp(port);
   const bridge = await listen(app, port);
   return { ctx, clock, app, port, bridge };
 }

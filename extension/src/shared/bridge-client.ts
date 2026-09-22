@@ -22,7 +22,7 @@ import {
   type PairResponse,
   type StatusResponse,
 } from "@workflow-catalog/contracts";
-import { clearDeviceToken, getDeviceToken, setPairingOriginMismatch } from "./storage";
+import { flagOriginMismatch, forgetInvalidToken, getDeviceToken } from "./storage";
 
 /** Loopback only (mvp-spec §5); the manifest's one host permission. */
 export const BRIDGE_ORIGIN = "http://127.0.0.1:4310";
@@ -72,10 +72,12 @@ const NETWORK_ERROR: BridgeError = {
  * wording -- a request that connected but never answered is a different
  * fact for a person debugging it than one that never connected at all,
  * even though both are `code: "network_error"` (the outbox/popup still
- * queue-and-retry both exactly the same way, see shared/outbox.ts). */
+ * queue-and-retry both exactly the same way, see shared/outbox.ts).
+ * Revision 2 polish: with a next step -- it may just be busy; if it stays
+ * silent, restarting it is the fix. */
 const TIMEOUT_ERROR: BridgeError = {
   code: "network_error",
-  message: "The runner isn't responding.",
+  message: "The runner isn't responding. Wait a moment and try again, or restart it with `npm run runner`.",
 };
 
 /** A runner that accepts the TCP connection but never answers must not
@@ -85,6 +87,16 @@ const REQUEST_TIMEOUT_MS = 5000;
 const NOT_PAIRED: BridgeError = {
   code: "not_paired",
   message: "This device isn't paired yet. Pair it above first.",
+};
+
+/** P07-B revision 2, B4: the bridge refused a token that a new pairing
+ * replaced while the request was in flight -- twice in a row, since
+ * `authedRequest` already retries once with the replacement. Says nothing
+ * about the pairing this browser holds now, so shared/outbox.ts retries it
+ * (never pauses it). */
+const TOKEN_REPLACED: BridgeError = {
+  code: "token_replaced",
+  message: "This browser was paired again while sending. It will be sent again shortly.",
 };
 
 function invalidResponse(what: string): BridgeError {
@@ -164,47 +176,85 @@ export interface CreateBridgeClientOptions {
   /** Overridable for tests only; defaults to shared/storage.ts's getDeviceToken. */
   readonly getToken?: () => Promise<{ token: string } | null>;
   /**
-   * Called once whenever an authenticated request comes back 401
-   * (`token_invalid`: unknown, revoked or expired) -- overridable for
-   * tests only; defaults to shared/storage.ts's `clearDeviceToken`. P07-B
-   * revision 1, B3: a dead token must stop being offered as "paired"
-   * anywhere in the UI, not just get a one-time error message -- clearing
-   * it here, in the one place every authenticated route already funnels
-   * through, means Pairing and Status both naturally show "not paired" on
-   * their next render, wherever the 401 was actually observed.
+   * Called with the refused token whenever the bridge answers an
+   * authenticated request 401 (`token_invalid`: unknown, revoked or
+   * expired) and that token is still the stored one -- overridable for
+   * tests only; defaults to shared/storage.ts's `forgetInvalidToken`, which
+   * forgets the token only if it is still stored. P07-B revision 1, B3: a
+   * dead token must stop being offered as "paired" anywhere in the UI, not
+   * just get a one-time error message -- clearing it here, in the one
+   * place every authenticated route already funnels through, means Pairing
+   * and Status both naturally show "not paired" on their next render,
+   * wherever the 401 was actually observed.
    */
-  readonly onTokenInvalid?: () => Promise<void>;
+  readonly onTokenInvalid?: (token: string) => Promise<void>;
   /**
-   * Called once whenever an authenticated request comes back 403
-   * (`origin_not_allowed`) -- overridable for tests only; defaults to
-   * shared/storage.ts's `setPairingOriginMismatch(true)`. P07-B revision 1,
-   * B3: `GET /status` never carries an Origin header (Chrome doesn't send
-   * one on a GET), so the options page's own status check can never itself
-   * observe this -- this is the only channel that lets it react to a 403
+   * Called with the refused token whenever the bridge answers an
+   * authenticated request 403 (`origin_not_allowed`) and that token is
+   * still the stored one -- overridable for tests only; defaults to
+   * shared/storage.ts's `flagOriginMismatch`. P07-B revision 1, B3: `GET
+   * /status` never carries an Origin header (Chrome doesn't send one on a
+   * GET), so the options page's own status check can never itself observe
+   * this -- this is the only channel that lets it react to a 403
    * `job_capture`'s `POST /events` saw.
    */
-  readonly onOriginMismatch?: () => Promise<void>;
+  readonly onOriginMismatch?: (token: string) => Promise<void>;
+}
+
+/** A 401 or 403 in the bridge's own error envelope. An `unknown_error`
+ * with the same status is not the bridge (something else answering on the
+ * port), so it says nothing about this browser's token. */
+function isBridgeAuthRefusal(error: BridgeError): boolean {
+  return (error.status === 401 || error.status === 403) && error.code !== "unknown_error";
 }
 
 /** The real, `fetch`-backed `BridgeClient`. */
 export function createBridgeClient(options: CreateBridgeClientOptions = {}): BridgeClient {
   const baseUrl = options.baseUrl ?? BRIDGE_ORIGIN;
   const getToken = options.getToken ?? getDeviceToken;
-  const onTokenInvalid = options.onTokenInvalid ?? clearDeviceToken;
-  const onOriginMismatch = options.onOriginMismatch ?? (() => setPairingOriginMismatch(true));
+  const onTokenInvalid = options.onTokenInvalid ?? forgetInvalidToken;
+  const onOriginMismatch = options.onOriginMismatch ?? flagOriginMismatch;
 
+  function sendWithToken(path: string, init: RequestInit, token: string): Promise<BridgeResult<unknown>> {
+    return request(baseUrl, path, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${token}` } });
+  }
+
+  async function reportRefusal(error: BridgeError, token: string): Promise<void> {
+    if (error.status === 401) await onTokenInvalid(token);
+    else await onOriginMismatch(token);
+  }
+
+  /**
+   * P07-B revision 2, B4: a bridge 401/403 is only about the token that
+   * was sent. If a pairing replaced the stored token while the request was
+   * in flight (the options page pairing while the worker's alarm flush is
+   * mid-request), the refusal says nothing about the new pairing: retry
+   * once with the new token, and never let the old token's refusal clear
+   * or flag the new one. Revision 1 cleared whatever token was stored on
+   * any 401, undoing the pairing that had just succeeded.
+   *
+   * Resending is safe: the bridge checks the token and origin before it
+   * reads the body, so a refused `POST /events` recorded nothing.
+   */
   async function authedRequest(path: string, init: RequestInit = {}): Promise<BridgeResult<unknown>> {
     const stored = await getToken();
     if (!stored) return { ok: false, error: NOT_PAIRED };
-    const result = await request(baseUrl, path, {
-      ...init,
-      headers: { ...(init.headers ?? {}), authorization: `Bearer ${stored.token}` },
-    });
-    if (!result.ok) {
-      if (result.error.status === 401) await onTokenInvalid();
-      else if (result.error.status === 403) await onOriginMismatch();
+    const result = await sendWithToken(path, init, stored.token);
+    if (result.ok || !isBridgeAuthRefusal(result.error)) return result;
+
+    const current = await getToken();
+    if (current === null || current.token === stored.token) {
+      // Still the same token (the hook re-checks, too), or it's already
+      // gone -- Un-pair, or another context's 401 got there first.
+      await reportRefusal(result.error, stored.token);
+      return result;
     }
-    return result;
+    const retried = await sendWithToken(path, init, current.token);
+    if (retried.ok || !isBridgeAuthRefusal(retried.error)) return retried;
+    const latest = await getToken();
+    if (latest !== null && latest.token !== current.token) return { ok: false, error: TOKEN_REPLACED };
+    await reportRefusal(retried.error, current.token);
+    return retried;
   }
 
   return {

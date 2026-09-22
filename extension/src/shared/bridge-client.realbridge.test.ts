@@ -3,7 +3,7 @@
  * P07-B acceptance gates, driven against the REAL P02 bridge -- not a fake.
  * Starts the actual `createBridgeApp` (runner/server/app.ts) listening on
  * an ephemeral 127.0.0.1 port (P07-B revision 1, B1 -- see
- * `findEphemeralPort`'s own doc comment: this file never drives a real
+ * `listenOnEphemeralPort`'s own doc comment: this file never drives a real
  * browser, so it has no reason to claim the one port 4310 the real
  * extension needs, and doing so anyway was a real, observed failure when
  * something else already held it) against a fresh temp workspace per
@@ -29,7 +29,6 @@ import {
   cleanScratchWorkspaces,
   clientForOrigin,
   fictionalJobCapture,
-  findEphemeralPort,
   pairFictionalDevice as pairFictionalDeviceAt,
   startBridgeHarness,
   withChromeOrigin,
@@ -49,7 +48,7 @@ const OTHER_EXTENSION_ORIGIN = "chrome-extension://ponmlkjihgfedcbaponmlkjihgfed
 let harness: BridgeHarness;
 
 beforeEach(async () => {
-  harness = await startBridgeHarness({ port: await findEphemeralPort() });
+  harness = await startBridgeHarness({ port: "ephemeral" });
 });
 
 afterEach(async () => {

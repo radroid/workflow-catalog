@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearDeviceToken,
+  flagOriginMismatch,
+  forgetInvalidToken,
+  forgetPairing,
   getDeviceToken,
   getLastJobCapture,
+  getPairedBefore,
+  getPairingExpired,
+  getPairingOriginMismatch,
+  recordPairing,
   setDeviceToken,
   setLastJobCapture,
 } from "./storage";
@@ -83,6 +90,59 @@ describe("device token storage", () => {
     });
     await clearDeviceToken();
     expect(await getDeviceToken()).toBeNull();
+  });
+});
+
+describe("P07-B revision 2, B4: the 401/403 hooks only touch the token the bridge refused", () => {
+  const OLD = { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "old-token", pairedAt: "2026-09-22T09:00:00.000Z" };
+  const NEW = { deviceId: "9c1d7a1f-3a2b-4d66-8e4f-1b2c3d4e5f60", token: "new-token", pairedAt: "2026-09-22T09:05:00.000Z" };
+
+  it("forgetInvalidToken clears the stored token, and records the expiry, when it is the refused one", async () => {
+    await recordPairing(OLD);
+    await forgetInvalidToken("old-token");
+    expect(await getDeviceToken()).toBeNull();
+    expect(await getPairingExpired()).toBe(true);
+  });
+
+  it("forgetInvalidToken leaves a newer pairing alone", async () => {
+    await recordPairing(NEW);
+    await forgetInvalidToken("old-token");
+    expect(await getDeviceToken()).toEqual(NEW);
+    expect(await getPairingExpired()).toBe(false);
+  });
+
+  it("forgetInvalidToken does nothing once the token is already gone (Un-pair got there first)", async () => {
+    await forgetInvalidToken("old-token");
+    expect(await getPairingExpired()).toBe(false);
+  });
+
+  it("flagOriginMismatch flags only the stored token", async () => {
+    await recordPairing(NEW);
+    await flagOriginMismatch("old-token");
+    expect(await getPairingOriginMismatch()).toBe(false);
+    await flagOriginMismatch("new-token");
+    expect(await getPairingOriginMismatch()).toBe(true);
+  });
+
+  it("recordPairing clears both flags and remembers the pairing; forgetPairing clears the token and flags but not that memory", async () => {
+    expect(await getPairedBefore()).toBe(false);
+    await recordPairing(OLD);
+    await flagOriginMismatch("old-token");
+    await forgetInvalidToken("old-token");
+    expect(await getPairingOriginMismatch()).toBe(true);
+    expect(await getPairingExpired()).toBe(true);
+
+    await recordPairing(NEW);
+    expect(await getPairingOriginMismatch()).toBe(false);
+    expect(await getPairingExpired()).toBe(false);
+    expect(await getPairedBefore()).toBe(true);
+
+    await flagOriginMismatch("new-token");
+    await forgetPairing();
+    expect(await getDeviceToken()).toBeNull();
+    expect(await getPairingOriginMismatch()).toBe(false);
+    expect(await getPairedBefore(), "the next code still comes from npm run pair").toBe(true);
+    expect(fakeStorage._localData).toEqual({});
   });
 });
 
