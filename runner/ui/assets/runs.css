@@ -1,0 +1,86 @@
+/* Runs page: extends runner.css tokens (docs/spec/visuals/theme.css). Kept
+   separate from runner.css, which P08-A does not own. */
+
+/* The page's one persistent live region (role="status"): present throughout
+   the page's life, empty and visually silent until there is a success or
+   error to announce, so both sighted people and screen readers get the same
+   one message. */
+.status-message {
+  margin: 0 0 1rem;
+  overflow-wrap: anywhere;
+}
+.status-message:empty {
+  display: none;
+}
+.status-message.error {
+  color: var(--destructive);
+}
+.status-message.success {
+  color: var(--muted-foreground);
+}
+
+.runs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.run-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+
+.run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.run-kind {
+  font-weight: 500;
+}
+
+.run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+
+.run-reason {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.run-path {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.run-json {
+  margin-top: 0.5rem;
+}
+.run-json summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+.run-json pre {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  background: var(--muted);
+  border-radius: calc(var(--radius) - 2px);
+  overflow-x: auto;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

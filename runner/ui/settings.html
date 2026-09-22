@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Settings · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/settings.css" />
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1>Settings</h1>
+      <p class="lede">Provider, workspace, schedules, budget and pairing live here, one section per concern.</p>
+
+      <!-- The page's one persistent live region: every section's success and error is announced here. -->
+      <p id="status-message" role="status" aria-live="polite" class="status-message"></p>
+
+      <section class="card" aria-labelledby="budget-title" id="budget-section">
+        <div class="card-head">
+          <h2 id="budget-title">Budget</h2>
+        </div>
+        <p class="muted small">A daily run cap and a per-run item cap, so a busy day or a schedule can never burn quota silently. Exceeding either pauses runs with a reason, shown here and on the board.</p>
+
+        <div id="budget-pause" class="notice decision" hidden>
+          <p class="small">
+            <strong>Paused:</strong> <span id="budget-pause-reason"></span>
+            <span id="budget-pause-since" class="muted"></span>
+          </p>
+          <button class="button" type="button" id="budget-resume">Resume</button>
+        </div>
+
+        <p class="small" id="budget-usage">Runs used today: <span id="budget-usage-value">…</span></p>
+
+        <form id="budget-form">
+          <div class="field">
+            <label for="daily-run-limit">Daily run limit</label>
+            <input type="number" id="daily-run-limit" name="dailyRunLimit" min="1" max="50" step="1" required inputmode="numeric" />
+          </div>
+          <div class="field">
+            <label for="item-cap">Per-run item cap</label>
+            <input type="number" id="item-cap" name="itemCap" min="1" max="20" step="1" required inputmode="numeric" />
+          </div>
+          <button class="button" type="submit" id="budget-save">Save</button>
+        </form>
+      </section>
+    </main>
+    <script type="module" src="/ui/assets/settings-budget.js"></script>
+  </body>
+</html>

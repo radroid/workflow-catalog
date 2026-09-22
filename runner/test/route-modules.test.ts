@@ -88,9 +88,9 @@ describe("route modules", () => {
     expect(() => validateRouteModule("x", null)).toThrow(/export default defineRouteModule/);
   });
 
-  it("loads the runner's own modules: status, devices, pairing, model", async () => {
+  it("loads the runner's own modules: status, devices, pairing, model, runs", async () => {
     const modules = await loadRouteModules(ROUTES_DIR);
-    expect(modules.map((m) => m.name)).toEqual(["devices", "model", "pairing", "status"]);
+    expect(modules.map((m) => m.name)).toEqual(["devices", "model", "pairing", "runs", "status"]);
     expect(buildEventRegistry(modules).size).toBe(0);
   });
 

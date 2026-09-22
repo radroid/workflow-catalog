@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Runs · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/runs.css" />
+    <script type="module" src="/ui/assets/runs.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1>Runs</h1>
+      <p class="lede">Every prepare and review run this instance has made, newest first. Each record is a file on this computer that you can open.</p>
+
+      <!-- The page's one persistent live region: every success and error is announced here. Empty and visually silent until there is something to say. -->
+      <p id="status-message" role="status" aria-live="polite" class="status-message"></p>
+      <p id="invalid-note" class="notice decision small" hidden></p>
+
+      <ul class="runs-list" id="runs-list">
+        <li class="muted">Loading…</li>
+      </ul>
+      <p id="empty-state" class="muted" hidden>No runs yet…</p>
+    </main>
+  </body>
+</html>
