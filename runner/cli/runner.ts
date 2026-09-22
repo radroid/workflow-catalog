@@ -20,7 +20,8 @@ import { fail } from "./args.ts";
  * npm run runner: mode A (eve-spike.md). Checks the settings and ports,
  * builds when needed, then hands over to lib/launcher.ts, which starts
  * `eve start` on 127.0.0.1:3210 and the bridge on 127.0.0.1:4310 (both
- * loopback only) and stops both on Ctrl-C or SIGTERM.
+ * loopback only) and stops both on Ctrl-C, SIGTERM or SIGHUP (the terminal
+ * closing).
  *
  * eve's output is prefixed [eve] and goes to this terminal only; it is never
  * written to a file. It can contain personal data (a failed model call prints
@@ -45,6 +46,13 @@ function pipeWithPrefix(child: ChildProcess, prefix: string): void {
   if (child.stdout) createInterface({ input: child.stdout }).on("line", (line) => process.stdout.write(`${prefix}${line}\n`));
   if (child.stderr) createInterface({ input: child.stderr }).on("line", (line) => process.stderr.write(`${prefix}${line}\n`));
 }
+
+// Closing the terminal sends SIGHUP, and lib/launcher.ts then stops eve.
+// From then on, writing to the terminal fails (EPIPE, or EIO on a TTY), and
+// with no listener that error would crash this process before eve is
+// stopped. The output is lost either way, so the errors are ignored.
+process.stdout.on("error", () => undefined);
+process.stderr.on("error", () => undefined);
 
 const settings = await loadSettings();
 const model = settings.model;
@@ -103,8 +111,8 @@ const launched = await launchRunner({
       cwd: RUNNER_DIR,
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
-      // Its own process group, so Ctrl-C reaches only this launcher, which
-      // then stops eve in order (lib/launcher.ts).
+      // Its own process group, so Ctrl-C and the terminal's SIGHUP reach only
+      // this launcher, which then stops eve in order (lib/launcher.ts).
       detached: true,
     });
     eve.once("error", (error) => console.error(`[runner] Could not start eve: ${error.message}`));

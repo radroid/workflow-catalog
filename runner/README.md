@@ -83,7 +83,7 @@ write `pnpm run setup`: a bare `pnpm setup` is pnpm's own command.
 | `setup` | Checks Node 24, chooses the workspace, connects the provider, writes `runner/.env.local`, prints a pairing code. Asks questions in a terminal; `--yes` never asks. |
 | `setup -- --forget` | Lists, then removes, everything the runner stored (see Uninstall). `--dry-run` only lists; `--keep-workspace` keeps your data. |
 | `doctor` | The install checklist. `--json` for machines, `--live` to verify the model with one short call. Exits 1 while a required item fails. |
-| `runner` | Builds when needed, then starts eve and the bridge on loopback. Ctrl-C or SIGTERM stops both, even during startup (`lib/launcher.ts`: route modules load and the bridge is built before eve is spawned, so a startup failure never leaves eve running). |
+| `runner` | Builds when needed, then starts eve and the bridge on loopback. Ctrl-C, SIGTERM or closing the terminal (SIGHUP) stops both, even during startup (`lib/launcher.ts`: route modules load and the bridge is built before eve is spawned, so a startup failure never leaves eve running). |
 | `pair` | A new pairing code (10 minutes, single use). |
 | `ui` | A new one-time sign-in link for the local UI. |
 | `eval` | `eve eval --strict` on the fixture agent (no model, no credentials). |

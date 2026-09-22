@@ -38,7 +38,7 @@ class FakeEve extends EventEmitter implements EveProcess {
 }
 
 class FakeSignals extends EventEmitter {
-  send(signal: "SIGINT" | "SIGTERM"): void {
+  send(signal: "SIGINT" | "SIGTERM" | "SIGHUP"): void {
     this.emit(signal);
   }
 }
@@ -51,8 +51,8 @@ interface Harness {
   readonly exits: number[];
   /** Resolves once eve has been spawned. */
   readonly spawnedOnce: Promise<FakeEve>;
-  /** SIGINT and SIGTERM listeners already registered at the moment eve was spawned. */
-  readonly listenersAtSpawn: Array<{ SIGINT: number; SIGTERM: number }>;
+  /** SIGINT, SIGTERM and SIGHUP listeners already registered at the moment eve was spawned. */
+  readonly listenersAtSpawn: Array<{ SIGINT: number; SIGTERM: number; SIGHUP: number }>;
 }
 
 async function harness(overrides: Partial<LauncherDeps> & { eve?: () => FakeEve } = {}): Promise<Harness> {
@@ -67,13 +67,13 @@ async function harness(overrides: Partial<LauncherDeps> & { eve?: () => FakeEve 
     announce = resolve;
   });
   const { eve: makeEve, ...rest } = overrides;
-  const listenersAtSpawn: Array<{ SIGINT: number; SIGTERM: number }> = [];
+  const listenersAtSpawn: Array<{ SIGINT: number; SIGTERM: number; SIGHUP: number }> = [];
   const deps: LauncherDeps = {
     ctx,
     routesDir: await tempDir("wc-routes-"),
     uiToken: UI_TOKEN,
     spawnEve: () => {
-      listenersAtSpawn.push({ SIGINT: signals.listenerCount("SIGINT"), SIGTERM: signals.listenerCount("SIGTERM") });
+      listenersAtSpawn.push({ SIGINT: signals.listenerCount("SIGINT"), SIGTERM: signals.listenerCount("SIGTERM"), SIGHUP: signals.listenerCount("SIGHUP") });
       const eve = makeEve ? makeEve() : new FakeEve();
       eve.once("exit", () => events.push("eve exited"));
       spawned.push(eve);
@@ -118,7 +118,7 @@ describe("launcher: nothing is left running when startup fails", () => {
     const launching = launchRunner(h.deps);
     const eve = await h.spawnedOnce;
     // The handlers were already registered when eve was spawned, so no signal can fall in between.
-    expect(h.listenersAtSpawn).toEqual([{ SIGINT: 1, SIGTERM: 1 }]);
+    expect(h.listenersAtSpawn).toEqual([{ SIGINT: 1, SIGTERM: 1, SIGHUP: 1 }]);
     h.signals.send("SIGTERM");
     await expect(launching).resolves.toEqual({ state: "stopped" });
     expect(eve.received).toEqual(["SIGTERM"]);
@@ -126,6 +126,21 @@ describe("launcher: nothing is left running when startup fails", () => {
     expect(listen).not.toHaveBeenCalled();
     expect(h.exits).toEqual([]);
     expect(h.signals.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("stops eve when the terminal closes (SIGHUP) while waiting for it to be ready", async () => {
+    // eve runs in its own process group, so the terminal's SIGHUP reaches only the launcher.
+    const listen = vi.fn();
+    const h = await harness({ eveReady: async () => false, listen });
+    const launching = launchRunner(h.deps);
+    const eve = await h.spawnedOnce;
+    h.signals.send("SIGHUP");
+    await expect(launching).resolves.toEqual({ state: "stopped" });
+    expect(eve.received).toEqual(["SIGTERM"]);
+    expect(h.events).toEqual(["eve exited"]);
+    expect(listen).not.toHaveBeenCalled();
+    expect(h.exits).toEqual([]);
+    expect(h.signals.listenerCount("SIGHUP")).toBe(0);
   });
 
   it("removes its signal handlers when eve cannot be spawned at all", async () => {
@@ -137,6 +152,7 @@ describe("launcher: nothing is left running when startup fails", () => {
     await expect(launchRunner(h.deps)).rejects.toThrow(/spawn EAGAIN/);
     expect(h.signals.listenerCount("SIGTERM")).toBe(0);
     expect(h.signals.listenerCount("SIGINT")).toBe(0);
+    expect(h.signals.listenerCount("SIGHUP")).toBe(0);
   });
 
   it("stops eve when the bridge cannot listen", async () => {
@@ -208,6 +224,15 @@ describe("launcher: once ready", () => {
     expect(h.events).toEqual(["bridge listening", "bridge closed", "eve exited"]);
     // A second Ctrl-C while stopping changes nothing.
     h.signals.send("SIGINT");
+    expect(h.spawned[0]?.received).toEqual(["SIGTERM"]);
+  });
+
+  it("stops the bridge, then eve when the terminal closes (SIGHUP), and exits 0", async () => {
+    const h = await harness();
+    expect((await launchRunner(h.deps)).state).toBe("ready");
+    h.signals.send("SIGHUP");
+    await vi.waitFor(() => expect(h.exits).toEqual([0]));
+    expect(h.events).toEqual(["bridge listening", "bridge closed", "eve exited"]);
     expect(h.spawned[0]?.received).toEqual(["SIGTERM"]);
   });
 

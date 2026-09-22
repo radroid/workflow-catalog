@@ -11,9 +11,10 @@ import { loadRouteModules, type StopFunction } from "../server/route-modules.ts"
  * 1. Everything that can fail without a child process runs first. The route
  *    modules load and validate, and the bridge app is built; a duplicate
  *    event handler throws there.
- * 2. The SIGINT/SIGTERM handlers are registered, and eve is spawned straight
- *    after. From then on a signal stops eve, even while waiting for it to be
- *    ready.
+ * 2. The SIGINT/SIGTERM/SIGHUP handlers are registered, and eve is spawned
+ *    straight after. From then on a signal stops eve, even while waiting for
+ *    it to be ready. SIGHUP is the terminal closing: eve runs in its own
+ *    process group, so only this launcher gets it, and must stop eve.
  * 3. Wait for eve's health check, listen on 4310, then run the modules'
  *    start hooks.
  *
@@ -32,9 +33,9 @@ export interface EveProcess {
   once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
 }
 
-type StopSignal = "SIGINT" | "SIGTERM";
+type StopSignal = "SIGINT" | "SIGTERM" | "SIGHUP";
 
-/** Where SIGINT and SIGTERM come from: `process` in the CLI. */
+/** Where SIGINT, SIGTERM and SIGHUP come from: `process` in the CLI. */
 export interface SignalSource {
   on(signal: StopSignal, listener: () => void): unknown;
   off(signal: StopSignal, listener: () => void): unknown;
@@ -102,9 +103,11 @@ export async function launchRunner(deps: LauncherDeps): Promise<LaunchResult> {
   };
   deps.signals.on("SIGINT", onSignal);
   deps.signals.on("SIGTERM", onSignal);
+  deps.signals.on("SIGHUP", onSignal);
   const removeSignalHandlers = (): void => {
     deps.signals.off("SIGINT", onSignal);
     deps.signals.off("SIGTERM", onSignal);
+    deps.signals.off("SIGHUP", onSignal);
   };
   let spawned: EveProcess;
   try {
