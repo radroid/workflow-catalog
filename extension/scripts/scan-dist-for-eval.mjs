@@ -57,11 +57,26 @@ const REMOTE_DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'`]https?:\/\//;
 // "no eval available" — the exact outcome jitless mode assumes already.
 // Allowed by this one exact literal snippet (observed in the current
 // built output — the minifier's own choice of backtick-delimited empty
-// string, `Function(``)`), not by filename or a broader pattern: any
-// *other* eval/Function usage anywhere, including a future change to
-// zod's own bundled probe that no longer matches this snippet verbatim,
-// still fails the scan.
+// string, `Function(``)`), not by filename or a broader pattern.
+//
+// The exception removes the snippet's own characters, never the line
+// around it: every exact occurrence is cut out of the line and the Function
+// pattern is tested against what is left (`withoutZodProbe` below). That
+// matters because the built zod-jitless-*.js chunk is ONE ~10 KB line — an
+// earlier `!line.includes(snippet)` exempted the whole chunk, and a planted
+// `new Function(code)()` minified onto that same line passed the scan. Any
+// *other* Function usage, on that line or anywhere else, including a future
+// change to zod's own bundled probe that no longer matches this snippet
+// verbatim, still fails the scan. Each occurrence is replaced with a space,
+// not "": gluing the neighbours together could turn `x$<snippet>Function(e)`
+// into `x$Function(e)`, which NEW_FUNCTION_RE's lookbehind would skip.
+// NEW_FUNCTION_RE is the only pattern this exception applies to — the
+// snippet contains no `eval`, remote script, or import.
 const ZOD_JITLESS_PROBE_SNIPPET = "try{return Function(``),!0}catch{return!1}";
+
+function withoutZodProbe(line) {
+  return line.split(ZOD_JITLESS_PROBE_SNIPPET).join(" ");
+}
 
 const JS_EXTENSIONS = new Set([".js", ".mjs", ".cjs"]);
 const HTML_EXTENSIONS = new Set([".html", ".htm"]);
@@ -101,7 +116,7 @@ export function scanDistForViolations(distDir) {
       if ((isJs || isHtml) && EVAL_RE.test(line)) {
         offenses.push(`${rel}:${lineNo}: forbidden eval reference in built output`);
       }
-      if ((isJs || isHtml) && NEW_FUNCTION_RE.test(line) && !line.includes(ZOD_JITLESS_PROBE_SNIPPET)) {
+      if ((isJs || isHtml) && NEW_FUNCTION_RE.test(withoutZodProbe(line))) {
         offenses.push(`${rel}:${lineNo}: forbidden Function(...) constructor call in built output`);
       }
       if (isHtml && REMOTE_SCRIPT_SRC_RE.test(line)) {

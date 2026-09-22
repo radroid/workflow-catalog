@@ -92,6 +92,45 @@ describe("scanDistForViolations", () => {
     expect(offenses[0]).toMatch(/:2: forbidden Function/);
   });
 
+  // Revision 2: the built zod-jitless-*.js chunk is a single ~10 KB line, so
+  // an exception that exempts the whole *line* exempts the whole chunk. The
+  // reviewer's plant (`new Function(code)()` in src/shared/zod-jitless.ts)
+  // minified to exactly this shape and the build still printed "scan clean".
+  it("flags a real Function(...) call on the SAME line as zod's allowed probe (the reviewer's minified plant)", () => {
+    write(
+      "zod-jitless-abc123.js",
+      'var p=r(()=>{if(Q.jitless)return!1;try{return Function(``),!0}catch{return!1}});function ce(e){return Function(e)()}',
+    );
+    const offenses = scanDistForViolations(dir);
+    expect(offenses).toEqual(["zod-jitless-abc123.js:1: forbidden Function(...) constructor call in built output"]);
+  });
+
+  it("flags an unminified new Function(...) on the same line as zod's allowed probe", () => {
+    write(
+      "zod-jitless-abc123.js",
+      'var p=r(()=>{try{return Function(``),!0}catch{return!1}});const run=(code)=>new Function(code)();',
+    );
+    expect(scanDistForViolations(dir)).toEqual([
+      "zod-jitless-abc123.js:1: forbidden Function(...) constructor call in built output",
+    ]);
+  });
+
+  it("allows a line whose only Function(...) calls are exact copies of zod's probe (every occurrence is removed, not just the first)", () => {
+    write(
+      "zod-jitless-abc123.js",
+      'var p=r(()=>{try{return Function(``),!0}catch{return!1}}),q=r(()=>{try{return Function(``),!0}catch{return!1}});',
+    );
+    expect(scanDistForViolations(dir)).toEqual([]);
+  });
+
+  it("does not let the removed probe glue its neighbours together and hide a Function(...) call right after it", () => {
+    // Removing the probe with "" would leave `x$Function(e)`, which the
+    // `(?<![\w$.])` lookbehind skips as a longer identifier. The scanner
+    // removes it with a space instead, so the call is still seen.
+    write("worker.js", "x$try{return Function(``),!0}catch{return!1}Function(e)");
+    expect(scanDistForViolations(dir)).toEqual(["worker.js:1: forbidden Function(...) constructor call in built output"]);
+  });
+
   it("flags a remote <script src> in an HTML file", () => {
     write("popup.html", '<script src="https://evil.example/payload.js"></script>');
     const offenses = scanDistForViolations(dir);
