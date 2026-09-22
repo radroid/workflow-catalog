@@ -9,12 +9,16 @@ export const metadata = { title: "Accept invite · workflow catalog" };
 
 interface InvitePageProps {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ error?: string }>;
+  // `n`: see lib/actions/invite.ts's refused — a per-attempt nonce, used
+  // only as the ErrorAlert element's key below so a second identical
+  // refusal still remounts (and so re-focuses/re-announces) instead of
+  // re-rendering the same element in place.
+  searchParams: Promise<{ error?: string; n?: string }>;
 }
 
 export default async function InvitePage({ params, searchParams }: InvitePageProps) {
   const { token } = await params;
-  const { error: errorCode } = await searchParams;
+  const { error: errorCode, n: nonce } = await searchParams;
   const error = inviteErrorMessage(errorCode);
 
   const db = await getDb();
@@ -31,7 +35,7 @@ export default async function InvitePage({ params, searchParams }: InvitePagePro
         <>
           <p className="lede">Choose a display name to sign in. It is the only thing the catalog stores about you.</p>
 
-          {error ? <ErrorAlert id="invite-error" message={error} /> : null}
+          {error ? <ErrorAlert key={nonce} id="invite-error" message={error} /> : null}
 
           <form action={acceptInviteAction} className="card pad">
             <input type="hidden" name="token" value={token} />

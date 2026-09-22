@@ -11,7 +11,11 @@ import { ErrorAlert } from "../../components/error-alert";
 export const metadata = { title: "Admin · workflow catalog" };
 
 interface AdminPageProps {
-  searchParams: Promise<{ error?: string }>;
+  // `n`: see lib/actions/owner.ts's adminError — a per-attempt nonce, used
+  // only as the ErrorAlert element's key below so a second identical
+  // refusal still remounts (and so re-focuses/re-announces) instead of
+  // re-rendering the same element in place.
+  searchParams: Promise<{ error?: string; n?: string }>;
 }
 
 async function siteOrigin(): Promise<string> {
@@ -22,7 +26,7 @@ async function siteOrigin(): Promise<string> {
 }
 
 export default async function AdminPage({ searchParams }: AdminPageProps) {
-  const { error: errorCode } = await searchParams;
+  const { error: errorCode, n: nonce } = await searchParams;
   const error = adminErrorMessage(errorCode);
 
   let configError: string | null = null;
@@ -56,7 +60,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         <h1>Owner sign-in</h1>
         <p className="lede">Enter the owner secret to create and manage invite links.</p>
 
-        {error ? <ErrorAlert id="admin-error" message={error} /> : null}
+        {error ? <ErrorAlert key={nonce} id="admin-error" message={error} /> : null}
 
         <form action={ownerSignInAction} className="card pad">
           <div className="field">
@@ -98,7 +102,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         </form>
       </div>
 
-      {error ? <ErrorAlert message={error} /> : null}
+      {error ? <ErrorAlert key={nonce} message={error} /> : null}
 
       {flashToken ? (
         <div className="flash">
