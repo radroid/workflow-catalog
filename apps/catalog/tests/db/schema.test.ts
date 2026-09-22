@@ -6,8 +6,8 @@ import { createTestDb } from "../helpers/test-db";
 // information_schema.columns. Adding any column to db/migrations/0001_init.sql
 // without updating this allowlist deliberately fails this test.
 const EXPECTED_COLUMNS: Record<string, string[]> = {
-  invites: ["created_at", "id", "token_hash", "used_at"],
-  sessions: ["created_at", "display_name", "id", "invite_id", "revoked_at"],
+  invites: ["created_at", "id", "slot", "token_hash", "used_at"],
+  sessions: ["created_at", "display_name", "expires_at", "id", "invite_id", "revoked_at"],
   install_status: ["checked_at", "item", "session_id"],
 };
 

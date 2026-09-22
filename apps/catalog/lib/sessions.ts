@@ -8,13 +8,15 @@ export interface ActiveSession {
 /**
  * The database-backed layer of the two-layer session check (the other is
  * `verifySessionCookie`'s signature-only check in session-cookie.ts). Only
- * a session that exists AND has not been revoked counts as active — this is
- * what makes sign-out (and any future admin revocation) actually take
- * effect even though the signed cookie itself would otherwise still verify.
+ * a session that exists, has not been revoked, AND has not passed its
+ * `expires_at` counts as active — this is what makes sign-out (and any
+ * future admin revocation) actually take effect even though the signed
+ * cookie itself would otherwise still verify, and what caps a session's
+ * lifetime even if it's never explicitly revoked.
  */
 export async function findActiveSession(db: Db, sessionId: string): Promise<ActiveSession | null> {
   const { rows } = await db.query<{ id: string; display_name: string }>(
-    "SELECT id, display_name FROM sessions WHERE id = $1 AND revoked_at IS NULL",
+    "SELECT id, display_name FROM sessions WHERE id = $1 AND revoked_at IS NULL AND expires_at > now()",
     [sessionId],
   );
   const row = rows[0];

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "./helpers/test-db";
 import { acceptInvite, createInvite } from "../lib/invites";
 import { findActiveSession, revokeSession } from "../lib/sessions";
-import { createSessionCookieValue, verifySessionCookie } from "../lib/session-cookie";
+import { createSessionCookieValue, SESSION_COOKIE_MAX_AGE_SECONDS, verifySessionCookie } from "../lib/session-cookie";
+import { toIsoString } from "../lib/db/format";
 
 async function acceptedSession(db: Awaited<ReturnType<typeof createTestDb>>) {
   const created = await createInvite(db);
@@ -60,6 +61,37 @@ describe("gated-layout database check (session revocation)", () => {
 
     await revokeSession(db, sessionId);
     await revokeSession(db, sessionId); // must not throw or un-revoke.
+
+    expect(await findActiveSession(db, sessionId)).toBeNull();
+  });
+
+  it("a freshly accepted session has an expires_at roughly SESSION_COOKIE_MAX_AGE_SECONDS out", async () => {
+    const db = await createTestDb();
+    const before = Date.now();
+    const { sessionId } = await acceptedSession(db);
+    const after = Date.now();
+
+    const { rows } = await db.query<{ expires_at: unknown }>("SELECT expires_at FROM sessions WHERE id = $1", [
+      sessionId,
+    ]);
+    const expiresAtMs = new Date(toIsoString(rows[0]?.expires_at)).getTime();
+
+    expect(expiresAtMs).toBeGreaterThanOrEqual(before + SESSION_COOKIE_MAX_AGE_SECONDS * 1000);
+    expect(expiresAtMs).toBeLessThanOrEqual(after + SESSION_COOKIE_MAX_AGE_SECONDS * 1000 + 1000);
+  });
+
+  it("refuses an expired session even though it was never revoked", async () => {
+    // expires_at is computed in application code (Date.now(), not SQL
+    // now()), so it can't be back-dated with vi.useFakeTimers() — PGlite's
+    // own now() (used in the query's WHERE clause) runs inside its WASM
+    // Postgres engine and doesn't observe a mocked JS clock. Back-dating
+    // the stored value directly exercises the same WHERE clause a real
+    // 30-days-later request would hit.
+    const db = await createTestDb();
+    const { sessionId } = await acceptedSession(db);
+    expect(await findActiveSession(db, sessionId)).not.toBeNull();
+
+    await db.query("UPDATE sessions SET expires_at = now() - interval '1 second' WHERE id = $1", [sessionId]);
 
     expect(await findActiveSession(db, sessionId)).toBeNull();
   });

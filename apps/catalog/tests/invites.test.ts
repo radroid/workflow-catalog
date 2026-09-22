@@ -22,6 +22,39 @@ describe("invites", () => {
     expect(invites).toHaveLength(MAX_INVITES);
   });
 
+  it("the slot cap is structural: a sixth row is refused even by direct SQL, not just by the service", async () => {
+    const db = await createTestDb();
+
+    for (let i = 0; i < MAX_INVITES; i++) {
+      const result = await createInvite(db);
+      expect(result.ok).toBe(true);
+    }
+
+    // Bypasses createInvite entirely — proves the UNIQUE/CHECK constraints
+    // themselves reject a sixth row, not just the application-level guard
+    // (see lib/invites.ts's createInvite comment: a `count(*) < 5` guard
+    // alone races under Neon's READ COMMITTED isolation).
+    await expect(
+      db.query("INSERT INTO invites (id, token_hash, slot) VALUES ($1, $2, $3)", [
+        "00000000-0000-4000-8000-000000000099",
+        "direct-sql-attempt-hash",
+        6,
+      ]),
+    ).rejects.toMatchObject({ code: "23514" }); // check_violation: slot BETWEEN 1 AND 5
+
+    // A colliding slot (re-using one already claimed) fails the other way.
+    await expect(
+      db.query("INSERT INTO invites (id, token_hash, slot) VALUES ($1, $2, $3)", [
+        "00000000-0000-4000-8000-000000000098",
+        "direct-sql-attempt-hash-2",
+        1,
+      ]),
+    ).rejects.toMatchObject({ code: "23505" }); // unique_violation
+
+    const invites = await listInvites(db);
+    expect(invites).toHaveLength(MAX_INVITES);
+  });
+
   it("issues tokens that are single-use and unpredictable", async () => {
     const db = await createTestDb();
     const a = await createInvite(db);

@@ -31,4 +31,18 @@ describe("validateDisplayName", () => {
   it("allows ordinary punctuation", () => {
     expect(validateDisplayName("Sam Fernwood-Harbor Jr.").ok).toBe(true);
   });
+
+  it("rejects bidi control characters", () => {
+    // U+202E RIGHT-TO-LEFT OVERRIDE could make "Ada" render reversed, or
+    // disguise what's actually stored — see lib/display-name.ts's comment.
+    expect(validateDisplayName("Ada‮Quill").ok).toBe(false);
+    expect(validateDisplayName("⁦Ada Quill⁩").ok).toBe(false); // LRI ... PDI
+    expect(validateDisplayName("Ada‎Quill").ok).toBe(false); // LRM
+  });
+
+  it("rejects other Unicode format characters (e.g. zero-width joiner)", () => {
+    expect(validateDisplayName("Ada‍Quill").ok).toBe(false); // ZWJ
+    expect(validateDisplayName("Ada‌Quill").ok).toBe(false); // ZWNJ
+    expect(validateDisplayName("Ada﻿Quill").ok).toBe(false); // BOM / ZWNBSP
+  });
 });

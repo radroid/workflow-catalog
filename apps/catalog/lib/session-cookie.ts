@@ -10,7 +10,11 @@ import { hmacSign, hmacVerify } from "./crypto";
 
 export const SESSION_COOKIE = "session";
 
-export const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days; revocation is what actually ends a session.
+// 30 days. Also the session row's own `expires_at` in the database (see
+// lib/sessions.ts's findActiveSession and lib/invites.ts's acceptInvite) —
+// one constant so the cookie and the database-enforced lifetime can't drift
+// apart. Revocation (sign-out) is what ends a session before that.
+export const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 function signedMessage(sessionId: string): string {
   // Domain-separated from the owner cookie's signed message (see

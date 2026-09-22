@@ -64,6 +64,9 @@ const ASSET_CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  // Plain text, not text/markdown: guarantees every browser renders it
+  // inline instead of offering it as a download, and no renderer is needed.
+  ".md": "text/plain; charset=utf-8",
 };
 
 function contentTypeFor(filename: string): string | null {
@@ -86,7 +89,14 @@ export interface ResolvedLearnAsset {
  * check below is belt-and-suspenders on top of that, not the only guard.
  */
 export function resolveLearnAsset(slugParts: readonly string[]): ResolvedLearnAsset | null {
-  if (slugParts.length < 2) return null;
+  if (slugParts.length === 0) return null;
+
+  // A single-segment slug is a top-level doc (MISSION.md, NOTES.md,
+  // RESOURCES.md) — e.g. lesson 0001's relative link `../MISSION.md`
+  // resolves in the browser to `/learn/MISSION.md`. Same allowlist
+  // discipline as the category branch below: only ever a real, plain file
+  // that `readdirSync(LEARN_ROOT)` itself found.
+  if (slugParts.length === 1) return resolveTopLevelDoc(slugParts[0]);
 
   const [category, ...rest] = slugParts;
   if (!isAssetCategory(category)) return null;
@@ -107,4 +117,23 @@ export function resolveLearnAsset(slugParts: readonly string[]): ResolvedLearnAs
   if (!realFiles.includes(filename)) return null;
 
   return { absolutePath: path.join(dir, filename), contentType };
+}
+
+function resolveTopLevelDoc(filename: string | undefined): ResolvedLearnAsset | null {
+  if (!filename || filename.includes("..") || filename.includes("\0")) return null;
+
+  const contentType = contentTypeFor(filename);
+  if (!contentType) return null;
+
+  let realFiles: string[];
+  try {
+    realFiles = readdirSync(LEARN_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name);
+  } catch {
+    return null;
+  }
+  if (!realFiles.includes(filename)) return null;
+
+  return { absolutePath: path.join(LEARN_ROOT, filename), contentType };
 }

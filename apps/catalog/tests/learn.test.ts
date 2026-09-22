@@ -64,3 +64,24 @@ describe("learn asset resolution — path traversal", () => {
     expect(resolveLearnAsset(["lessons", "sub", "0001-reviewing-an-overnight-agents-work.html"])).toBeNull();
   });
 });
+
+describe("learn asset resolution — top-level docs", () => {
+  it("resolves the real top-level docs a lesson can link to with '../'", () => {
+    // Lesson 0001 links to "../MISSION.md", which resolves in the browser
+    // to /learn/MISSION.md — a single-segment slug, not category/filename.
+    for (const name of ["MISSION.md", "NOTES.md", "RESOURCES.md"]) {
+      const doc = resolveLearnAsset([name]);
+      expect(doc).not.toBeNull();
+      expect(doc?.contentType).toBe("text/plain; charset=utf-8");
+    }
+  });
+
+  it("404s (returns null) for an unknown top-level filename", () => {
+    expect(resolveLearnAsset(["NOPE.md"])).toBeNull();
+  });
+
+  it("404s (returns null) for a top-level traversal attempt", () => {
+    expect(resolveLearnAsset([".."])).toBeNull();
+    expect(resolveLearnAsset(["..%2Fpackage.json"])).toBeNull();
+  });
+});
