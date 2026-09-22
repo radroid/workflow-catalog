@@ -111,9 +111,10 @@ npm run setup -- --provider openai --model <slug> --api-key-env MY_KEY_VAR --yes
 - **Provider.** One of `chatgpt`, `openai`, `anthropic` or `gateway`.
   - **ChatGPT:** Codex owns the sign-in (`codex login`) and the runner
     stores no ChatGPT credential. Setup runs `codex login status` and
-    explains what to do if Codex is missing or signed out. eve's own
-    `/login` inside `eve dev` also signs in for development, but mode A
-    needs codex on PATH.
+    explains what to do if Codex is missing or signed out. The Codex sign-in
+    is the only way in: under `eve start`, `chatgpt()` uses the credentials
+    Codex keeps (`docs/spec/research/eve-spike.md`). eve's own `/login`
+    lives in `eve dev`, which never runs in `runner/` (condition 4 above).
   - **API keys:** stored in the OS keychain (macOS Keychain, or Secret
     Service on Linux) under the service `workflow-catalog-runner`, never
     in a file. Under `eve start`, eve reads a provider key only from its

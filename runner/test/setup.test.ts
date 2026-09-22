@@ -125,6 +125,8 @@ describe("setup (non-interactive)", () => {
     const missing = await runSetup({ ...CHATGPT, workspace: path.join(box.root, "ws") }, box.deps({ findCodex: async () => undefined }));
     expect(missing.providerConnected).toBe(false);
     expect(box.out.join("\n")).toMatch(/Codex CLI was not found/);
+    // Mode A signs in only through Codex; eve dev never runs in runner/ (README condition 4).
+    expect(box.out.join("\n")).not.toMatch(/eve dev|\/login/);
     expect((await readEnv(box.envFile)).RUNNER_CODEX_DIR).toBeUndefined();
     const signedOut = await runSetup({ ...CHATGPT }, box.deps({ codexStatus: async () => ({ loggedIn: false, detail: "Not logged in" }) }));
     expect(signedOut.providerConnected).toBe(false);

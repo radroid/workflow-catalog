@@ -140,9 +140,11 @@ async function chooseModel(provider: ModelProvider, options: SetupOptions, exist
 async function connectChatgpt(deps: SetupDeps): Promise<{ connected: boolean; codexDir?: string }> {
   const codex = await deps.findCodex();
   if (!codex) {
-    deps.out("ChatGPT: the Codex CLI was not found on PATH. The runner signs in to ChatGPT through it.");
+    // Mode A: `eve start` uses the sign-in the Codex CLI keeps
+    // (docs/spec/research/eve-spike.md). There is no other way in: eve's own
+    // /login lives in `eve dev`, which never runs in runner/ (one mode per .eve/).
+    deps.out("ChatGPT: the Codex CLI was not found on PATH. The runner signs in to ChatGPT only through Codex.");
     deps.out("  Install it (`npm install -g @openai/codex` or `brew install codex`), run `codex login`, then run setup again.");
-    deps.out("  (eve's own /login inside `eve dev` also works for development, but `npm run runner` needs codex on PATH.)");
     return { connected: false };
   }
   const codexDir = path.dirname(codex);
