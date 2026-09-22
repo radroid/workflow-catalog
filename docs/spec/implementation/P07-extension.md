@@ -1,7 +1,7 @@
 # P07 · Chrome extension
 
 Status: claimed (part B)
-Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus); part B iter-004 implementer (Sonnet)
+Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus); part B iter-004 implementer (Sonnet); part B revision 1 iter-004 implementer (Sonnet)
 Blocked by: P02 (pairing and bridge), P06 (manifests and commands)
 Owns: extension/
 Spec: F6 (capture path), F9, §7 rule 3, browser-boundary.md (all sections; the nine gates are this packet's definition of done)
@@ -26,6 +26,283 @@ The nine gates from browser-boundary.md as automated tests where possible (repla
 Form filling, uploads, submission, cookies, native messaging.
 
 ## Report
+
+### 2026-09-22 — Revision 1 (part B)
+
+PR #12 (base `overnight/integration`, head `2e3b52d`) came back REVISE from
+both the reviewer (6 issues: B1-B6) and the UI critic (10 issues: B7-B12,
+plus E1-E4 orchestrator decisions and a polish list) — this section
+covers that one revision round. Worked in the packet's own worktree on
+`packet/P07-B`; merged `origin/overnight/integration` first (brought in
+P02.1 and P09.1, landing my prior head on `f06688b` green). 11 commits,
+`7334ef0` (claim of this round) through `1aa690e`; head at report time
+`1aa690e`, this report is the next commit. Files touched: `extension/**`
+(source, tests, both e2e specs, a new second `tsconfig.real-bridge.json`),
+one step of `.github/workflows/ci.yml`, and `docs/screenshots/P07B-*.png`
+— nothing in `packages/`, `runner/`, or outside `extension/`'s Owns.
+
+**Orchestrator decisions (E1-E4).**
+- **E1** (bridge tried first, nothing auto-downloads): `sendToBridge` in
+  `popup/render.ts` posts to the bridge before ever touching a file;
+  `ok()` says "Sent to the runner." and downloads nothing. "Save as a
+  file" is a real secondary `<button>`, hidden by default, revealed only
+  when `offerFileSave` is true (every non-success outcome except the
+  drop-bucket 4xx, which also offers it).
+- **E2** (queue-then-flush-on-pair): a not-paired Save now queues (paused,
+  same as a 401/403) instead of the old "never queue before ever pairing"
+  design. `options/main.ts`'s pair-success handler calls
+  `flushOutbox(client, { includePaused: true })` right after storing the
+  new token, giving every paused entry (not_paired, 401, or 403) one real
+  attempt.
+- **E3/B12** (code label names the command that printed it): `npm run
+  setup` prints the first code, `npm run pair` every one after —
+  `pairingSection`'s `everPaired` param picks the label
+  (`buildPairingSection` from `current !== null`; the Un-pair handler
+  passes a hardcoded `true`, since it has just forgotten its own token a
+  moment before `current` would read `null`). Commands render via a new
+  `withInlineCode()` helper (splits on backticks, alternates plain text
+  and `el("code", ...)`) — `.textContent` only, per this file's own
+  XSS-safety rule, never `innerHTML`.
+- **E4**: one line on the options page, next to File bridge: "Pairing
+  lives only in this browser session — quitting Chrome un-pairs it."
+
+**B1** (vitest needed 4310 free): `bridge-client.realbridge.test.ts` now
+asks `real-bridge-harness.ts`'s new `findEphemeralPort()` (binds to port
+0, reads back the OS-assigned port) instead of the fixed 4310; `afterEach`
+guards against a `beforeEach` that itself failed to start a bridge via a
+scoped `(harness as BridgeHarness | undefined)` cast. 4310 stays reserved
+for `test:e2e`, the one consumer (the real, built extension) that's
+actually hard-coded to it. Verified by holding 4310 with a dummy process
+and re-running the suite (still 11/11).
+
+**B2** (outbox could drop a capture): rewrote `shared/outbox.ts`'s storage
+from one array under a single `jobCaptureOutbox` key to one key per entry
+(`jobCaptureOutbox:<eventId>`) — the race was between two different JS
+contexts (a popup's `enqueueCapture`, the worker's alarm-driven
+`flushOutbox`) that share no module state, only `chrome.storage`, so an
+in-memory lock could never have fixed it; per-key storage makes the race
+impossible by construction, since every mutation touches exactly one
+entry's own key. Added the race as a test (enqueue A, start a flush that
+blocks mid-`postEvent`, enqueue B from the "other context" while A is
+still in flight, resolve A, assert B survived).
+
+**B3** (every refusal reported the same way): `sendToBridge` and
+`outbox.ts`'s `isPausingError`/`isRetryableFailure` now branch on the
+bridge's actual status/code: `not_paired`/401/403 queue paused with their
+own specific message and an "Open settings" action;
+`network_error`/5xx queue and retry automatically; any other 4xx (400,
+409, 413, 422, ...) is dropped (never queued) and shown verbatim. 401
+clears the stored token via `bridge-client.ts`'s new `onTokenInvalid`
+hook, so Pairing and Status stop claiming "paired" for a dead token. 403
+has no wire signal the options page's own `GET /status` could ever see
+(Chrome sends no Origin on a GET) — `onOriginMismatch` stores a
+session-only flag (`shared/storage.ts`) that `buildStatusSection` checks
+before ever calling `getStatus()`. gate-9's e2e expectation updated to the
+new, specific 403 text.
+
+**B4** (no timeout, delivery unvalidated): `request()` now races every
+fetch against `AbortSignal.timeout(5000)`, mapped to a `network_error`
+with a distinct "The runner isn't responding." message (kept separate
+from the connection-refused wording, same retry treatment either way).
+`postEvent` only counts a 200 as delivered when the body has `ok: true`
+*and* a matching `eventId` (duplicate:true still success) — otherwise
+`invalid_response`, dropped rather than retried forever (a wrong process
+squatting on 4310 would otherwise empty the outbox of things nothing real
+ever received). `render()` now mounts Pairing and File bridge immediately
+alongside a "Checking the runner…" Status placeholder, then awaits the
+real `GET /status` — previously `render()` awaited the whole Status
+section first, so a slow/stuck runner left every section blank.
+
+**B5** (CI silently skipped two dist tests): the one extension CI step now
+runs `pnpm --filter @workflow-catalog/extension test` (vitest) right after
+`build`, before `test:e2e`, so `manifest.test.ts`'s two dist-path tests
+run for real against a real `dist/` every CI run instead of never getting
+a chance to. Belt-and-suspenders: those two tests now run (not skip) even
+without `dist/` when `process.env.CI` is set, so a future ordering
+regression fails loudly. **Known conflict, not fixed (out of this
+packet's one-step Owns):** the *root* `pnpm test` step in `ci.yml` runs
+`pnpm -r test` before any build step, and GitHub Actions sets `CI=true`
+for every step in a job by default — once this lands, that earlier,
+pre-build step will hit the same two tests with `CI` set and no `dist/`
+yet, and they'll fail there. Fixing it means reordering the root `Test`
+step to run after the build steps, a different step than the one this
+packet owns. Flagging for the reviewer/coordinator rather than guessing
+whether to touch it.
+
+**B6** (three files excluded from typecheck hid a real error): added
+`extension/tsconfig.real-bridge.json`, a second `tsc` program (mirrors
+`runner/tsconfig.json`'s `allowImportingTsExtensions`/`lib: ["ES2024"]`,
+plus `DOM`/`DOM.Iterable`/`"chrome"` for what these three files
+specifically need) covering exactly `e2e/real-bridge-harness.ts`,
+`src/shared/bridge-client.realbridge.test.ts`, and
+`e2e/bridge-e2e.spec.ts`; wired into `typecheck` as a second `tsc --noEmit
+-p` call. Real error it surfaced: `bridge-e2e.spec.ts`'s gate-6 test
+passed a `string | undefined` (from a `page.evaluate` returning an
+optional chain) straight into `devices.revoke(deviceId: string)` — fixed
+with a real runtime guard (throws a clear message if ever actually
+undefined) rather than an `as string` cast.
+
+**B7** (focus/announcements): one persistent live region
+(`options/main.ts`'s module-scope `pairingStatus`, created once, never
+rebuilt) for "Paired."/"Un-paired." — screen readers only announce a
+mutation to a live region that was already present, and the old
+full-section rebuild recreated it every time, silently dropping the
+announcement. Focus lands on Un-pair after a successful pair, the code
+field after a failed one.
+
+**B8** (invalid-code styling on a runner-down/429): `aria-invalid` is now
+set only for `pairing_code_invalid`/`pairing_code_expired` — a
+runner-down or 429 response no longer marks a valid code wrong. 429 says
+"Too many tries. Try again in about N minutes." from the bridge's own
+`Retry-After` header (`bridge-client.ts` now parses it into
+`retryAfterSeconds`), or a generic "wait, then try again" if absent.
+
+**B9**: `.eyebrow { font-weight: 400; }` — it inherited the browser's bold
+`h1` default.
+
+**B10**: a "Check again" button (re-runs `refreshStatusSection`) plus a
+`window` `focus` listener for the common case (start the runner, alt-tab
+back); an outbox summary line ("1 saved job waiting to send." / "All
+saved jobs sent.").
+
+**B11**: the not-paired popup state offers an "Open settings" button
+(`chrome.runtime.openOptionsPage()`) alongside "Save as a file" — "Open
+settings"/"Settings" is the one name used throughout, popup and options
+alike.
+
+**Polish**: commands render as `<code>` (E3, above) so they never wrap
+mid-command; "Un-paired…" moved next to Un-pair instead of stranded below
+the (possibly hidden) code field; workspace UUID abbreviated to 8 chars +
+`title` for the full value (same treatment Device's id already had); the
+Pair form collapses into a single "Pair again" button while paired,
+expanding (and focusing the code field) on click; "Saved ✓" is
+`aria-disabled` (not `disabled`, which would drop focus) plus a
+closure-scoped guard, so a second click is an inert no-op instead of
+re-saving; outcomes use `.flash`/`.flash.bad` pill styling, not muted
+11.5px text; a stronger scroll cue on `.excerpt`; "including actual
+revocation" dropped from the status-page wording; "Pair a device" → "Pair
+this browser" everywhere. The reviewer's brightness-retry nit
+(`theme-capture.ts`) is covered below, separately, since it needed its
+own investigation.
+
+**A real bug the new screenshots caught.** `formWrap.hidden = true` (the
+Pair-again collapse) correctly set the attribute, but `.stack`'s own
+`display: flex` — an author-origin rule, on the very same element — silently
+out-prioritizes the `hidden` attribute's user-agent-stylesheet `display:
+none`, regardless of selector specificity. The code-entry form was
+visually shown at all times, paired or not; no vitest assertion ever
+caught it, since happy-dom checks the `hidden` *property*, not real CSS
+layout. Only a real screenshot showed it. Fixed with the standard
+defensive rule, `[hidden] { display: none !important; }` in
+`shared/base.css`, so `hidden` wins regardless of whatever other classes
+an element carries (not scoped to `.stack`, since the same collision
+would silently recur anywhere else `hidden` and a `display`-declaring
+class ever landed on the same element).
+
+**Reviewer nit — brightness retry.** `captureInTheme`'s brightness-mismatch
+retry (added for the CI flake documented in the Part B entry below) used
+to retry unconditionally on any brightness/theme disagreement.
+`ensureColorScheme`'s own doc comment scopes retrying to one specific,
+understood quirk (matchMedia disagreeing with what was just requested);
+"any other failure... must fail the test at once." Now checks
+`matchMedia` at the point of the mismatch: only retries when matchMedia
+*also* still disagrees (the known quirk); if matchMedia already agrees
+(as `verifyTheme` just reconfirmed before the action ran), a wrong
+brightness is a different, unexplained failure and fails immediately
+instead of spending retries on it.
+
+**Screenshots**: full retake, all required states. `pageThemeTarget`'s
+capture now passes `fullPage: true` (a plain `page.screenshot()` only
+captures the current viewport, which is exactly how File bridge got
+cropped out); options screenshots explicitly set both required widths
+(1280, 390) via a new `captureOptionsBothWidths` helper. Popup (natural
+size): preview, sent, queued (runner down), not paired, pairing expired
+(401, a real `devices.revoke`), other install (403, a real
+mismatched-origin token). Options (both widths): unpaired, paired with
+status, checking the runner, runner not responding, plus pairing error
+(kept from the old set — not one of the four named states, but cheap,
+already-working, non-overlapping coverage). "Checking the runner…" needed
+its own approach: a never-paired page's `getStatus()` returns a local
+`not_paired` error without ever making a network request (`bridge-
+client.ts`'s own doc comment says so), so there's no in-flight request to
+hold — pairs first, then opens one fresh page per width with
+`page.route()` holding that page's own `GET /status` until after both
+theme captures. 32 files under `docs/screenshots/P07B-*.png`; six
+now-superseded ones removed (`options-paired-*`/`options-error-*` without
+a width suffix; `popup-saved-*`, renamed `popup-sent-*` to match the
+actual message).
+
+**e2e drift from this revision's own changes.** A real Playwright run
+(not just reading the diff) surfaced several `bridge-e2e.spec.ts`/
+`real-popup.spec.ts` assertions that had quietly gone stale as
+`render.ts`/`main.ts` changed underneath them this round: the wrong-code
+and runner-down messages' literal backticks (now rendered as `<code>`,
+never a literal backtick character); "Pair a device" → "Pair this
+browser"; gate 1's and the popup-saved screenshot's success text ("Sent
+to the runner.", no more "Saved job-capture.json and..."); gate 9's 403
+text (the literal ask); gate 4's status text and, more substantively, its
+two outbox reads (`chrome.storage.session.get("jobCaptureOutbox")` —
+B2's per-key redesign left nothing under that literal key anymore, so the
+first of the two would always have hard-failed); the paired-options
+workspace-ID assertion (compared against the full UUID; now abbreviated,
+split into a display-text check and a `title`-attribute check for the
+full value); and `real-popup.spec.ts`'s two Save-then-download steps
+(E1/E2: an unpaired Save now queues instead of downloading — both steps
+still prove the real download mechanism works, just via an explicit
+"Save as a file" click instead of assuming Save itself triggers it).
+
+**Mutation proofs** (each: backed up to `/tmp`, mutated, confirmed the
+named test fails for the stated reason, restored from the backup,
+confirmed `git diff --stat` empty):
+- B2: reverted `flushOutbox`'s per-entry writes to a single stale
+  bulk-write-back computed from the pre-await snapshot → the race test
+  failed with the concurrently-enqueued capture missing (`expected [] to
+  deeply equal [ "22222222-..." ]`).
+- B3: 401 rewritten to the network_error/retryable branch, 403 rewritten
+  to `ok(...)` → both B3 tests failed with the wrong message
+  (401 got "isn't reachable right now" instead of "pair again in
+  Settings"; 403 got "Sent to the runner." instead of the different-
+  install text).
+- B4: dropped `AbortSignal.timeout(...)` from the fetch call → the
+  timeout test hung and hit Vitest's own 10s test timeout (a real hang,
+  not a simulated one); removed the `ok`/`eventId` check from `postEvent`
+  → both the wrong-body and mismatched-eventId tests failed with
+  `result.ok` true instead of false.
+- B5: `dist/` moved aside, `CI=1 vitest run manifest.test.ts` → both
+  dist-path tests failed for real (an `expect(false).toBe(true)` and a
+  raw `ENOENT`) instead of reporting skipped; restored, back to 9 passed +
+  2 skipped without `CI`, 11/11 with `dist/` present.
+- B6: reintroduced the unguarded `devices.revoke(deviceId)` call → `tsc
+  --noEmit -p tsconfig.real-bridge.json` failed with the original
+  TS2345 at the original line.
+
+**Verify chain** (repo root): `pnpm install --frozen-lockfile`, `pnpm
+typecheck` (6/6 packages), `pnpm test` (`packages/contracts` 235,
+`packages/job-assistant` 151, `runner` 155 + 4 evals/20 gates, `apps/catalog`
+168, `extension` 217, plus `scripts/*.test.mjs` 2 — all passed), `pnpm -r
+lint` (6/6 clean), `pnpm check:fixtures` (clean) — `git status --porcelain`
+empty throughout and after. Extension build → `CI=1 vitest run` (19
+files, 217 tests, 0 skipped) → full `playwright test` (27 tests: the 3
+base `extension.spec.ts`, 18 in `bridge-e2e.spec.ts` including all 11
+screenshot tests, 5 in `real-popup.spec.ts`, using 4 workers with
+`bridge-e2e.spec.ts`'s own serial mode still honored) — run twice, both
+100% green, port 4310 confirmed free before and after every run.
+
+**Assumptions / judgment calls**, for the reviewer to weigh in on:
+- Kept the pre-existing "pairing error" (wrong code) options screenshot
+  at both widths, even though it isn't one of the four states E3/B4's
+  screenshot list names — additive, not a substitute for any required
+  state.
+- `everPaired`'s doc comment (E3/B12) was tightened, not the behavior: a
+  token silently lost some way *other* than an explicit Un-pair (e.g. a
+  401 auto-clearing it) isn't distinguished from a fresh install, and the
+  next Pairing re-render shows "npm run setup" again. Nothing in this
+  round's issues named that edge case explicitly; adding a persistent
+  "was ever paired" flag felt like scope beyond what was asked, so it's
+  called out here instead of silently decided either way.
+- B5's known conflict (above) is a real, disclosed risk to the *actual*
+  CI run on this PR, not a local gap — flagged rather than guessed at,
+  since fixing it needs a step outside this packet's Owns.
 
 ### 2026-09-22 — Part B (iter-004 implementer, Sonnet)
 
