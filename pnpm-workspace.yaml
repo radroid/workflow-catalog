@@ -1,0 +1,22 @@
+packages:
+  - apps/*
+  - packages/*
+  - runner
+  - extension
+allowBuilds:
+  # eslint-plugin-import's TypeScript resolver (transitive, via
+  # eslint-config-next). Native binary selection postinstall only; no
+  # arbitrary code we need to review beyond that. Vetted at pin time.
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@typescript-eslint/eslint-plugin@8.70.1'
+  - '@typescript-eslint/parser@8.70.1'
+  - '@typescript-eslint/project-service@8.70.1'
+  - '@typescript-eslint/scope-manager@8.70.1'
+  - '@typescript-eslint/tsconfig-utils@8.70.1'
+  - '@typescript-eslint/type-utils@8.70.1'
+  - '@typescript-eslint/types@8.70.1'
+  - '@typescript-eslint/typescript-estree@8.70.1'
+  - '@typescript-eslint/utils@8.70.1'
+  - '@typescript-eslint/visitor-keys@8.70.1'
+  - typescript-eslint@8.70.1
