@@ -11,7 +11,7 @@ import { loadRouteModules, type StopFunction } from "../server/route-modules.ts"
  * 1. Everything that can fail without a child process runs first. The route
  *    modules load and validate, and the bridge app is built; a duplicate
  *    event handler throws there.
- * 2. eve is spawned, and the SIGINT/SIGTERM handlers are registered straight
+ * 2. The SIGINT/SIGTERM handlers are registered, and eve is spawned straight
  *    after. From then on a signal stops eve, even while waiting for it to be
  *    ready.
  * 3. Wait for eve's health check, listen on 4310, then run the modules'
@@ -86,8 +86,10 @@ export async function launchRunner(deps: LauncherDeps): Promise<LaunchResult> {
   const modules = await loadRouteModules(deps.routesDir);
   const app = createBridgeApp({ ctx: deps.ctx, modules, uiToken: deps.uiToken });
 
-  // 2. eve, and the signal handlers straight after.
-  const eve = deps.spawnEve();
+  // 2. The signal handlers, then eve. The handlers go first so that no signal
+  // can fall between the spawn and their registration (and kill this process
+  // by default, leaving eve running). Node runs them from the event loop, so
+  // none runs before the synchronous spawn below has returned.
   let phase: "starting" | "ready" | "stopping" = "starting";
   let interrupted = false;
   const onSignal = (): void => {
@@ -104,6 +106,14 @@ export async function launchRunner(deps: LauncherDeps): Promise<LaunchResult> {
     deps.signals.off("SIGINT", onSignal);
     deps.signals.off("SIGTERM", onSignal);
   };
+  let spawned: EveProcess;
+  try {
+    spawned = deps.spawnEve();
+  } catch (error) {
+    removeSignalHandlers();
+    throw error;
+  }
+  const eve = spawned;
 
   let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   const eveExited = new Promise<void>((resolve) =>

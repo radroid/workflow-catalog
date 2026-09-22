@@ -51,6 +51,8 @@ interface Harness {
   readonly exits: number[];
   /** Resolves once eve has been spawned. */
   readonly spawnedOnce: Promise<FakeEve>;
+  /** SIGINT and SIGTERM listeners already registered at the moment eve was spawned. */
+  readonly listenersAtSpawn: Array<{ SIGINT: number; SIGTERM: number }>;
 }
 
 async function harness(overrides: Partial<LauncherDeps> & { eve?: () => FakeEve } = {}): Promise<Harness> {
@@ -65,11 +67,13 @@ async function harness(overrides: Partial<LauncherDeps> & { eve?: () => FakeEve 
     announce = resolve;
   });
   const { eve: makeEve, ...rest } = overrides;
+  const listenersAtSpawn: Array<{ SIGINT: number; SIGTERM: number }> = [];
   const deps: LauncherDeps = {
     ctx,
     routesDir: await tempDir("wc-routes-"),
     uiToken: UI_TOKEN,
     spawnEve: () => {
+      listenersAtSpawn.push({ SIGINT: signals.listenerCount("SIGINT"), SIGTERM: signals.listenerCount("SIGTERM") });
       const eve = makeEve ? makeEve() : new FakeEve();
       eve.once("exit", () => events.push("eve exited"));
       spawned.push(eve);
@@ -89,7 +93,7 @@ async function harness(overrides: Partial<LauncherDeps> & { eve?: () => FakeEve 
     stopTimeoutMs: 200,
     ...rest,
   };
-  return { deps, spawned, signals, events, exits, spawnedOnce };
+  return { deps, spawned, signals, events, exits, spawnedOnce, listenersAtSpawn };
 }
 
 describe("launcher: nothing is left running when startup fails", () => {
@@ -113,9 +117,8 @@ describe("launcher: nothing is left running when startup fails", () => {
     const h = await harness({ eveReady: async () => false, listen });
     const launching = launchRunner(h.deps);
     const eve = await h.spawnedOnce;
-    // The handlers are registered as soon as eve is spawned.
-    expect(h.signals.listenerCount("SIGTERM")).toBe(1);
-    expect(h.signals.listenerCount("SIGINT")).toBe(1);
+    // The handlers were already registered when eve was spawned, so no signal can fall in between.
+    expect(h.listenersAtSpawn).toEqual([{ SIGINT: 1, SIGTERM: 1 }]);
     h.signals.send("SIGTERM");
     await expect(launching).resolves.toEqual({ state: "stopped" });
     expect(eve.received).toEqual(["SIGTERM"]);
@@ -123,6 +126,17 @@ describe("launcher: nothing is left running when startup fails", () => {
     expect(listen).not.toHaveBeenCalled();
     expect(h.exits).toEqual([]);
     expect(h.signals.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("removes its signal handlers when eve cannot be spawned at all", async () => {
+    const h = await harness({
+      spawnEve: () => {
+        throw new Error("spawn EAGAIN");
+      },
+    });
+    await expect(launchRunner(h.deps)).rejects.toThrow(/spawn EAGAIN/);
+    expect(h.signals.listenerCount("SIGTERM")).toBe(0);
+    expect(h.signals.listenerCount("SIGINT")).toBe(0);
   });
 
   it("stops eve when the bridge cannot listen", async () => {
