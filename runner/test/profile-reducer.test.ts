@@ -1,7 +1,7 @@
 import { SOURCE_CATEGORIES } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { createInitialProfile } from "../store/profile-types.ts";
-import { reduce, readiness, type Action } from "../store/profile-reducer.ts";
+import { decodeWithdrawalSummary, reduce, readiness, type Action } from "../store/profile-reducer.ts";
 
 /**
  * The pure reducer, driven directly with no I/O and no model — the packet's
@@ -55,7 +55,7 @@ describe("profile-reducer: 1 - First application (happy path)", () => {
     expect(profile.claims).toHaveLength(1);
     const claimId = profile.claims[0]!.id;
 
-    const confirm = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW });
+    const confirm = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW, newId });
     expect(confirm.ok).toBe(true);
     profile = confirm.profile;
     expect(profile.claims[0]!.status).toBe("confirmed");
@@ -118,7 +118,7 @@ describe("profile-reducer: 3 - The shaky metric", () => {
     expect(claim.question).toBeDefined(); // the metric always-ask rule fires at extraction time
 
     // Confirming a claim that needsQuestion and hasn't been answered redirects to disputed.
-    const confirmAttempt = reduce(profile, { type: "decideClaim", claimId: claim.id, decision: "confirmed", now: NOW });
+    const confirmAttempt = reduce(profile, { type: "decideClaim", claimId: claim.id, decision: "confirmed", now: NOW, newId });
     expect(confirmAttempt.ok).toBe(true);
     profile = confirmAttempt.profile;
     expect(profile.claims[0]!.status).toBe("disputed");
@@ -142,27 +142,27 @@ describe("profile-reducer: 4 - A closed tab is not an application", () => {
       category: "resume",
       extracted: [
         { text: "B.S. Computer Science.", kind: "credential", evidenceRef: "resume.md#a", evidenceQuote: "B.S." },
-        { text: "Software engineer at Acme.", kind: "fact", evidenceRef: "resume.md#b", evidenceQuote: "Software engineer at Acme" },
+        { text: "Software engineer at Northwind Labs.", kind: "fact", evidenceRef: "resume.md#b", evidenceQuote: "Software engineer at Northwind Labs" },
       ],
       now: NOW,
       newId,
     }).profile;
     const [keep, drop] = profile.claims;
-    profile = reduce(profile, { type: "decideClaim", claimId: keep!.id, decision: "confirmed", now: NOW }).profile;
-    profile = reduce(profile, { type: "decideClaim", claimId: drop!.id, decision: "confirmed", now: NOW }).profile;
+    profile = reduce(profile, { type: "decideClaim", claimId: keep!.id, decision: "confirmed", now: NOW, newId }).profile;
+    profile = reduce(profile, { type: "decideClaim", claimId: drop!.id, decision: "confirmed", now: NOW, newId }).profile;
     profile = reduce(profile, { type: "approve", now: NOW }).profile;
     expect(profile.approval).not.toBeNull();
 
     // An incidental cleanup — excluding a confirmed claim — is not treated as
     // "a claim changed" the way confirming/disputing one is: approval stays.
-    const exclude = reduce(profile, { type: "decideClaim", claimId: drop!.id, decision: "excluded", now: LATER });
+    const exclude = reduce(profile, { type: "decideClaim", claimId: drop!.id, decision: "excluded", now: LATER, newId });
     expect(exclude.ok).toBe(true);
     profile = exclude.profile;
     expect(profile.claims.find((c) => c.id === drop!.id)?.status).toBe("excluded");
     expect(profile.approval).toEqual({ version: 1, at: NOW }); // unchanged
 
     // But re-confirming (an explicit claim change) does withdraw it.
-    const reconfirm = reduce(profile, { type: "decideClaim", claimId: keep!.id, decision: "confirmed", now: LATER });
+    const reconfirm = reduce(profile, { type: "decideClaim", claimId: keep!.id, decision: "confirmed", now: LATER, newId });
     // keep! is already confirmed and needs no question, so this is a no-op decision through the same path as a genuine change:
     expect(reconfirm.ok).toBe(true);
   });
@@ -202,7 +202,7 @@ describe("profile-reducer: 6 - Editing an approved fact", () => {
       newId,
     }).profile;
     const claimId = profile.claims[0]!.id;
-    profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW }).profile;
+    profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW, newId }).profile;
     profile = reduce(profile, { type: "approve", now: NOW }).profile;
     expect(profile.approval).toEqual({ version: 1, at: NOW });
 
@@ -237,7 +237,7 @@ describe("profile-reducer: 6 - Editing an approved fact", () => {
       newId,
     }).profile;
     const claimId = profile.claims[0]!.id;
-    profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW }).profile;
+    profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW, newId }).profile;
     profile = reduce(profile, { type: "approve", now: NOW }).profile;
     profile = reduce(profile, { type: "editClaimText", claimId, text: "Something else entirely.", now: LATER, newId }).profile;
     const revisionId = profile.revisions[0]!.id;
@@ -247,5 +247,171 @@ describe("profile-reducer: 6 - Editing an approved fact", () => {
     profile = reject.profile;
     expect(profile.claims[0]!.text).toBe("Worked on the payments team.");
     expect(profile.revisions[0]!.status).toBe("rejected");
+  });
+});
+
+/** One confirmed claim, resume-only, ready to approve — the common setup for the R1/R2 regression tests below. */
+function readyToApproveProfile(newId: () => string): { profile: ReturnType<typeof createInitialProfile>; claimId: string } {
+  let profile = createInitialProfile(newId);
+  profile = accountResumeAndRestNotApplicable(profile);
+  profile = reduce(profile, {
+    type: "extractClaims",
+    category: "resume",
+    extracted: [{ text: "Worked on the payments team.", kind: "fact", evidenceRef: "resume.md#a", evidenceQuote: "Worked on the payments team" }],
+    now: NOW,
+    newId,
+  }).profile;
+  const claimId = profile.claims[0]!.id;
+  profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW, newId }).profile;
+  return { profile, claimId };
+}
+
+describe("profile-reducer: R1 — approval version numbers are never reused", () => {
+  it("re-confirming a claim withdraws v1; approving again produces v2, never v1 again", () => {
+    const newId = idGen("id");
+    let { profile, claimId } = readyToApproveProfile(newId);
+    profile = reduce(profile, { type: "approve", now: NOW }).profile;
+    expect(profile.approval).toEqual({ version: 1, at: NOW });
+
+    // Re-confirming an already-confirmed claim is still "a claim changed" (scenario 4) — withdraws.
+    const reconfirm = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: LATER, newId });
+    expect(reconfirm.ok).toBe(true);
+    profile = reconfirm.profile;
+    expect(profile.approval).toBeNull();
+    // The withdrawal itself is recorded, so the retired version is never handed out again.
+    const withdrawal = profile.revisions.find((r) => decodeWithdrawalSummary(r.summary)?.version === 1);
+    expect(withdrawal).toBeDefined();
+    expect(withdrawal!.resultingVersion).toBe(1);
+
+    const approveAgain = reduce(profile, { type: "approve", now: LATER });
+    expect(approveAgain.ok).toBe(true);
+    profile = approveAgain.profile;
+    expect(profile.approval).toEqual({ version: 2, at: LATER }); // not v1 again
+  });
+
+  it("acceptRevision refuses once approval has been withdrawn — accepting a stale revision can never re-approve on its own", () => {
+    const newId = idGen("id");
+    let { profile, claimId } = readyToApproveProfile(newId);
+    profile = reduce(profile, {
+      type: "extractClaims",
+      category: "resume",
+      extracted: [{ text: "Owned the on-call rotation.", kind: "fact", evidenceRef: "resume.md#b", evidenceQuote: "Owned the on-call rotation" }],
+      now: NOW,
+      newId,
+    }).profile;
+    const claimBId = profile.claims[1]!.id;
+    profile = reduce(profile, { type: "decideClaim", claimId: claimBId, decision: "confirmed", now: NOW, newId }).profile;
+    profile = reduce(profile, { type: "approve", now: NOW }).profile;
+    expect(profile.approval).toEqual({ version: 1, at: NOW });
+
+    // Propose a revision to claim A — v1 stays in force, nothing withdrawn yet.
+    const editA = reduce(profile, { type: "editClaimText", claimId, text: "Worked on the core payments team.", now: LATER, newId });
+    expect(editA.ok).toBe(true);
+    profile = editA.profile;
+    expect(profile.approval).toEqual({ version: 1, at: NOW });
+    const revisionAId = profile.revisions.find((r) => r.status === "proposed")!.id;
+
+    // Confirming claim B again withdraws v1 (a claim changed).
+    const reconfirmB = reduce(profile, { type: "decideClaim", claimId: claimBId, decision: "confirmed", now: LATER, newId });
+    expect(reconfirmB.ok).toBe(true);
+    profile = reconfirmB.profile;
+    expect(profile.approval).toBeNull();
+
+    // Accepting A's now-stale revision must refuse, not silently re-approve at v1.
+    const accept = reduce(profile, { type: "acceptRevision", revisionId: revisionAId, now: LATER });
+    expect(accept.ok).toBe(false);
+    expect(accept.profile.approval).toBeNull();
+    expect(accept.profile).toBe(profile); // refused: state unchanged
+    expect(readiness(accept.profile).ready).toBe(false);
+  });
+});
+
+describe("profile-reducer: R2 — any claim change but exclusion withdraws approval; statement edits become revisions too", () => {
+  it("disputing an approved, confirmed claim withdraws approval", () => {
+    const newId = idGen("id");
+    let { profile, claimId } = readyToApproveProfile(newId);
+    profile = reduce(profile, { type: "approve", now: NOW }).profile;
+    expect(profile.approval).not.toBeNull();
+
+    const dispute = reduce(profile, { type: "decideClaim", claimId, decision: "disputed", now: LATER, newId, question: "Can you say more?" });
+    expect(dispute.ok).toBe(true);
+    profile = dispute.profile;
+    expect(profile.claims[0]!.status).toBe("disputed");
+    expect(profile.approval).toBeNull();
+    expect(dispute.message).toMatch(/withdrawn/);
+  });
+
+  it("answering with evidence, on an approved profile, withdraws approval and records the new evidence as {kind: statement}, not the superseded passage", () => {
+    const newId = idGen("id");
+    const { profile: seeded, claimId } = readyToApproveProfile(newId);
+    let profile = reduce(seeded, { type: "approve", now: NOW }).profile;
+    expect(profile.approval).toEqual({ version: 1, at: NOW });
+
+    // A source re-extracted after approval can add a fresh candidate without
+    // withdrawing approval (test/profile-store.test.ts covers this directly
+    // at the store layer); a metric always needs a question, so confirming
+    // it redirects to disputed without touching approval either — the
+    // redirect is not itself "a claim changed", only an actual decision is.
+    profile = reduce(profile, {
+      type: "extractClaims",
+      category: "resume",
+      extracted: [{ text: "Cut deploy time in half.", kind: "metric", evidenceRef: "resume.md#b", evidenceQuote: "Cut deploy time in half" }],
+      now: NOW,
+      newId,
+    }).profile;
+    const metricClaimId = profile.claims[1]!.id;
+    profile = reduce(profile, { type: "decideClaim", claimId: metricClaimId, decision: "confirmed", now: NOW, newId }).profile;
+    expect(profile.claims[1]!.status).toBe("disputed");
+    expect(profile.approval).toEqual({ version: 1, at: NOW }); // still untouched
+
+    const answer = reduce(profile, { type: "answerQuestion", claimId: metricClaimId, hasEvidence: true, statement: "I ran this migration myself.", now: LATER, newId });
+    expect(answer.ok).toBe(true);
+    profile = answer.profile;
+    expect(profile.claims[1]!.status).toBe("confirmed");
+    expect(profile.claims[1]!.evidence).toEqual({ kind: "statement", ref: `claim:${metricClaimId}#answer`, quote: "I ran this migration myself." });
+    expect(profile.approval).toBeNull(); // withdrawn — the evidence itself changed
+    expect(answer.message).toMatch(/withdrawn/);
+    void claimId; // the first (unrelated) confirmed claim, untouched by this scenario
+  });
+
+  it("editing a boundary after approval proposes a revision instead of applying directly; accepting it bumps the version", () => {
+    const newId = idGen("id");
+    let { profile } = readyToApproveProfile(newId);
+    profile = reduce(profile, { type: "approve", now: NOW }).profile;
+    const boundaryId = profile.boundaries[0]!.id;
+    const originalText = profile.boundaries[0]!.text;
+
+    const edit = reduce(profile, {
+      type: "editStatementText",
+      kind: "boundary",
+      statementId: boundaryId,
+      text: "Do not invent metrics, credentials, responsibilities, or scope.",
+      now: LATER,
+      newId,
+    });
+    expect(edit.ok).toBe(true);
+    profile = edit.profile;
+    // Not applied outright: the boundary's text is unchanged, v1 still in force.
+    expect(profile.boundaries[0]!.text).toBe(originalText);
+    expect(profile.approval).toEqual({ version: 1, at: NOW });
+    const revision = profile.revisions.find((r) => r.status === "proposed");
+    expect(revision).toBeDefined();
+
+    const accept = reduce(profile, { type: "acceptRevision", revisionId: revision!.id, now: LATER });
+    expect(accept.ok).toBe(true);
+    profile = accept.profile;
+    expect(profile.boundaries[0]!.text).toBe("Do not invent metrics, credentials, responsibilities, or scope.");
+    expect(profile.approval).toEqual({ version: 2, at: LATER });
+  });
+
+  it("editing a boundary before approval applies directly — no revision needed", () => {
+    const newId = idGen("id");
+    const profile = createInitialProfile(newId);
+    const boundaryId = profile.boundaries[0]!.id;
+
+    const edit = reduce(profile, { type: "editStatementText", kind: "boundary", statementId: boundaryId, text: "Never invent a metric.", now: NOW, newId });
+    expect(edit.ok).toBe(true);
+    expect(edit.profile.boundaries[0]!.text).toBe("Never invent a metric.");
+    expect(edit.profile.revisions).toHaveLength(0);
   });
 });

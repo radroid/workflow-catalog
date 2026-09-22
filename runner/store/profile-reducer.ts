@@ -1,6 +1,13 @@
 import type { Claim, ClaimKind, SourceStatus } from "@workflow-catalog/contracts";
 import { draftQuestion, needsQuestion } from "./profile-questions.ts";
-import { isSourcesComplete, unaccountedCategories, type OnboardingProfile, type SourceCategory } from "./profile-types.ts";
+import {
+  isSourcesComplete,
+  SOURCE_CATEGORY_LABELS,
+  unaccountedCategories,
+  type OnboardingProfile,
+  type SourceCategory,
+  type StatementKind,
+} from "./profile-types.ts";
 
 /**
  * The pure state machine behind onboarding and the career profile: `(state,
@@ -31,7 +38,14 @@ export type Action =
       readonly now: string;
       readonly newId: () => string;
     }
-  | { readonly type: "decideClaim"; readonly claimId: string; readonly decision: ClaimDecision; readonly now: string; readonly question?: string }
+  | {
+      readonly type: "decideClaim";
+      readonly claimId: string;
+      readonly decision: ClaimDecision;
+      readonly now: string;
+      readonly newId: () => string;
+      readonly question?: string;
+    }
   | {
       readonly type: "answerQuestion";
       readonly claimId: string;
@@ -42,6 +56,14 @@ export type Action =
     }
   | { readonly type: "approve"; readonly now: string }
   | { readonly type: "editClaimText"; readonly claimId: string; readonly text: string; readonly now: string; readonly newId: () => string }
+  | {
+      readonly type: "editStatementText";
+      readonly kind: StatementKind;
+      readonly statementId: string;
+      readonly text: string;
+      readonly now: string;
+      readonly newId: () => string;
+    }
   | { readonly type: "acceptRevision"; readonly revisionId: string; readonly now: string }
   | { readonly type: "rejectRevision"; readonly revisionId: string; readonly now: string };
 
@@ -70,6 +92,16 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+/** "needs"/"need" agreeing with `plural`'s own singular/plural noun choice — `plural(1, "claim")` is "1 claim", which takes "needs", not "need". */
+function pluralVerb(n: number, verb: string): string {
+  return n === 1 ? `${verb}s` : verb;
+}
+
+/** First 8 characters of a UUID: readiness reasons are for a person to read, not to address a specific record by (`Readiness.pendingClaims` already carries the full `Claim`s for that). */
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
 export function readiness(profile: OnboardingProfile): Readiness {
   const unaccounted = unaccountedCategories(profile.sources);
   const pendingClaims = profile.claims.filter((claim) => claim.status === "candidate" || claim.status === "disputed");
@@ -81,11 +113,13 @@ export function readiness(profile: OnboardingProfile): Readiness {
   const reasons: string[] = [];
   if (!sourcesAccounted) {
     reasons.push(
-      `Not ready: ${plural(unaccounted.length, "source")} unaccounted for (${unaccounted.join(", ")}). Mark each provided, unavailable, or not applicable.`,
+      `Not ready: ${plural(unaccounted.length, "source")} unaccounted for (${unaccounted.map((category) => SOURCE_CATEGORY_LABELS[category]).join(", ")}). Mark each provided, unavailable, or not applicable.`,
     );
   }
   if (!claimsSettled) {
-    reasons.push(`Not ready: ${plural(pendingClaims.length, "claim")} still need a decision (${pendingClaims.map((claim) => claim.id).join(", ")}).`);
+    reasons.push(
+      `Not ready: ${plural(pendingClaims.length, "claim")} still ${pluralVerb(pendingClaims.length, "need")} a decision (${pendingClaims.map((claim) => shortId(claim.id)).join(", ")}).`,
+    );
   } else if (profile.claims.length === 0) {
     reasons.push("Not ready: no claims yet. Extract claims from a provided source first.");
   } else if (!hasConfirmedClaims) {
@@ -121,6 +155,82 @@ export function decodeClaimEditSummary(summary: string): { readonly claimId: str
   const text = rest.slice(newline + 1);
   if (!claimId || !text) return undefined;
   return { claimId, text };
+}
+
+const STATEMENT_EDIT_PREFIX = "statement-edit:";
+
+/** `revisions[].summary` encoding for a proposed boundary/preference/presentation edit — the statement-level counterpart of `encodeClaimEditSummary`, for the same reason (F5: an edit after approval proposes a revision instead of changing it outright). */
+export function encodeStatementEditSummary(kind: StatementKind, statementId: string, text: string): string {
+  return `${STATEMENT_EDIT_PREFIX}${kind}\n${statementId}\n${text}`;
+}
+
+export function decodeStatementEditSummary(summary: string): { readonly kind: StatementKind; readonly statementId: string; readonly text: string } | undefined {
+  if (!summary.startsWith(STATEMENT_EDIT_PREFIX)) return undefined;
+  const rest = summary.slice(STATEMENT_EDIT_PREFIX.length);
+  const firstNewline = rest.indexOf("\n");
+  if (firstNewline === -1) return undefined;
+  const kind = rest.slice(0, firstNewline);
+  if (kind !== "boundary" && kind !== "preference" && kind !== "presentation") return undefined;
+  const rest2 = rest.slice(firstNewline + 1);
+  const secondNewline = rest2.indexOf("\n");
+  if (secondNewline === -1) return undefined;
+  const statementId = rest2.slice(0, secondNewline);
+  const text = rest2.slice(secondNewline + 1);
+  if (!statementId || !text) return undefined;
+  return { kind, statementId, text };
+}
+
+const WITHDRAWAL_PREFIX = "withdrawal:";
+
+/**
+ * `revisions[].summary` encoding for an approval-withdrawal marker: not a
+ * proposed edit, but a record that `version` was once issued and must never
+ * be handed out again (R1: version numbers are never reused, even across a
+ * withdraw/re-approve cycle). `status: "accepted"` and `resultingVersion`
+ * are reused fields — not semantically "a revision was accepted" — purely
+ * so `highestVersionUsed` (which scans exactly those two things) sees it;
+ * the `withdrawal:` prefix is what actually distinguishes it from a real
+ * accepted claim/statement-edit revision. `careerProfileRevisionSchema`
+ * (`@workflow-catalog/contracts`) is a closed enum with no "withdrawn"
+ * status, and P03 does not touch contracts, so this reuses what the schema
+ * already allows rather than adding a new status value.
+ */
+function encodeWithdrawalSummary(version: number, reason: string): string {
+  return `${WITHDRAWAL_PREFIX}${version}\n${reason}`;
+}
+
+export function decodeWithdrawalSummary(summary: string): { readonly version: number; readonly reason: string } | undefined {
+  if (!summary.startsWith(WITHDRAWAL_PREFIX)) return undefined;
+  const rest = summary.slice(WITHDRAWAL_PREFIX.length);
+  const newline = rest.indexOf("\n");
+  if (newline === -1) return undefined;
+  const version = Number(rest.slice(0, newline));
+  const reason = rest.slice(newline + 1);
+  if (!Number.isInteger(version) || version <= 0 || !reason) return undefined;
+  return { version, reason };
+}
+
+/** The highest profile version ever issued: the current approval (if any) and every `revisions[].resultingVersion` recorded so far — accepted claim/statement edits and withdrawal markers alike. `approve`/`acceptRevision` both bump from this, never from `profile.approval?.version` alone, so a version is never reissued after a withdrawal (R1). */
+function highestVersionUsed(profile: OnboardingProfile): number {
+  let max = profile.approval?.version ?? 0;
+  for (const revision of profile.revisions) {
+    if (revision.resultingVersion !== undefined && revision.resultingVersion > max) max = revision.resultingVersion;
+  }
+  return max;
+}
+
+/** Withdraws approval, if any (a no-op otherwise), recording a withdrawal marker so the retired version is never reused. The walkthrough withdraws on any claim change that isn't an exclusion (R2); `decideClaim`'s "disputed" and "confirmed" branches and `answerQuestion`'s evidence branch all call this. */
+function withdrawApproval(profile: OnboardingProfile, now: string, newId: () => string, reason: string): OnboardingProfile {
+  if (profile.approval === null) return profile;
+  const marker = {
+    id: newId(),
+    summary: encodeWithdrawalSummary(profile.approval.version, reason),
+    proposedAt: now,
+    status: "accepted" as const,
+    resultingVersion: profile.approval.version,
+    decidedAt: now,
+  };
+  return { ...profile, approval: null, revisions: [...profile.revisions, marker] };
 }
 
 function ok(profile: OnboardingProfile, message: string): ReduceResult {
@@ -199,8 +309,13 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
 
       if (action.decision === "disputed") {
         const question = action.question ?? claim.question ?? draftQuestion(claim);
-        const next = replaceClaim(profile, claim.id, (c) => ({ ...c, status: "disputed", question }));
-        return ok(next, `${claim.id} needs a decision: "${question}"`);
+        let next = replaceClaim(profile, claim.id, (c) => ({ ...c, status: "disputed", question }));
+        let message = `${claim.id} needs a decision: "${question}"`;
+        if (next.approval !== null) {
+          next = withdrawApproval(next, action.now, action.newId, `${claim.id} disputed`);
+          message += " Profile approval withdrawn (a claim changed).";
+        }
+        return ok(next, message);
       }
 
       const nextClaim: Claim =
@@ -210,7 +325,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       let next = replaceClaim(profile, claim.id, () => nextClaim);
       let message = action.decision === "excluded" ? `${claim.id} excluded. It never appears in a generated document.` : `${claim.id} confirmed.`;
       if (next.approval !== null && action.decision !== "excluded") {
-        next = { ...next, approval: null };
+        next = withdrawApproval(next, action.now, action.newId, `${claim.id} changed`);
         message += " Profile approval withdrawn (a claim changed).";
       }
       return ok(next, message);
@@ -222,19 +337,25 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
 
       if (action.hasEvidence) {
         const statement = (action.statement ?? "").trim() || "Confirmed by the person, without further detail.";
-        const supersededSummary = `answer-evidence:${claim.id}\nsuperseded ${claim.evidence.kind} evidence "${claim.evidence.quote}" with the person's statement`;
-        const next = replaceClaim(profile, claim.id, (c) => ({
+        const supersededSummary = `answer-evidence:${claim.id}\nsuperseded ${claim.evidence.kind} evidence "${claim.evidence.quote}" (${claim.evidence.ref}) with the person's statement`;
+        const versionAtDecision = profile.approval?.version;
+        let next = replaceClaim(profile, claim.id, (c) => ({
           ...c,
           status: "confirmed",
           answeredAt: action.now,
           evidence: { kind: "statement", ref: `claim:${claim.id}#answer`, quote: statement },
         }));
+        let message = `${claim.id} confirmed; the evidence is recorded as your own statement, not as an external fact.`;
+        if (next.approval !== null) {
+          next = withdrawApproval(next, action.now, action.newId, `${claim.id} changed`);
+          message += " Profile approval withdrawn (a claim changed).";
+        }
         return ok(
           {
             ...next,
-            revisions: [...next.revisions, { id: action.newId(), summary: supersededSummary, proposedAt: action.now, status: "accepted", resultingVersion: next.approval?.version, decidedAt: action.now }],
+            revisions: [...next.revisions, { id: action.newId(), summary: supersededSummary, proposedAt: action.now, status: "accepted", resultingVersion: versionAtDecision, decidedAt: action.now }],
           },
-          `${claim.id} confirmed; the evidence is recorded as the person's own statement, not as an external fact.`,
+          message,
         );
       }
 
@@ -248,7 +369,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
         const blocking = r.reasons.find((reason) => !reason.includes("has not been approved yet"));
         return refuse(profile, blocking ?? "Not ready.");
       }
-      const version = (profile.approval?.version ?? 0) + 1;
+      const version = highestVersionUsed(profile) + 1;
       const next: OnboardingProfile = { ...profile, approval: { version, at: action.now } };
       return ok(next, `Career profile v${version} approved. Generation is now unlocked.`);
     }
@@ -272,16 +393,52 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       return ok(next, `A revision to ${claim.id} is proposed. Profile v${profile.approval.version} stays in force until the revision is accepted.`);
     }
 
+    case "editStatementText": {
+      const field = action.kind === "boundary" ? "boundaries" : action.kind === "preference" ? "preferences" : "presentation";
+      const list = profile[field];
+      const statement = list.find((s) => s.id === action.statementId);
+      if (!statement) return refuse(profile, `No ${action.kind} ${action.statementId} to edit.`);
+
+      if (profile.approval === null) {
+        const next: OnboardingProfile = { ...profile, [field]: list.map((s) => (s.id === statement.id ? { ...s, text: action.text } : s)) };
+        return ok(next, `${statement.id} edited. The profile is not approved yet, so no revision is needed.`);
+      }
+
+      const revision = {
+        id: action.newId(),
+        summary: encodeStatementEditSummary(action.kind, statement.id, action.text),
+        proposedAt: action.now,
+        status: "proposed" as const,
+      };
+      const next: OnboardingProfile = { ...profile, revisions: [...profile.revisions, revision] };
+      return ok(next, `A revision to this ${action.kind} is proposed. Profile v${profile.approval.version} stays in force until the revision is accepted.`);
+    }
+
     case "acceptRevision": {
+      if (profile.approval === null) return refuse(profile, "The career profile is not approved; there is nothing to accept a revision against.");
       const revision = profile.revisions.find((rev) => rev.id === action.revisionId && rev.status === "proposed");
       if (!revision) return refuse(profile, "No matching proposed revision.");
-      const decoded = decodeClaimEditSummary(revision.summary);
-      if (!decoded) return refuse(profile, "This revision cannot be applied automatically.");
-      const claim = findClaim(profile, decoded.claimId);
-      if (!claim) return refuse(profile, `Revision refers to a claim that no longer exists: ${decoded.claimId}.`);
 
-      const version = (profile.approval?.version ?? 0) + 1;
-      let next = replaceClaim(profile, claim.id, (c) => ({ ...c, text: decoded.text }));
+      const claimEdit = decodeClaimEditSummary(revision.summary);
+      const statementEdit = claimEdit ? undefined : decodeStatementEditSummary(revision.summary);
+      if (!claimEdit && !statementEdit) return refuse(profile, "This revision cannot be applied automatically.");
+
+      let next: OnboardingProfile;
+      if (claimEdit) {
+        const claim = findClaim(profile, claimEdit.claimId);
+        if (!claim) return refuse(profile, `Revision refers to a claim that no longer exists: ${claimEdit.claimId}.`);
+        next = replaceClaim(profile, claim.id, (c) => ({ ...c, text: claimEdit.text }));
+      } else {
+        const edit = statementEdit!;
+        const field = edit.kind === "boundary" ? "boundaries" : edit.kind === "preference" ? "preferences" : "presentation";
+        const list = profile[field];
+        if (!list.some((s) => s.id === edit.statementId)) {
+          return refuse(profile, `Revision refers to a ${edit.kind} that no longer exists: ${edit.statementId}.`);
+        }
+        next = { ...profile, [field]: list.map((s) => (s.id === edit.statementId ? { ...s, text: edit.text } : s)) };
+      }
+
+      const version = highestVersionUsed(profile) + 1;
       next = {
         ...next,
         approval: { version, at: action.now },

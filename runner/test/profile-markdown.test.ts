@@ -29,7 +29,7 @@ describe("profile-markdown", () => {
       newId,
     }).profile;
     const claimId = profile.claims[0]!.id;
-    profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW }).profile;
+    profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW, newId }).profile;
 
     const markdown = renderProfileMarkdown(profile);
     const headings = ["# Career profile", "## Confirmed claims", "## Presentation that can change", "## Needs a decision", "## Excluded", "## Boundaries", "## Preferences"];
@@ -58,8 +58,8 @@ describe("profile-markdown", () => {
       newId,
     }).profile;
     const [claimA, claimB] = profile.claims;
-    profile = reduce(profile, { type: "decideClaim", claimId: claimA!.id, decision: "confirmed", now: NOW }).profile;
-    profile = reduce(profile, { type: "decideClaim", claimId: claimB!.id, decision: "confirmed", now: NOW }).profile;
+    profile = reduce(profile, { type: "decideClaim", claimId: claimA!.id, decision: "confirmed", now: NOW, newId }).profile;
+    profile = reduce(profile, { type: "decideClaim", claimId: claimB!.id, decision: "confirmed", now: NOW, newId }).profile;
 
     const original = renderProfileMarkdown(profile);
     const edited = original.replace(`Led the payments team. \`[${claimA!.id}]\``, `Led the core payments team. \`[${claimA!.id}]\``);
@@ -103,5 +103,89 @@ describe("profile-markdown", () => {
     const profile = createInitialProfile(newId);
     const updated = applyMarkdownEdits(profile, "# Career profile\n\nNo markers here.\n");
     expect(updated).toBe(profile); // same reference: reducer-style, no unnecessary copy
+  });
+
+  describe("D5: multi-line text round-trips", () => {
+    // A tiny seeded PRNG (mulberry32) — deterministic, no new dependency, so a
+    // failure always reproduces from the printed seed. Generates 1-4 line
+    // claim/statement text, some lines short, some long, to reproduce R8's
+    // exact failure mode: "Ran the migration\n- Owned the rollback plan"
+    // (a continuation line that itself starts with "- ") collapsing to just
+    // its last line once round-tripped through the old single-line regex.
+    function mulberry32(seed: number): () => number {
+      let a = seed >>> 0;
+      return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    const WORDS = ["Ran", "the", "migration", "Owned", "rollback", "plan", "-", "led", "a", "team", "of", "engineers", "across", "three", "quarters", "`weird`", "[brackets]"];
+
+    function randomLine(rand: () => number): string {
+      const wordCount = 1 + Math.floor(rand() * 5);
+      const words: string[] = [];
+      for (let i = 0; i < wordCount; i++) words.push(WORDS[Math.floor(rand() * WORDS.length)]!);
+      return words.join(" ");
+    }
+
+    /** 1-4 non-empty lines, joined with `\n` — some lines deliberately start with "-" (R8's exact repro) or contain a stray backtick/bracket, to prove those don't get confused for a new bullet or an id marker mid-text. */
+    function randomMultiLineText(rand: () => number): string {
+      const lineCount = 1 + Math.floor(rand() * 4);
+      const lines: string[] = [];
+      for (let i = 0; i < lineCount; i++) {
+        const line = randomLine(rand);
+        lines.push(rand() < 0.3 ? `- ${line}` : line);
+      }
+      return lines.join("\n");
+    }
+
+    for (let seed = 1; seed <= 60; seed++) {
+      it(`round-trips a generated multi-line claim text (seed ${seed})`, () => {
+        const rand = mulberry32(seed);
+        const text = randomMultiLineText(rand);
+        const newId = idGen("id");
+        let profile = createInitialProfile(newId);
+        profile = reduce(profile, { type: "accountSource", category: "resume", status: "provided" }).profile;
+        profile = reduce(profile, {
+          type: "extractClaims",
+          category: "resume",
+          extracted: [{ text, kind: "fact", evidenceRef: "resume.md#a", evidenceQuote: "seed" }],
+          now: NOW,
+          newId,
+        }).profile;
+        const claimId = profile.claims[0]!.id;
+        profile = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW, newId }).profile;
+
+        const rendered = renderProfileMarkdown(profile);
+        const edits = parseProfileMarkdownEdits(rendered);
+        expect(edits.get(claimId), `seed ${seed}, generated text: ${JSON.stringify(text)}`).toBe(text);
+
+        // Saving the markdown back UNCHANGED must reproduce the same profile exactly (R8's "saving unchanged markdown must not lose text").
+        const roundTripped = applyMarkdownEdits(profile, rendered);
+        expect(roundTripped).toEqual(profile);
+        expect(renderProfileMarkdown(roundTripped)).toBe(rendered);
+      });
+    }
+
+    it("round-trips a multi-line boundary edit too — the marker convention is section-agnostic", () => {
+      const rand = mulberry32(4242);
+      const newId = idGen("id");
+      const profile = createInitialProfile(newId);
+      const boundaryId = profile.boundaries[0]!.id;
+      const text = randomMultiLineText(rand);
+      const rendered = renderProfileMarkdown(profile);
+      const replacementLines = text.split("\n").map((l, i) => (i === 0 ? `- ${l}` : `  ${l}`));
+      replacementLines[replacementLines.length - 1] += ` \`[${boundaryId}]\``;
+      const edited = rendered.replace(`- Do not invent metrics, credentials, or responsibilities. \`[${boundaryId}]\``, () => replacementLines.join("\n"));
+
+      const edits = parseProfileMarkdownEdits(edited);
+      expect(edits.get(boundaryId)).toBe(text);
+      const updated = applyMarkdownEdits(profile, edited);
+      expect(updated.boundaries.find((b) => b.id === boundaryId)?.text).toBe(text);
+    });
   });
 });

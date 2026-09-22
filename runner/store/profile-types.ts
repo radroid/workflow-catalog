@@ -13,6 +13,17 @@ import {
 export { SOURCE_CATEGORIES };
 export type { CareerProfile, CareerProfileApproval, CareerProfileRevision, Claim, ProfileStatement, SourceCategory, SourceEntry };
 
+/** A human label per `SourceCategory`, for readiness reasons and any other server-generated text a person reads — never a raw camelCase key like `targetRolesAndPreferences`. Mirrored client-side in `ui/assets/onboarding.js`'s `SOURCE_LABELS` (the browser cannot import this module; see that file's own comment on the same convention `profile.js` uses for `decodeClaimEditSummary`). */
+export const SOURCE_CATEGORY_LABELS: Record<SourceCategory, string> = {
+  resume: "Resume",
+  previousCoverLetters: "Previous cover letters",
+  portfolioSite: "Portfolio / personal site",
+  repositories: "Repositories",
+  socialProfiles: "Social profiles (exported)",
+  workSamples: "Work samples",
+  targetRolesAndPreferences: "Target roles & preferences",
+};
+
 /**
  * The onboarding profile's shape, identical to `CareerProfile`
  * (`@workflow-catalog/contracts`) except `sources`, which is a *partial* map
@@ -36,6 +47,14 @@ export interface OnboardingProfile {
   readonly presentation: readonly ProfileStatement[];
   readonly approval: CareerProfileApproval | null;
   readonly revisions: readonly CareerProfileRevision[];
+}
+
+/** Which of `OnboardingProfile`'s three free-form statement lists a `ProfileStatement` id belongs to — singular by convention (matches the reducer's `editStatementText` action), distinct from the plural field names. */
+export type StatementKind = "boundary" | "preference" | "presentation";
+
+/** The `OnboardingProfile` field a `StatementKind` addresses. */
+export function statementField(kind: StatementKind): "boundaries" | "preferences" | "presentation" {
+  return kind === "boundary" ? "boundaries" : kind === "preference" ? "preferences" : "presentation";
 }
 
 /** Every one of the seven categories has an accounting entry. */
