@@ -265,6 +265,29 @@ certainly a larger polling budget in `bridge-e2e.spec.ts`'s gate-4 test
 (already generous, 60 s), not the alarm delay itself — worth watching `gh
 pr checks` for on this PR before assuming it's settled everywhere.
 
+**CI follow-up (post-report, commit `3e3fad7`).** The alarm-timing worry
+above turned out to be a non-issue — gate 4 passed in real GitHub Actions
+CI at 31.1s, first try. A different flake showed up instead: PR #12's
+first CI run (`gh run view 35741280852 --log-failed`) failed
+`real-popup.spec.ts`'s P07A-popup-dark.png capture with a brightness
+mismatch (mean RGB 252, expected dark), on CI's 2-worker `ubuntu-latest`
+runner — never reproduced locally across 20+ 4-worker runs before that.
+`captureInTheme`'s own doc comment had asserted a brightness mismatch was
+"a different, non-timing failure and is never retried"; the CI evidence
+disproved that. It's the same `prefers-color-scheme`-override-drop race
+`ensureColorScheme`/`verifyTheme` already document and retry for (see
+those two functions' comments in `extension/e2e/theme-capture.ts`), just
+surfacing as a wrong pixel instead of a wrong `data-theme` or a leaked
+DevTools label. Fixed by having `captureInTheme` re-force the colour
+scheme via `ensureColorScheme` and retry, bounded at the same
+`maxAttempts` the DevTools-label check already used, rather than throwing
+on the first bad reading. Re-verified: typecheck/lint/build/vitest (184
+passed) clean; full e2e suite green across 3 consecutive `--workers=2`
+runs (CI's own concurrency) plus 3 more of `real-popup.spec.ts` alone;
+port 4310 confirmed free before and after every run. CI re-run
+(`35743032356`) passed end to end, including the previously-failing step,
+in 2m59s.
+
 Files changed (verified via `git diff --stat` against the merge-base,
 `dc36fc0`): `extension/**`, `.github/workflows/ci.yml` (one step),
 `docs/screenshots/P07B-*.png`, this packet file, and `pnpm-lock.yaml`
