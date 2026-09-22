@@ -30,7 +30,7 @@
  * pattern, so this layer is deliberately looser-typed than the rest of
  * this file.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "@playwright/test";
@@ -42,7 +42,8 @@ export interface RawCdpSession {
   readonly targetId: string;
   call(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
   evaluate<T = unknown>(expression: string): Promise<T>;
-  screenshot(file: string): Promise<void>;
+  /** PNG bytes of the target's current frame; the caller verifies and writes it. */
+  screenshot(): Promise<Buffer>;
   pressKey(options: { key: string; code: string; windowsVirtualKeyCode: number; text?: string }): Promise<void>;
   detach(): Promise<void>;
 }
@@ -105,10 +106,10 @@ export async function attachRawSession(bs: CDPSession, targetId: string): Promis
     return typed.result?.value as T;
   };
 
-  const screenshot = async (file: string): Promise<void> => {
+  const screenshot = async (): Promise<Buffer> => {
     const raw = await call("Page.captureScreenshot", { format: "png" });
     const { data } = raw as { data: string };
-    writeFileSync(file, Buffer.from(data, "base64"));
+    return Buffer.from(data, "base64");
   };
 
   const pressKey = async (options: { key: string; code: string; windowsVirtualKeyCode: number; text?: string }): Promise<void> => {
@@ -207,7 +208,13 @@ export async function getTabTargetId(bs: CDPSession, context: BrowserContext, pa
 
 /** Invokes the extension's default action against the given tab target --
  * a real, first-party action trigger, not a synthetic click -- then polls
- * for the popup's own page target to appear and attaches to it. */
+ * for the popup's own page target to appear and attaches to it.
+ *
+ * The first thing sent on that session turns off DevTools' viewport-size
+ * label ("380px × 418px", painted top-right after a resize) for this
+ * session's own overlay, before the popup resizes itself to fit its preview.
+ * That alone didn't keep the label out of captures, so real-popup.spec.ts
+ * also captures only after a resize-quiet period (AFTER_RESIZE_QUIET). */
 export async function triggerRealPopup(bs: CDPSession, extId: string, tabTargetId: string): Promise<RawCdpSession> {
   await bs.send("Extensions.triggerAction", { id: extId, targetId: tabTargetId });
 
@@ -216,7 +223,9 @@ export async function triggerRealPopup(bs: CDPSession, extId: string, tabTargetI
     const { targetInfos } = await bs.send("Target.getTargets", {});
     const popup = targetInfos.find((info) => info.type === "page" && info.url === popupUrl);
     if (popup) {
-      return attachRawSession(bs, popup.targetId);
+      const session = await attachRawSession(bs, popup.targetId);
+      await session.call("Overlay.setShowViewportSizeOnResize", { show: false });
+      return session;
     }
     await sleep(100);
   }

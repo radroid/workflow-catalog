@@ -139,9 +139,20 @@ deliberate, generous main-thread busy-wait so the tab's URL changes
 answered entirely by the browser process from cached tab state, unaffected
 by that tab's renderer being busy; not a timing race against real router
 latency), and axe (0 WCAG 2.x A/AA + best-practice violations) against
-every state above plus the options page, light and dark. The P07A
-acceptance screenshots are retaken here, from the real popup and options
-pages, not a stand-in.
+every state above plus the options page, light and dark. It also captures
+the P07A acceptance screenshots from the real popup and options pages, and
+accepts a capture only once the page shows the requested theme before and
+after it (body background equals `theme.css`'s `--background` for that
+theme), and the captured image's own background is light or dark to match.
+It re-applies the colour scheme if the popup drops it, and captures only
+after 1.1 s with no resize, so DevTools' viewport-size label is gone. A
+normal run writes these captures under `extension/test-results/`
+(gitignored) and leaves the working tree clean. To rewrite the committed
+`docs/screenshots/P07A-*.png`, opt in:
+
+```sh
+P07A_UPDATE_SCREENSHOTS=1 pnpm --filter @workflow-catalog/extension test:e2e
+```
 
 ## Manual smoke test (branded Chrome)
 
