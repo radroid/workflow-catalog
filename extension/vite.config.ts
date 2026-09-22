@@ -18,6 +18,14 @@ export default defineConfig({
     outDir: path.resolve(here, "dist"),
     emptyOutDir: true,
     target: "es2022",
+    // Review fold-in c: Vite's default modulePreload injects a small
+    // feature-detect-and-polyfill snippet (a `fetch(` among other things)
+    // into every HTML entry to shim browsers without native
+    // `<link rel="modulepreload">` support. minimum_chrome_version 120
+    // already has it natively, so the polyfill is dead weight -- and one
+    // less `fetch(` for scan-dist-for-eval.mjs and a reviewer to reason
+    // about in a build that ships no network calls at all in part A.
+    modulePreload: { polyfill: false },
     rollupOptions: {
       input: {
         popup: path.resolve(here, "src/popup/index.html"),

@@ -84,4 +84,17 @@ describe("manifest.json paths resolve inside the built extension (when dist/ exi
       expect(existsSync(path.join(distDir, relativePath)), `dist/${relativePath} should exist`).toBe(true);
     }
   });
+
+  // Review fold-in e: copy-static-assets.mjs is a plain byte copy (root
+  // manifest.json -> public/manifest.json, which Vite's publicDir
+  // passthrough then copies verbatim into dist/), but nothing before this
+  // enforced that -- a hand-edit of public/manifest.json alone (skipping
+  // the copy step) would silently ship a manifest that diverges from the
+  // one reviewed at the repo root. Parsed deep-equal rather than a raw
+  // string/byte compare so the intent ("same declared shape") survives
+  // incidental whitespace/line-ending differences.
+  runIfBuilt("dist/manifest.json is exactly the source manifest.json (copy-static-assets.mjs did not diverge)", () => {
+    const builtManifest = JSON.parse(readFileSync(path.join(distDir, "manifest.json"), "utf8")) as unknown;
+    expect(builtManifest).toEqual(manifest);
+  });
 });
