@@ -22,7 +22,18 @@ export const ADMIN_ERROR_MESSAGES: Record<AdminErrorCode, string> = {
 
 export function adminErrorMessage(code: string | undefined): string | null {
   if (!code) return null;
-  return (ADMIN_ERROR_MESSAGES as Record<string, string>)[code] ?? GENERIC_ERROR_MESSAGE;
+  // Object.hasOwn, not a bracket lookup + `?? GENERIC_ERROR_MESSAGE`: every
+  // plain object inherits properties like `constructor` and (in most JS
+  // engines) an own-ish `__proto__` accessor from Object.prototype, so
+  // `ADMIN_ERROR_MESSAGES["__proto__"]` resolves to `Object.prototype`
+  // itself and `ADMIN_ERROR_MESSAGES["constructor"]` resolves to the
+  // `Object` constructor function — both truthy, so `??` never falls back,
+  // and React then throws trying to render a function/object as a child. A
+  // `?error=__proto__` link crashed the page this way. hasOwn only matches
+  // a key this object was actually built with, i.e. one of AdminErrorCode.
+  return Object.hasOwn(ADMIN_ERROR_MESSAGES, code)
+    ? ADMIN_ERROR_MESSAGES[code as AdminErrorCode]
+    : GENERIC_ERROR_MESSAGE;
 }
 
 export type InviteErrorCode = "not_configured" | "missing_token" | "invalid_token" | "invalid_display_name";
@@ -36,5 +47,11 @@ export const INVITE_ERROR_MESSAGES: Record<InviteErrorCode, string> = {
 
 export function inviteErrorMessage(code: string | undefined): string | null {
   if (!code) return null;
-  return (INVITE_ERROR_MESSAGES as Record<string, string>)[code] ?? GENERIC_ERROR_MESSAGE;
+  // See adminErrorMessage's comment: Object.hasOwn (not a bracket lookup +
+  // `?? GENERIC_ERROR_MESSAGE`) so an inherited property name like
+  // `__proto__` or `constructor` can never resolve to anything but the
+  // generic fallback.
+  return Object.hasOwn(INVITE_ERROR_MESSAGES, code)
+    ? INVITE_ERROR_MESSAGES[code as InviteErrorCode]
+    : GENERIC_ERROR_MESSAGE;
 }
