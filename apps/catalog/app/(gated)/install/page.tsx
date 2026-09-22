@@ -52,18 +52,29 @@ export default async function InstallPage() {
                 <input type="hidden" name="checked" value={isChecked ? "false" : "true"} />
                 {/* A visually hidden, item-specific prefix makes each button's
                     accessible name distinct (a screen reader announces e.g.
-                    "Node 24 present — Mark done, not pressed" instead of three
-                    indistinguishable "Mark done" buttons), while the accessible
-                    name still *contains* the visible text verbatim — satisfying
+                    "Node 24 present — Done, pressed" instead of five
+                    indistinguishable buttons), while the accessible name
+                    still *contains* the visible text verbatim — satisfying
                     WCAG 2.5.3 Label in Name, which a first attempt using
                     aria-label (replacing the text outright, rather than
                     prefixing it) failed: axe's label-content-name-mismatch
-                    flagged all five buttons once the visible "Mark done" text
-                    no longer appeared anywhere in the accessible name.
-                    aria-pressed still carries the boolean state. */}
+                    flagged all five buttons once the visible text no longer
+                    appeared anywhere in the accessible name.
+
+                    The visible word itself used to flip between "Mark done"
+                    and "Undo" — a P09-B must-fix caught that against the
+                    ARIA APG toggle-button pattern: a toggle's accessible
+                    name must stay constant across its two states (like a
+                    mute button that always reads "Mute", never "Unmute"),
+                    with aria-pressed alone carrying which state it's in.
+                    "Done" is that constant word here; the pressed/not-pressed
+                    state is then shown visually two ways — the check-mark
+                    span above, and this button filling solid (see globals.css
+                    ".check-row button[aria-pressed='true']") — so a sighted
+                    user isn't relying on the (identical) button text alone. */}
                 <button type="submit" className="small" aria-pressed={isChecked}>
                   <span className="visually-hidden">{item.label} — </span>
-                  {isChecked ? "Undo" : "Mark done"}
+                  Done
                 </button>
               </form>
             </div>

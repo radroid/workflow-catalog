@@ -170,12 +170,30 @@ describe("confirmed claims follow follow-up-questions' always-ask rule", () => {
 
   it("reads the always-ask kinds and words from the skill", () => {
     expect(alwaysAskKinds).toEqual(expect.arrayContaining(["metric", "title", "date"]));
-    expect(alwaysAskWords).toEqual(expect.arrayContaining(["led", "founded", "the only", "fastest"]));
+    expect(alwaysAskWords).toEqual(
+      expect.arrayContaining(["led", "founded", "the only", "fastest", "maintainer", "used by"]),
+    );
   });
 
   it("matches whole words in any case, so 'Led' counts and 'ledger' does not", () => {
     expect(usesAlwaysAskWord("Led the payments infrastructure team")).toBe(true);
-    expect(usesAlwaysAskWord("Maintainer of Ledgerkit, an open-source ledger reconciliation library.")).toBe(false);
+    // "ledger"/"Ledgerkit" both contain "led" as a substring, never as a
+    // whole word — isolated from "maintainer" (a separate always-ask word,
+    // covered below) so this only exercises the whole-word boundary.
+    expect(usesAlwaysAskWord("Ledgerkit is an open-source ledger reconciliation library.")).toBe(false);
+  });
+
+  // P01.1 packet: the always-ask wording ("superlative, role, or scope")
+  // already covered these two fixture claims' texts verbatim before the
+  // word list did; these two words close that gap. See the fixtures test
+  // below for the end-to-end proof (both claims carry question/answeredAt).
+  it("matches the role/scope words added for 76d49b1e and 169fa5e1", () => {
+    expect(usesAlwaysAskWord("Maintainer of Ledgerkit, an open-source ledger reconciliation library.")).toBe(
+      true,
+    );
+    expect(usesAlwaysAskWord("Shipped the on-call rotation tooling used by three engineering teams.")).toBe(
+      true,
+    );
   });
 
   it("every confirmed metric, title or date claim, and every confirmed claim using an always-ask word, carries question and answeredAt", () => {

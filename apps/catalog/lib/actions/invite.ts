@@ -11,9 +11,14 @@ import type { InviteErrorCode } from "../error-messages";
 export async function acceptInviteAction(formData: FormData): Promise<void> {
   const token = String(formData.get("token") ?? "");
 
-  // See lib/error-messages.ts: only a fixed CODE ever goes in the URL.
+  // See lib/error-messages.ts: only a fixed CODE ever goes in the URL. `n`
+  // is a per-attempt remount nonce, not a security token — see the matching
+  // comment on adminError in lib/actions/owner.ts for why it's needed: two
+  // consecutive identical refusals must still redirect to two different
+  // URLs, or <ErrorAlert>'s focus-on-mount effect never re-fires the
+  // second time.
   function refused(code: InviteErrorCode): never {
-    redirect(`/invite/${encodeURIComponent(token)}?error=${code}`);
+    redirect(`/invite/${encodeURIComponent(token)}?error=${code}&n=${crypto.randomUUID()}`);
   }
 
   try {

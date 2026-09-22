@@ -3,17 +3,22 @@ import { getDb } from "../../../lib/db";
 import { checkInviteToken } from "../../../lib/invites";
 import { DISPLAY_NAME_MAX_LENGTH } from "../../../lib/display-name";
 import { inviteErrorMessage } from "../../../lib/error-messages";
+import { ErrorAlert } from "../../../components/error-alert";
 
 export const metadata = { title: "Accept invite · workflow catalog" };
 
 interface InvitePageProps {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ error?: string }>;
+  // `n`: see lib/actions/invite.ts's refused — a per-attempt nonce, used
+  // only as the ErrorAlert element's key below so a second identical
+  // refusal still remounts (and so re-focuses/re-announces) instead of
+  // re-rendering the same element in place.
+  searchParams: Promise<{ error?: string; n?: string }>;
 }
 
 export default async function InvitePage({ params, searchParams }: InvitePageProps) {
   const { token } = await params;
-  const { error: errorCode } = await searchParams;
+  const { error: errorCode, n: nonce } = await searchParams;
   const error = inviteErrorMessage(errorCode);
 
   const db = await getDb();
@@ -25,20 +30,12 @@ export default async function InvitePage({ params, searchParams }: InvitePagePro
       <h1>Join the pilot</h1>
 
       {status === "invalid" ? (
-        <div className="flash error" role="alert" tabIndex={-1} autoFocus>
-          <span className="tag">Refused</span>
-          This invite link is invalid or has already been used. Ask the owner for a new one.
-        </div>
+        <ErrorAlert message="This invite link is invalid or has already been used. Ask the owner for a new one." />
       ) : (
         <>
           <p className="lede">Choose a display name to sign in. It is the only thing the catalog stores about you.</p>
 
-          {error ? (
-            <div id="invite-error" className="flash error" role="alert" tabIndex={-1} autoFocus>
-              <span className="tag">Refused</span>
-              {error}
-            </div>
-          ) : null}
+          {error ? <ErrorAlert key={nonce} id="invite-error" message={error} /> : null}
 
           <form action={acceptInviteAction} className="card pad">
             <input type="hidden" name="token" value={token} />

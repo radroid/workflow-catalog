@@ -3,8 +3,8 @@
 The invite-only Next.js catalog site (`apps/catalog`), deployed on Vercel Hobby at a $0 target.
 See `docs/spec/implementation/P09-catalog-site.md` for the packet this ships, and
 `docs/spec/mvp-spec.md` §1/§3 (F1–F3) for the product contracts. Part A ships invite
-sign-in, the install guide, and `docs/learn` rendering; part B (the template page and the
-release workflow) is a later packet.
+sign-in, the install guide, and `docs/learn` rendering. Part B ships the template page
+(`/templates/job-assistant`) and the release workflow that publishes the package it reads.
 
 ## Environment variables
 
@@ -33,9 +33,20 @@ pnpm --filter catalog dev --port 3103
 ```
 
 No `DATABASE_URL` is needed locally: the first request that touches the database creates
-(and self-migrates) a PGlite store under `apps/catalog/.data/pglite/`. Delete that directory to
-start over. Never run `pnpm --filter catalog dev` on port 3000 — that's the owner's port
-(see the repo root `CLAUDE.md`); this app defaults to whatever port you pass.
+(and self-migrates) a PGlite store under `apps/catalog/.data/pglite/` (recursively, so this
+works on a fresh clone where `apps/catalog/.data/` doesn't exist yet either). Delete that
+directory to start over. Never run `pnpm --filter catalog dev` on port 3000 — that's the
+owner's port (see the repo root `CLAUDE.md`); this app defaults to whatever port you pass.
+
+**Browse `localhost`, not `127.0.0.1`.** Next 16's dev server only accepts the dev-only
+`/_next/hmr` WebSocket handshake from an allowed origin, and `localhost` is allowed by
+default — `127.0.0.1` is not, even on the same machine. Loading the app via `127.0.0.1:<port>`
+still serves the initial HTML/CSS correctly, but the HMR socket never connects, which (for
+reasons internal to Next's dev client bootstrap) blocks React hydration entirely: every
+interaction silently degrades to a plain no-JS-style full-page POST/reload instead of a
+client-side transition. `next.config.ts` also lists `127.0.0.1` in `allowedDevOrigins` as a
+second line of defense for tooling that defaults to it, but `localhost` is still the
+recommended way to browse this app locally.
 
 ## Database
 
@@ -93,8 +104,53 @@ Handler that reads from an allowlist built from the real directory listing — s
 the production build to trace those files too, since Vercel otherwise only uploads what a route
 provably touches.
 
+## Template page and package releases
+
+`/templates/job-assistant` (session-gated, like `/install`) renders `packages/job-assistant/workflow.json`
+— validated at module load with `@workflow-catalog/contracts`'s `workflowManifestSchema.parse`, so an
+invalid manifest fails `next build`, not just a request at runtime — plus the current release's checksum
+and download link. `lib/release.ts` fetches the release's published `.sha256` asset directly from GitHub's
+fixed, documented release-download URL pattern (`github.com/<owner>/<repo>/releases/download/<tag>/<asset>`)
+— no GitHub API call, so no API-supplied URL to validate (the tarball's own download link is built from
+that same fixed pattern) and no share of the unauthenticated API's 60/hour rate limit spent on the common
+case of "no release published yet" (a plain 404 on that fixed URL). Unauthenticated, a 5s timeout that
+covers the full response body read (not just headers) with a small size cap, Next's data cache revalidating
+hourly. Before any release exists, or if the fetch errs or times out, the page says so instead of showing a
+broken link; it never falls back to any other source for the download URL.
+
+**`.github/workflows/release-package.yml`** packs `packages/job-assistant` into `job-assistant-<version>.tgz`
+and publishes it as a GitHub release, triggered by pushing a tag `job-assistant@x.y.z`. It refuses to run
+unless that version equals both `packages/job-assistant/workflow.json`'s `version` and
+`packages/job-assistant/package.json`'s `version`, runs the package's own tests, and publishes the tarball
+alongside a `job-assistant-<version>.tgz.sha256` file (`sha256sum`'s own `<hex>  <filename>` format) — the
+template page reads its hex from that file's content, per mvp-spec.md F2's amendment: the checksum has to
+be the tarball's own hash, published beside it, because nothing inside the tarball can hold a hash of
+itself.
+
+**The autonomous build loop never pushes a tag or creates a release** — `gh release create` is denied by
+`.claude/settings.json` in every worktree, and pushing a `job-assistant@*` tag is exactly the action that
+would trigger a real, outward-facing release. The owner pushes the first tag by hand once part B's PR is
+merged: `git tag job-assistant@0.1.0 -m "job-assistant 0.1.0" && git push origin job-assistant@0.1.0`
+(matching the version already in `workflow.json`/`package.json` today). Until that first tag is pushed,
+the template page's checksum/download section correctly shows "Checksum and download appear with the
+first release."
+
 ## Tests
 
 `pnpm --filter catalog test` (Vitest). PGlite-backed integration tests cover the invite service,
 the owner/session cookie gates, `proxy.ts`'s redirect behavior, the gated-layout revocation
-check, the schema allowlist, and the learn-docs path-traversal cases — see `tests/`.
+check, the schema allowlist, and the learn-docs path-traversal cases — see `tests/`. Part B adds
+the `workflow.json` manifest validation, the release-asset fetch (mocked `fetch`: found, absent,
+error, a timeout before headers arrive, and a timeout from a body that stalls after headers
+arrive — see `tests/release.test.ts`), and the `getDb()` cross-module-instance singleton
+(`tests/db/global-singleton.test.ts`, which reproduces the dev-mode duplicate-PGlite bug with
+`vi.resetModules()`) plus its fresh-clone and failure-recovery behavior
+(`tests/db/fresh-clone-and-recovery.test.ts`).
+
+Almost every test reads source as text and asserts structural facts (this repo's established
+convention — see `tests/globals.test.ts`'s header) rather than rendering React, since a Server
+Component or a Server Action can't meaningfully be rendered in isolation. The one exception is
+`tests/error-alert-remount.test.tsx`, which needs a real DOM to assert that focus actually moves
+(a source pattern match can prove the JSX has the right shape, not that anything happens at
+runtime) — it runs under `happy-dom` via a per-file `// @vitest-environment happy-dom` pragma,
+the only test file in this project that isn't in the default Node environment.

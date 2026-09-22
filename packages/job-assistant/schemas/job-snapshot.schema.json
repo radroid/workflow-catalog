@@ -14,7 +14,17 @@
     },
     "url": {
       "type": "string",
-      "pattern": "^https?:\\/\\/"
+      "allOf": [
+        {
+          "pattern": "^(?!\\s)[\\s\\S]*(?<!\\s)$"
+        },
+        {
+          "pattern": "^https?:\\/\\/"
+        },
+        {
+          "pattern": "^https?:\\/\\/[^\\s/?#]+(?:[/?#]|$)"
+        }
+      ]
     },
     "capturedAt": {
       "type": "string",
@@ -71,7 +81,17 @@
         },
         "applyUrl": {
           "type": "string",
-          "pattern": "^https?:\\/\\/"
+          "allOf": [
+            {
+              "pattern": "^(?!\\s)[\\s\\S]*(?<!\\s)$"
+            },
+            {
+              "pattern": "^https?:\\/\\/"
+            },
+            {
+              "pattern": "^https?:\\/\\/[^\\s/?#]+(?:[/?#]|$)"
+            }
+          ]
         }
       },
       "additionalProperties": false

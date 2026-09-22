@@ -37,6 +37,28 @@ describe("httpUrlSchema", () => {
       expect(httpUrlSchema.safeParse(url).success).toBe(false);
     },
   );
+
+  // P01.1 packet, deliverable 1: rejects surrounding whitespace outright
+  // rather than trimming it away and accepting the trimmed value.
+  it.each([
+    "  https://jobs.example/x",
+    "https://jobs.example/x  ",
+    "\thttps://jobs.example/x",
+    "https://jobs.example/x\t",
+    "\nhttps://jobs.example/x",
+  ])("rejects %j (surrounding whitespace) instead of trimming it", (url) => {
+    expect(httpUrlSchema.safeParse(url).success).toBe(false);
+  });
+
+  // A well-formed URL: non-empty host, no embedded space.
+  it.each(["https://", "http://", "https://exa mple.com/"])("rejects %j", (url) => {
+    expect(httpUrlSchema.safeParse(url).success).toBe(false);
+  });
+
+  it("accepts ports, paths, queries and IDN hosts", () => {
+    expect(httpUrlSchema.safeParse("https://jobs.example:8080/posting/1?ref=board").success).toBe(true);
+    expect(httpUrlSchema.safeParse("https://xn--exmple-cua.com/").success).toBe(true);
+  });
 });
 
 describe("boundedHttpUrlSchema", () => {
@@ -60,8 +82,15 @@ describe("boundedHttpUrlSchema", () => {
     expect(boundedResult.data).toBe(plainResult.data);
   });
 
-  it("counts the raw input, not the trimmed value zod's URL check passes on", () => {
-    const padded = `https://jobs.example/${" ".repeat(64)}`;
+  // P01.1: httpUrlSchema itself now rejects surrounding whitespace, so
+  // trailing-space padding no longer demonstrates "a naive .max() measures
+  // the rewritten value" (both now reject it, for the same reason). An
+  // embedded tab isn't surrounding whitespace — httpUrlSchema accepts it,
+  // silently dropping the tab (zod's URL check deletes embedded tab/CR/LF
+  // from the whole string) — so it still isolates the raw-vs-rewritten-value
+  // distinction a naively appended `.max()` gets wrong.
+  it("counts the raw input, not the value zod's URL check rewrites (embedded tabs stripped)", () => {
+    const padded = `https://jobs.example/p${"\t".repeat(64)}q`;
     expect(httpUrlSchema.max(64).safeParse(padded).success).toBe(true);
     expect(bounded.safeParse(padded).success).toBe(false);
   });

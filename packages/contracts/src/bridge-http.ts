@@ -24,10 +24,17 @@ import { scheduleKindSchema } from "./run";
  * here.
  */
 
-/** browser-boundary.md, "Pairing and token handling": a short user code shown by `npm run setup`, 10-minute expiry, single use. Not a UUID — it's meant to be read and typed by a person. */
+/**
+ * browser-boundary.md, "Pairing and token handling": a short user code shown
+ * by `npm run setup`, 10-minute expiry, single use. Not a UUID — it's meant
+ * to be read and typed by a person. Capped at 64 characters (P01.1 packet):
+ * uncapped, a 300 KB `/pair` body was valid under zod. P02's printed codes
+ * are short (at most 12 characters), so 64 stays comfortably above any real
+ * code while still bounding the body.
+ */
 export const pairRequestSchema = z
   .object({
-    code: nonEmptyStringSchema,
+    code: nonEmptyStringSchema.max(64),
   })
   .strict();
 export type PairRequest = z.infer<typeof pairRequestSchema>;
