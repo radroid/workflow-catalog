@@ -4,9 +4,9 @@
 // beside the asset (a file inside the tarball cannot hold the tarball's own
 // hash)" — so the checksum shown here is read from the *published .sha256
 // asset's content*, not computed or embedded anywhere in the package
-// itself. Unauthenticated (public repo, public asset), cached via Next's
-// data cache (revalidate hourly), with a timeout — this is the one place
-// the catalog talks to an outside service on a visitor's request path.
+// itself. Unauthenticated (public repo, public asset), with a timeout —
+// this is the one place the catalog talks to an outside service on a
+// visitor's request path.
 //
 // P09-B revision round (fold-in a): this used to look the release up
 // through the GitHub REST API first (GET /releases/tags/<tag>), read its
@@ -21,6 +21,35 @@
 // means there is no API-supplied URL to validate or trust: both URLs are
 // built from this file's own constants and the version string, never taken
 // from a response body.
+//
+// P09.1 revision round (reviewer R1): the checksum fetch used to be cached
+// via Next's fetch-level Data Cache (`next: { revalidate }`), and that
+// broke the cap. Next 16.3.5's patched fetch tees a cacheable response —
+// one copy is read to completion internally to populate the Data Cache, and
+// `response.body` here is only the *other* copy. `reader.cancel()` on our
+// copy never touched the first one, so a response over CHECKSUM_MAX_BYTES
+// still cost a full read: measured, about 835 KB and about 5 s (our own
+// timeout, not the cap) before the request actually returned. Worse, once a
+// cached entry goes stale, Next refetches it in the background by calling
+// `fetch()` again itself — a call this file never sees, so it carried no
+// AbortController, cap, or timeout at all.
+//
+// The fix: never let the raw `fetch()` touch Next's Data Cache
+// (`cache: "no-store"` below), and cache the *parsed* ReleaseFetchResult
+// instead, via `unstable_cache` (still fully supported in Next 16.3.5 —
+// confirmed against this repo's own bundled
+// node_modules/next/dist/docs/01-app/03-api-reference/04-functions/unstable_cache.md,
+// which only steers new code toward the newer `"use cache"` directive/Cache
+// Components; this app hasn't opted into Cache Components in next.config.ts,
+// and doing so for one fetch is a far bigger change than this fix needs).
+// `unstable_cache` caches whatever the wrapped function *returns*, so a
+// stale entry's background refresh re-invokes fetchPackageRelease itself —
+// every invocation, foreground or background, goes through its own
+// AbortController, cap and timeout. An `error` result is thrown rather than
+// returned, so it is never cached (P09.1 revision 2). See
+// getCachedPackageRelease below.
+
+import { unstable_cache } from "next/cache";
 
 const REPO_OWNER = "radroid";
 const REPO_NAME = "workflow-catalog";
@@ -111,8 +140,22 @@ function concatToText(chunks: Uint8Array[]): string {
  * P09-B revision round: the previous version cleared its timer as soon as
  * `fetch()` itself resolved (i.e. once headers arrived), so a body that
  * stalled after that point hung forever with no timeout protection at all.
+ *
+ * `abort` is the fetch's own AbortController.abort, passed in rather than
+ * closed over, so this function stays testable without constructing a real
+ * controller. P09.1 (reviewer R1): calling only reader.cancel() on the cap
+ * trip stopped *this* copy of the body, but when the underlying fetch was
+ * cacheable (see this file's top-of-file note), Next's patched fetch had
+ * already teed the response — a second, internal copy fed the Data Cache
+ * and kept reading regardless of what this reader did. Aborting the fetch
+ * itself is what actually tells the underlying request to stop; do both.
  */
-async function readCappedText(body: ReadableStream<Uint8Array>, maxBytes: number, signal: AbortSignal): Promise<string> {
+async function readCappedText(
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  signal: AbortSignal,
+  abort: (reason: unknown) => void,
+): Promise<string> {
   const reader = body.getReader();
   const aborted = new Promise<never>((_, reject) => {
     if (signal.aborted) {
@@ -130,7 +173,15 @@ async function readCappedText(body: ReadableStream<Uint8Array>, maxBytes: number
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        throw new Error(`Response body exceeded ${maxBytes} bytes.`);
+        const capError = new Error(`Response body exceeded ${maxBytes} bytes.`);
+        // Stop the underlying request (abort) *and* drop our own read of
+        // it (cancel) — see this function's doc comment above. Both are
+        // best-effort: a controller already aborted, or a stream already
+        // closed/errored, can reject/no-op harmlessly, which must never
+        // mask the real capError thrown below.
+        abort(capError);
+        await reader.cancel(capError).catch(() => {});
+        throw capError;
       }
       chunks.push(value);
     }
@@ -146,6 +197,10 @@ async function readCappedText(body: ReadableStream<Uint8Array>, maxBytes: number
  * body read has settled (success, cap exceeded, or abort), not as soon as
  * headers arrive. See readCappedText's comment for why that distinction is
  * the fix, not just cosmetic.
+ *
+ * `cache: "no-store"`, never `next: { revalidate }`: this fetch must never
+ * enter Next's Data Cache (see this file's top-of-file P09.1 note) — the
+ * *parsed* result is what getCachedPackageRelease caches instead.
  */
 async function timedFetchText(url: string, maxBytes: number): Promise<{ status: number; ok: boolean; text: string }> {
   const controller = new AbortController();
@@ -153,10 +208,10 @@ async function timedFetchText(url: string, maxBytes: number): Promise<{ status: 
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      next: { revalidate: RELEASE_REVALIDATE_SECONDS },
+      cache: "no-store",
     });
     const text = response.body
-      ? await readCappedText(response.body, maxBytes, controller.signal)
+      ? await readCappedText(response.body, maxBytes, controller.signal, (reason) => controller.abort(reason))
       : await response.text();
     return { status: response.status, ok: response.ok, text };
   } finally {
@@ -204,4 +259,62 @@ export async function fetchPackageRelease(version: string): Promise<ReleaseFetch
     kind: "found",
     release: { version, tag, tarballName, tarballUrl, checksum, checksumAssetUrl },
   };
+}
+
+/**
+ * Caches fetchPackageRelease's *parsed result* via unstable_cache, on the
+ * same revalidation cadence RELEASE_REVALIDATE_SECONDS always meant —
+ * `app/(gated)/templates/job-assistant/page.tsx` calls this, not
+ * fetchPackageRelease directly. See this file's top-of-file P09.1 note for
+ * why the fetch itself is never cached (`cache: "no-store"` above) while
+ * the parsed outcome still is.
+ *
+ * `version` is a real parameter to the wrapped function, not a value
+ * closed over from an outer scope: unstable_cache's own docs warn that a
+ * closure not passed as an argument (or added to `keyParts`) can't be part
+ * of its automatic cache-key derivation — silently colliding two package
+ * versions' results together. Passing it as an argument, as the docs'
+ * own example does, means the version is automatically part of the key.
+ *
+ * unstable_cache requires Next's own request-scoped incrementalCache
+ * (`Invariant: incrementalCache missing` otherwise — confirmed by calling
+ * it directly under plain Node, outside any Next server). Merely
+ * constructing this wrapper at module load never invokes that check, only
+ * calling it does — so tests/release.test.ts imports and calls
+ * fetchPackageRelease directly (fully exercised, no Next runtime needed),
+ * and tests/release-cache.test.ts mocks next/cache to prove this wrapper's
+ * wiring instead.
+ *
+ * P09.1 revision 2 (reviewer): an `error` result must never be cached.
+ * fetchPackageRelease never throws, so unstable_cache used to store
+ * {kind: "error"} like any other result: one 500 was served for the whole
+ * hour, and a published `found` checksum turned into `error` after one
+ * failed background refresh. unstable_cache stores only what its function
+ * returns, so the cached function throws on an error result instead. A
+ * throw on a cache miss stores nothing, and a stale entry whose background
+ * refresh throws keeps its stale value
+ * (next/dist/server/web/spec-extension/unstable-cache.js, the `.catch` that
+ * returns `cachedResponse`). This wrapper turns the throw back into
+ * {kind: "error"}. `not_found` (a 404) is still returned, so it stays cached.
+ */
+class ReleaseLookupError extends Error {
+  override name = "ReleaseLookupError";
+}
+
+const cachedReleaseLookup = unstable_cache(
+  async (version: string) => {
+    const result = await fetchPackageRelease(version);
+    if (result.kind === "error") throw new ReleaseLookupError(result.message); // never cached
+    return result;
+  },
+  ["release"],
+  { revalidate: RELEASE_REVALIDATE_SECONDS },
+);
+
+export async function getCachedPackageRelease(version: string): Promise<ReleaseFetchResult> {
+  try {
+    return await cachedReleaseLookup(version);
+  } catch (error) {
+    return { kind: "error", message: error instanceof ReleaseLookupError ? error.message : "Release lookup failed." };
+  }
 }

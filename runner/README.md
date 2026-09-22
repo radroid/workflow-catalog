@@ -56,6 +56,9 @@ So a `git pull` that changes any of them rebuilds on the next start.
 
 The runner is used from a **whole-repo clone**:
 
+Node 24 is the tested version and ships with Corepack. On Node 25 or newer,
+run `npm install -g corepack` first.
+
 ```sh
 git clone https://github.com/radroid/workflow-catalog.git
 cd workflow-catalog
@@ -228,9 +231,9 @@ JSON API are protected as follows:
 - **Host check.** The same check as above, so DNS rebinding fails.
 - **Sign-in.** `npm run runner` prints a one-time link,
   `/ui/login?nonce=…`, and `npm run ui` prints a fresh one. A link lasts 10
-  minutes and works once. It sets the cookie `wc_runner_ui` (HttpOnly,
-  SameSite=Strict, Path=/, 30 days). Every page and every `/api/*` route
-  needs that cookie.
+  minutes and works once. A HEAD request does not use it up. It sets the
+  cookie `wc_runner_ui` (HttpOnly, SameSite=Strict, Path=/, 30 days). Every
+  page and every `/api/*` route needs that cookie.
 - **Same-origin API.** When the browser sends `Sec-Fetch-Site`, `/api/*`
   answers only `same-origin`, which is what the runner's own pages send.
   - `cross-site` and `same-site` are refused. Cookies are not scoped by

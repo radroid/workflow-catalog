@@ -136,24 +136,41 @@ section + section {
   margin-bottom: 14px;
 }
 
-/* Key/value rows (docs/spec/visuals/index.html's prototype pattern):
-   template page's Sources and Connections cards. A flat sequence of
-   children auto-flows into a repeating [1fr key][auto value] grid, so
-   pairs of children become rows — no wrapper element needed per row. Prose
-   -length key text (e.g. a source's full label) wraps normally within its
-   1fr column instead of being forced into pill styling, which is the
-   P09-B revision-round bug this replaces (long text in an all-caps mono
-   nowrap .pill wrapped mid-word at 390px). */
-.kv {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 6px 12px;
-  align-items: baseline;
+/* P09.1 (UI critic note): the Download card's not_found/error second line
+   is "lede tight" — .tight promises zero margin, full stop, but .card
+   .lede above (two classes) is more specific than .tight alone (one class)
+   and silently won the cascade on margin-bottom regardless of source
+   order, leaving 14px below that paragraph against 0px above it. This
+   three-class rule outranks .card .lede for exactly that combination,
+   without touching the plain-.lede intro paragraphs elsewhere in a card
+   (Sources/Connections/Browser permissions), which still want the
+   tightened-but-nonzero 14px above. */
+.card .lede.tight {
+  margin-bottom: 0;
+}
+
+/* A real list — <ul><li>, not a styled <div> — used wherever content is
+   genuinely a set of items and nothing pairs with them (the template
+   page's Sources and Connections; "Before you start"'s prerequisites on
+   /install). P09.1 revision round (UI critic U1): the previous .kv grid of
+   plain <div>/<span> elements had no list semantics at all, so a screen
+   reader read every source/connection as one run of text (WCAG 1.3.1), and
+   at 390px a wrapped long label looked like a separate item with nothing
+   to mark where one ended and the next began. Same recipe as
+   .changelog-notes just below (native bullet marker, padding-left gives it
+   room, the browser's own default text-wrap already hangs a wrapped
+   bullet-list line under its own text rather than the marker) — "like the
+   changelog list", as the critic put it — except in the normal text
+   colour, not muted: these items are primary content, not secondary
+   chrome. */
+.plain-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
   font-size: 13.5px;
 }
 
-.kv .k {
-  color: var(--muted-foreground);
+.plain-list li + li {
+  margin-top: 4px;
 }
 
 /* Browser permissions: name + meaning, semantically a definition list
@@ -164,9 +181,16 @@ section + section {
   margin: 0;
 }
 
+/* P09.1 (UI critic note): dt's weight matched h3's own 600 exactly, so a
+   card's permission names visually competed with its heading instead of
+   reading as subordinate to it. 500 keeps dt bolder than dd (dd has no
+   font-weight of its own, i.e. the normal 400) while landing below h3's
+   600. font-size likewise: dt inherited the body's 15px, heavier than it
+   needed to be next to dd's own 13px (revision round polish). */
 .perm-list dt {
   font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: 500;
+  font-size: 13.5px;
   margin: 16px 0 4px;
 }
 
@@ -219,10 +243,13 @@ section + section {
   justify-content: space-between;
 }
 
-/* A row of pills (template page: required sources, connections) or buttons
-   (download + checksum link) that must never force horizontal scroll at
-   narrow viewports — same reasoning as pre.command-block's white-space:
-   pre-wrap fix in part A, applied to a flex row instead of text.
+/* A row of buttons (template page: download + checksum link) that must
+   never force horizontal scroll at narrow viewports — same reasoning as
+   pre.command-block's white-space: pre-wrap fix in part A, applied to a
+   flex row instead of text. (P09.1 revision round: this used to also
+   describe a row of pills — required sources, connections — before those
+   became a real <ul> (.plain-list) instead; the comment now matches what
+   this class actually styles.)
    Named ".multiline", not ".wrap": ".wrap" already exists (the 720px
    page-wrapper, "padding: 64px 28px") and CSS class selectors match by
    whole token, not by which rule a human meant — "row wrap" as a
@@ -359,22 +386,6 @@ input[type="password"]:focus {
   white-space: nowrap;
 }
 
-/* Every existing .pill use (version numbers, admin's used/unused status) is
-   a couple of short words — nowrap is correct there, it's what keeps e.g.
-   "UNUSED" from ever breaking mid-word. The template page's source and
-   connection pills carry much longer explanatory phrases (see
-   lib/template-labels.ts); at 390px a long one has no room to stay on one
-   line, and since a single flex item can't wrap onto a new row by itself,
-   nowrap forced the whole page wider than the viewport — scrollWidth
-   (597px) exceeded clientWidth (390px), the exact "scrollable region" axe
-   flags as serious that part A's command-block fix was about. Scoped to
-   .row.multiline (only where long-phrase pills live) rather than changing
-   .pill itself. */
-.row.multiline .pill {
-  white-space: normal;
-  text-align: left;
-}
-
 .pill.ok {
   background: var(--foreground);
   color: var(--background);
@@ -501,14 +512,50 @@ pre.command-block {
   margin: 0 0 8px;
 }
 
+/* One command per element (see app/(gated)/install/page.tsx's CommandBlock)
+   instead of one "\n"-joined text blob, so each command can hang-indent on
+   its own — P09.1 revision round (UI critic U2): a long command (e.g. the
+   git clone URL) wrapping onto a second visual row at 390px looked
+   identical to a fresh command starting there, since white-space: pre-wrap
+   above only ever hangs the *first* line of the whole <pre> via
+   text-indent, not every command inside it. padding-left + a matching
+   negative text-indent means each command's own first line sits flush
+   left (padding cancels the indent) while any wrapped continuation of
+   that same command sits indented under it (text-indent only affects a
+   line box's first line, never a soft-wrapped continuation) — no "$ "
+   prompt or other decoration is added to the DOM, so selecting and
+   copying a block's text reproduces exactly its commands, nothing more
+   (tests/install-command-block.test.ts). white-space/overflow-wrap are
+   inherited from pre.command-block above, not repeated here. */
+.command-line {
+  display: block;
+  padding-left: 1.4em;
+  text-indent: -1.4em;
+}
+
+.command-line + .command-line {
+  margin-top: 4px;
+}
+
+/* P09.1 revision 2 (UI critic): a caption just above a command block that
+   says when or where to run it ("Node 25 or newer only:", "In a second
+   terminal, in workflow-catalog/runner:"). It sits outside the <pre>, so
+   copying the block still copies only its commands. */
+.command-label {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin: 6px 0;
+}
+
 .step-list {
-  list-style: none;
+  list-style: decimal;
   margin: 0;
-  padding: 0;
+  padding: 0 0 0 22px;
 }
 
 .step-list > li {
   margin-bottom: 20px;
+  padding-left: 4px;
 }
 
 .step-list .step-label {
@@ -520,6 +567,7 @@ pre.command-block {
   font-size: 13px;
   color: var(--muted-foreground);
   margin-top: 6px;
+  max-width: 70ch;
 }
 
 table {
