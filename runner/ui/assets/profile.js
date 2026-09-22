@@ -18,11 +18,26 @@ import { el, formatTime, getJson, postJson } from "./runner.js";
 const $ = (id) => document.getElementById(id);
 
 const STATEMENT_LABEL = { boundary: "boundary", preference: "preference", presentation: "presentation note" };
+// SOURCE_CATEGORIES with store/profile-types.ts's labels, as onboarding.js has them (the browser can't import that module).
+const SOURCE_LABEL = {
+  resume: "Resume",
+  previousCoverLetters: "Previous cover letters",
+  portfolioSite: "Portfolio / personal site",
+  repositories: "Repositories",
+  socialProfiles: "Social profiles (exported)",
+  workSamples: "Work samples",
+  targetRolesAndPreferences: "Target roles & preferences",
+};
+const SOURCE_COUNT = Object.keys(SOURCE_LABEL).length;
 
 let view = null; // the last GET /api/onboarding
 let loadedMarkdown = null; // the file text the editor was last filled with
 let baseHash = null; // its hash, sent with a save (D9)
 const busy = new Set();
+
+function plural(n, one, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 function quote(text, max = 60) {
   const line = text.replace(/\s+/g, " ").trim();
@@ -183,19 +198,46 @@ function renderWithdrawal() {
   $("withdrawal-body").replaceChildren(...parts);
 }
 
+/** What is left before the profile can be approved, in the Onboarding page's readiness words. */
+function stepsLeft() {
+  const r = view.readiness;
+  const claims = view.claims ?? [];
+  const steps = [];
+  if (!r.sourcesAccounted) {
+    steps.push(
+      r.unaccounted.length <= 3
+        ? `${plural(r.unaccounted.length, "source")} still unaccounted for (${r.unaccounted.map((c) => SOURCE_LABEL[c] ?? c).join(", ")})`
+        : `${r.unaccounted.length} of ${SOURCE_COUNT} sources still unaccounted for`,
+    );
+  }
+  if (claims.length === 0) steps.push("No claims yet: extract them from a provided source");
+  else if (r.pendingClaims.length > 0) steps.push(`${plural(r.pendingClaims.length, "claim")} still ${r.pendingClaims.length === 1 ? "needs" : "need"} a decision`);
+  else if (!r.hasConfirmedClaims) steps.push("Every claim was excluded, so there is nothing to write from");
+  return steps;
+}
+
+/** Where the profile stands, so each state reads differently here too (not only on the Onboarding page). */
 function renderStatus() {
   const node = $("status-summary");
+  const onboardingLink = () => el("a", { text: "Onboarding page", attrs: { href: "/ui/onboarding" } });
+  let steps = [];
   if (view.approval) {
     node.replaceChildren(`Approved as version ${view.approval.version} on ${formatTime(view.approval.at)}. Generation is unlocked.`);
   } else if (view.withdrawal) {
     node.replaceChildren(`Not approved: approval of version ${view.withdrawal.version} was withdrawn, as explained above. Generation is locked.`);
+  } else if (view.readiness.readyToApprove) {
+    node.replaceChildren("Not approved yet. Everything is decided: approve the profile on the ", onboardingLink(), " to unlock generation.");
   } else {
+    steps = stepsLeft();
     node.replaceChildren(
-      "Not approved yet. Generation stays locked until every source is accounted for, every claim is decided, and you approve the profile on the ",
-      el("a", { text: "Onboarding page", attrs: { href: "/ui/onboarding" } }),
-      ".",
+      steps.length > 0 ? "Not approved yet, so generation is locked. Still to do on the " : "Not approved yet, so generation is locked until you approve the profile on the ",
+      onboardingLink(),
+      steps.length > 0 ? ":" : ".",
     );
   }
+  const list = $("status-steps");
+  list.hidden = steps.length === 0;
+  list.replaceChildren(...steps.map((text) => el("li", { text })));
 }
 
 // ---------------------------------------------------------------------------
