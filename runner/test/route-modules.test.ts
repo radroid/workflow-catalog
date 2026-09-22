@@ -88,9 +88,11 @@ describe("route modules", () => {
     expect(() => validateRouteModule("x", null)).toThrow(/export default defineRouteModule/);
   });
 
-  it("loads the runner's own modules: status, devices, pairing, model", async () => {
+  it("loads the runner's own modules: status, devices, pairing, model, onboarding", async () => {
     const modules = await loadRouteModules(ROUTES_DIR);
-    expect(modules.map((m) => m.name)).toEqual(["devices", "model", "pairing", "status"]);
+    // P03 adds "onboarding" (server/routes/onboarding.ts) to this
+    // previously-P02-only list; every other name here is still P02's.
+    expect(modules.map((m) => m.name)).toEqual(["devices", "model", "onboarding", "pairing", "status"]);
     expect(buildEventRegistry(modules).size).toBe(0);
   });
 
