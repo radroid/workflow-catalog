@@ -74,10 +74,9 @@ export default async function TemplatePage() {
         </p>
         <div className="kv">
           {workflowManifest.requiredSources.map((source) => (
-            <Fragment key={source}>
-              <span className="k">{SOURCE_CATEGORY_LABELS[source]}</span>
-              <span className="pill">Required</span>
-            </Fragment>
+            <span className="k" key={source}>
+              {SOURCE_CATEGORY_LABELS[source]}
+            </span>
           ))}
         </div>
       </div>
@@ -87,10 +86,9 @@ export default async function TemplatePage() {
         <p className="lede">Ways the runner can bring each source in.</p>
         <div className="kv">
           {workflowManifest.connections.map((connection) => (
-            <Fragment key={connection}>
-              <span className="k">{CONNECTION_LABELS[connection]}</span>
-              <span className="pill">Supported</span>
-            </Fragment>
+            <span className="k" key={connection}>
+              {CONNECTION_LABELS[connection]}
+            </span>
           ))}
         </div>
       </div>

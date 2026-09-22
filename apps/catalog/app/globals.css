@@ -136,19 +136,35 @@ section + section {
   margin-bottom: 14px;
 }
 
-/* Key/value rows (docs/spec/visuals/index.html's prototype pattern):
-   template page's Sources and Connections cards. A flat sequence of
-   children auto-flows into a repeating [1fr key][auto value] grid, so
-   pairs of children become rows — no wrapper element needed per row. Prose
-   -length key text (e.g. a source's full label) wraps normally within its
-   1fr column instead of being forced into pill styling, which is the
-   P09-B revision-round bug this replaces (long text in an all-caps mono
+/* P09.1 (UI critic note): the Download card's not_found/error second line
+   is "lede tight" — .tight promises zero margin, full stop, but .card
+   .lede above (two classes) is more specific than .tight alone (one class)
+   and silently won the cascade on margin-bottom regardless of source
+   order, leaving 14px below that paragraph against 0px above it. This
+   three-class rule outranks .card .lede for exactly that combination,
+   without touching the plain-.lede intro paragraphs elsewhere in a card
+   (Sources/Connections/Browser permissions), which still want the
+   tightened-but-nonzero 14px above. */
+.card .lede.tight {
+  margin-bottom: 0;
+}
+
+/* Key rows (docs/spec/visuals/index.html's prototype .kv pattern, built for
+   a value that can actually vary — e.g. that prototype's own Chrome
+   available/unavailable pill). Sources and Connections each list every
+   member of a fixed, always-true set: a required source is required by
+   definition, a listed connection is supported by definition, so the
+   "Required"/"Supported" pill every row used to pair with never varied and
+   carried no information (P09.1, UI critic note) — removed, one column now
+   rather than a value column with nothing left to put in it. Still a grid,
+   not a plain <ul>: prose-length key text (e.g. a source's full label)
+   wraps normally within the row instead of being forced into pill styling,
+   the original P09-B bug this replaced (long text in an all-caps mono
    nowrap .pill wrapped mid-word at 390px). */
 .kv {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 6px 12px;
-  align-items: baseline;
+  grid-template-columns: 1fr;
+  gap: 6px;
   font-size: 13.5px;
 }
 
@@ -164,9 +180,14 @@ section + section {
   margin: 0;
 }
 
+/* P09.1 (UI critic note): dt's weight matched h3's own 600 exactly, so a
+   card's permission names visually competed with its heading instead of
+   reading as subordinate to it. 500 keeps dt bolder than dd (dd has no
+   font-weight of its own, i.e. the normal 400) while landing below h3's
+   600. */
 .perm-list dt {
   font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: 500;
   margin: 16px 0 4px;
 }
 

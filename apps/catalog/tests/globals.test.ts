@@ -149,6 +149,43 @@ describe("catalog theme wiring", () => {
   });
 });
 
+describe("template page UI notes (P09.1, P09-B review round 2 follow-ups)", () => {
+  const templatePage = readFileSync(
+    path.join(here, "../app/(gated)/templates/job-assistant/page.tsx"),
+    "utf8",
+  );
+
+  it("zeroes the Download card's lede-tight paragraph margin instead of letting .card .lede's 14px win", () => {
+    const rule = /\.card \.lede\.tight\s*{([^}]*)}/.exec(globalsCss);
+    expect(rule, "expected a .card .lede.tight rule").not.toBeNull();
+    expect(rule?.[1]).toMatch(/margin-bottom:\s*0/);
+  });
+
+  it("keeps permission names (dt) lighter than the card heading (h3)", () => {
+    const h3Rule = /^h3\s*{([^}]*)}/m.exec(globalsCss);
+    const dtRule = /\.perm-list dt\s*{([^}]*)}/.exec(globalsCss);
+    expect(h3Rule, "expected a top-level h3 rule").not.toBeNull();
+    expect(dtRule, "expected a .perm-list dt rule").not.toBeNull();
+
+    const h3Weight = Number(/font-weight:\s*(\d+)/.exec(h3Rule?.[1] ?? "")?.[1]);
+    const dtWeight = Number(/font-weight:\s*(\d+)/.exec(dtRule?.[1] ?? "")?.[1]);
+    expect(Number.isNaN(h3Weight)).toBe(false);
+    expect(Number.isNaN(dtWeight)).toBe(false);
+    expect(dtWeight).toBeLessThan(h3Weight);
+  });
+
+  it("removes the identical Required/Supported pills from Sources and Connections — they never varied row to row and carried no information", () => {
+    expect(templatePage).not.toMatch(/<span className="pill">Required<\/span>/);
+    expect(templatePage).not.toMatch(/<span className="pill">Supported<\/span>/);
+  });
+
+  it(".kv is a single column now that there is no longer a value cell beside each key", () => {
+    const kvRule = /(?:^|\n)\.kv\s*{([^}]*)}/.exec(globalsCss);
+    expect(kvRule, "expected a .kv rule").not.toBeNull();
+    expect(kvRule?.[1]).toMatch(/grid-template-columns:\s*1fr\s*;/);
+  });
+});
+
 describe("app icon", () => {
   it("app/icon.svg exists, so /favicon.ico is no longer the only icon Chrome tries", () => {
     expect(existsSync(path.join(here, "../app/icon.svg"))).toBe(true);
