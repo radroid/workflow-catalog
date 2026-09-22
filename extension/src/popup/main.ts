@@ -1,6 +1,6 @@
 import "../shared/zod-jitless";
-import { buildJobCapture } from "../capture/build-job-capture";
-import { extractJobPosting } from "../capture/extractor";
+import { buildJobCapture, MAX_INPAGE_TEXT_CHARS } from "../capture/build-job-capture";
+import { extractJobPosting, isExtractionResult } from "../capture/extractor";
 import { renderFallback, renderLoading, renderPreview } from "./render";
 import { applyColorScheme } from "../shared/theme-init";
 import { explainUnsupportedUrl } from "../shared/url";
@@ -18,7 +18,7 @@ async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
   return tab ?? null;
 }
 
-async function run(): Promise<void> {
+export async function run(): Promise<void> {
   renderLoading(app!);
 
   const tab = await getActiveTab();
@@ -38,19 +38,34 @@ async function run(): Promise<void> {
     injectionResults = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: extractJobPosting,
+      args: [MAX_INPAGE_TEXT_CHARS],
     });
   } catch {
     renderFallback(app!, "Can't read this page — paste the posting in the runner's Jobs page.");
     return;
   }
 
-  const extraction = injectionResults[0]?.result as ReturnType<typeof extractJobPosting> | undefined;
-  if (!extraction || !extraction.ok) {
+  const rawResult: unknown = injectionResults[0]?.result;
+  if (!isExtractionResult(rawResult) || !rawResult.ok) {
     renderFallback(app!, "Can't read this page — paste the posting in the runner's Jobs page.");
     return;
   }
+  const extraction = rawResult;
 
-  const built = await buildJobCapture({ url: tab.url, rawText: extraction.text });
+  // review issue 2: extraction.url is location.href read in the exact same
+  // executeScript step as the text. tab.url was queried a moment earlier;
+  // if the page navigated in between (an SPA route change is enough —
+  // reproduced with a client-side pushState between the query and the
+  // injected script actually running), they disagree, and text from one
+  // URL must never be saved under a different one ("never silently save
+  // the wrong job" — browser-boundary.md gate 5; F6 revisions are keyed by
+  // URL). Refuse instead of guessing which one is right.
+  if (extraction.url !== tab.url) {
+    renderFallback(app!, "This page changed while it was being read — reopen the extension to try again.");
+    return;
+  }
+
+  const built = await buildJobCapture({ url: extraction.url, rawText: extraction.text });
   if (!built.ok) {
     renderFallback(app!, built.reason);
     return;

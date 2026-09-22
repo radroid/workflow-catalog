@@ -194,8 +194,11 @@ input[type="text"] {
   font-size: 11.5px;
   color: var(--muted-foreground);
   white-space: pre-wrap;
-  max-height: 6.5em;
-  overflow: hidden;
+  /* Scrollable, not clipped: every saved character stays reachable (review
+   * issue 8 -- a clamped-and-hidden excerpt let saved text, including a
+   * hostile posting's injected instructions, go completely unseen). */
+  max-height: 10em;
+  overflow-y: auto;
   line-height: 1.5;
 }
 
@@ -213,6 +216,39 @@ input[type="text"] {
 
 a {
   color: inherit;
+}
+
+/* One shared focus ring for every focusable element on every page
+ * (review fold-in f), instead of relying on each browser's own default
+ * (observed as a plain 1px blue outline with no relation to the theme).
+ * `:focus-visible` rather than `:focus` so a mouse click doesn't show it,
+ * only keyboard/programmatic focus does. */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+input[type="file"] {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--foreground);
+}
+
+input[type="file"]::file-selector-button {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  margin-right: 8px;
+  cursor: pointer;
+}
+
+input[type="file"]::file-selector-button:hover {
+  background: var(--muted);
 }
 
 .small {

@@ -5,9 +5,7 @@
  * main.ts's top-level orchestration side effects (`applyColorScheme()`
  * running immediately, `void run()` calling real `chrome.tabs`/
  * `chrome.scripting` APIs at import time, and the `#app`-must-already-exist
- * assertion). No behavior change from what main.ts inlined before: same
- * markup, same textContent-only construction (see shared/dom.ts), same
- * copy.
+ * assertion).
  */
 import type { JobCapture } from "@workflow-catalog/contracts";
 import type { ExtractedStructuredHints } from "../capture/extractor";
@@ -16,13 +14,12 @@ import { downloadJson } from "../shared/download";
 import { setLastJobCapture } from "../shared/storage";
 
 const RUNNER_JOBS_URL = "http://127.0.0.1:4310/ui/jobs.html";
-const EXCERPT_LENGTH = 280;
 
 export function renderLoading(app: Element): void {
   mount(
     app,
-    el("div", { className: "popup stack" }, [
-      el("div", { className: "eyebrow", text: "Job Assistant" }),
+    el("main", { className: "popup stack" }, [
+      el("h1", { className: "eyebrow", text: "Job Assistant" }),
       el("p", { className: "small", text: "Reading this page…" }),
     ]),
   );
@@ -31,9 +28,9 @@ export function renderLoading(app: Element): void {
 export function renderFallback(app: Element, reason: string): void {
   mount(
     app,
-    el("div", { className: "popup stack" }, [
-      el("div", { className: "eyebrow", text: "Job Assistant" }),
-      el("div", { className: "flash bad", text: reason }),
+    el("main", { className: "popup stack" }, [
+      el("h1", { className: "eyebrow", text: "Job Assistant" }),
+      el("div", { className: "flash bad", attrs: { role: "alert" }, text: reason }),
       el("p", { className: "small" }, [
         "Paste the posting in the runner's Jobs page instead: ",
         el("a", { attrs: { href: RUNNER_JOBS_URL, target: "_blank", rel: "noopener" }, text: RUNNER_JOBS_URL }),
@@ -53,10 +50,8 @@ export function renderPreview(
   structured: ExtractedStructuredHints,
 ): void {
   const sizeBytes = new TextEncoder().encode(capture.text).length;
-  const excerpt =
-    capture.text.length > EXCERPT_LENGTH ? `${capture.text.slice(0, EXCERPT_LENGTH)}…` : capture.text;
 
-  const kvRows: Array<Node | string> = [];
+  const kvRows: Array<Node | string> = [el("dt", { text: "URL" }), el("dd", { text: capture.url })];
   if (structured.title) {
     kvRows.push(el("dt", { text: "Title" }), el("dd", { text: structured.title }));
   }
@@ -69,7 +64,7 @@ export function renderPreview(
   kvRows.push(el("dt", { text: "Size" }), el("dd", { text: formatBytes(sizeBytes) }));
 
   const saveButton = el("button", { className: "primary", text: "Save this job" });
-  const status = el("p", { className: "small" });
+  const status = el("p", { className: "small", attrs: { role: "status", "aria-live": "polite" } });
 
   saveButton.addEventListener("click", () => {
     void (async () => {
@@ -84,20 +79,48 @@ export function renderPreview(
         await setLastJobCapture(capture);
         downloadJson("job-capture.json", capture);
         status.textContent = "Saved job-capture.json. If nothing downloaded, use the options page to export it.";
+        saveButton.textContent = "Saved ✓";
       } catch (error) {
         status.textContent = `Couldn't save: ${error instanceof Error ? error.message : String(error)}`;
-        saveButton.disabled = false;
         saveButton.textContent = "Save this job";
+      } finally {
+        // Disabling the focused button while "Saving…" moves focus to
+        // <body> (a disabled element can't hold it) -- re-enable and
+        // reclaim focus on both the success and failure path, so a
+        // keyboard/screen-reader user isn't dropped back to the top of
+        // the page after a click.
+        saveButton.disabled = false;
+        saveButton.focus();
       }
     })();
   });
 
   mount(
     app,
-    el("div", { className: "popup stack" }, [
-      el("div", { className: "eyebrow", text: "Job Assistant" }),
+    el("main", { className: "popup stack" }, [
+      el("h1", { className: "eyebrow", text: "Job Assistant" }),
       el("dl", { className: "kv" }, kvRows),
-      el("div", { className: "card pad" }, [el("div", { className: "excerpt", text: excerpt })]),
+      el(
+        "div",
+        {
+          className: "card pad excerpt",
+          attrs: {
+            tabindex: "0",
+            role: "region",
+            "aria-label": "Full captured text (scrollable)",
+          },
+        },
+        // capture.text has already been through shared/text.ts's
+        // normalizeWhitespace (build-job-capture.ts, before this ever
+        // renders), which caps runs of 3+ blank lines down to one --
+        // review issue 8's "collapse blank lines" without a second,
+        // redundant collapsing pass here on what's already collapsed.
+        [capture.text],
+      ),
+      el("p", {
+        className: "small",
+        text: "This page's text is saved as data. It can't trigger actions, no matter what it says.",
+      }),
       saveButton,
       status,
     ]),

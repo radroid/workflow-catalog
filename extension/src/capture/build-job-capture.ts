@@ -15,6 +15,19 @@ import { EXTRACTOR_VERSION } from "./extractor";
  * unsupported URL scheme; see popup/main.ts). */
 export const MIN_CAPTURED_TEXT_LENGTH = 20;
 
+/**
+ * The character cap `popup/main.ts` passes to `extractJobPosting` via
+ * `executeScript({ args })`, so an oversized page's full `innerText` never
+ * gets serialized back across the executeScript boundary at all (review
+ * issue 3 fold-in: "Cap the text ... inside the page ... so 30 MB pages
+ * don't cross the boundary"). A coarse character count, not the precise
+ * byte-accurate cap below — generous enough (4x the byte cap) that
+ * `truncateToByteCap` below still has a realistically-sized string to work
+ * with afterward, not something already truncated to near-nothing by two
+ * layers of capping.
+ */
+export const MAX_INPAGE_TEXT_CHARS = MAX_JOB_CAPTURE_TEXT_BYTES * 4;
+
 export type BuildJobCaptureResult = { ok: true; capture: JobCapture } | { ok: false; reason: string };
 
 /**
