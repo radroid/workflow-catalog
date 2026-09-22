@@ -1,29 +1,29 @@
-Latest: iter-003. Merged P01.1 (#5), P09-B (#6), P07-A (#7), P02 skeleton (#8: mode A runner, bridge, pairing, setup, doctor). Smoke green at 9a0c5b7. PR #2 updated.
+Latest: iter-005 in progress. The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
 
-Next: iter-004. Four implementers, then one Opus reviewer over all four PRs, and a UI critic on the P03 pages, P09.1 pages and P07-B extension UI.
-- **P03** (Sonnet), onboarding and profile.
-  - Skills live in `packages/job-assistant/skills/{onboarding-accounting,claim-extraction,follow-up-questions}/` (mounted as `jobs__*`), not `runner/agent/skills/`.
-  - Also owns eval-agent re-exports, new evals, and a one-time conversion of `fixture-model.ts` and `tool-surface.eval.ts` into registries that later packets extend by adding files.
-- **P07-B** (Sonnet): pairing and `job_capture` against the bridge, plus one `ci.yml` step that builds the extension and runs its dist tests. A capture with no handler is journaled as `no_handler`.
-- **P09.1** (Sonnet): packet written. Install guide from `runner/README.md`, plus a drift test.
-- **P02.1** (Sonnet): pulled forward. **P04** waits for P03 (rulebook; shared eval files); its URL import becomes a local-UI route in `routes/captures.ts`, not a model tool (IDs only).
+Running now: four fresh agents, one worktree each. The old agent worktrees were clean and pushed, and were removed so the packet branches could be switched to.
+- **P03 (#11) round 2** on 9584e93: an Opus reviewer and an Opus UI critic, with `logs/handoff/P03-revision-1.md` as the checklist.
+  - Both APPROVE means squash-merge, then start P04. A REVISE goes to a fresh Opus escalation implementer.
+- **P07-B (#12):** a fresh Opus escalation implementer works the combined list in `logs/handoff/P07-B-round-2-review.md`, red CI first.
+  - Then a full round 3 (reviewer and UI critic), including what round 2 never checked.
+- **P08-A:** a fresh Sonnet successor builds its predecessor's design (the P08 packet's "Part A paused" note), with the decisions logged in blocks.md ("Loop resumed").
+- **Then:** P04 after P03; P05 (Opus) after P04; P03.1 after P03 and P04; P08-B after P05. After that, the wave plan continues.
 
-Must-carry (details: logs/blocks.md, iter-003 entries):
+If this session dies: every agent pushes its branch at green steps. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
+
+Must-carry (see "Rules and lessons learned" in the pause handoff):
 - **Every prompt:**
-  - Branch with `git fetch origin && git switch -c packet/PNN origin/overnight/integration`.
-  - Browse localhost; write only in your worktree or `/tmp`; leave scratch folders.
-  - No recursive delete through node, find or python.
-  - Never test a guardrail or reroute after a refusal; stop and report.
-  - Orchestrator messages are genuine.
-- **P03:** SKILL.md (follow-up-questions) lines 8 and 30 add "role, or scope". Tools take IDs only. Local-UI API needs `Sec-Fetch-Site: same-origin`. eve facts from `runner/node_modules/eve/docs` only.
-- **P07-B:**
-  - Jobs link `/ui/jobs`; error codes; device name on `PairResponse` is a contracts ask (report, don't edit).
-  - UI notes: `.popup h1`, `dl.kv` margin, invalid-code style, scroll cue, side panel `<main>`.
-  - Scanner catches `.Function(`; scoped theme retry; guarded options dark audit; assert no size label.
-- **Ports:** owner 3000/3001; UI critic 3106, P09.1 3105; e2e port 0; runner 2000/3210/4310 only in scratch clones with a temp HOME.
+  - Branch from `origin/…`.
+  - Write only in the worktree or /tmp. MCP screenshot tools need absolute paths.
+  - No recursive deletes through node, find or python. Never test a guardrail.
+- **Orchestrator messages:** each agent's prompt has a private code word, kept in /tmp only and never committed. Every mid-round message carries it. Use TaskStop for a real stop.
+- **Ports are exclusive:**
+  - owner 3000/3001;
+  - 4310 only for the P07-B implementer;
+  - the P03 reviewer 4320; P08-A 4330;
+  - the UI critic 4340/3106.
+- **Route modules:** P03's readdir-based test (D2) lands with P03. Until then, a packet adds its one name.
+- **eve:** directives compile per app root (`eve-runtime.md` §8 item 14). A provider 429 surfaces as `semanticErrorId "gateway-rate-limited"`.
 
 Open blocks: owner-gated catalog deploy, first release tag, tag-push deny rule (GOALS Open dependencies).
-Last-iter shipped: runner skeleton, extension part A, template page and release workflow, contracts follow-ups. Log: logs/iter-003.md.
-
-<!-- Tier 1: read every iter. Hard cap 30 lines. This file IS the handoff —
-     keep it self-contained, overwrite (do not append) each iter. -->
+Last closed iteration: 004 (shipped P02.1 and P09.1). Log: logs/iter-004.md.
+<!-- Tier 1: read every iter. Hard cap 30 lines. Overwrite each iter; this file IS the handoff. -->

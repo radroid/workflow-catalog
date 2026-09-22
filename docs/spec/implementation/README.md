@@ -23,6 +23,7 @@ Bounded work packets for the MVP in [../mvp-spec.md](../mvp-spec.md). Each packe
 | [P02 runner spike and skeleton](P02-runner-spike-and-skeleton.md) | P01 | P09 |
 | [P02.1 runner follow-ups](P02.1-runner-followups.md) | P02 | P03–P10 (Owns disjoint) |
 | [P03 onboarding and career profile](P03-onboarding-and-career-profile.md) | P02 | P09, P07 (pairing part) |
+| [P03.1 onboarding sources](P03.1-onboarding-sources.md) | P03, P04 (safe-fetch) | P05, P08 (Owns disjoint) |
 | [P04 job capture](P04-job-capture.md) | P03 | P09 |
 | [P05 preparation and validator](P05-preparation-and-validator.md) | P04 | P09 |
 | [P06 board and sessions](P06-board-and-sessions.md) | P05 | P09 |
