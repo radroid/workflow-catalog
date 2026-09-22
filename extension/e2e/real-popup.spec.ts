@@ -17,13 +17,13 @@
  * fixture-server.ts); every fixture URL below is built from
  * `fixtureServer.origin`.
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { createRequire } from "node:module";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import type { JobCapture } from "@workflow-catalog/contracts";
+import { assertNoAxeViolations, expectEmptyRegionsCollapsed, expectHiddenReallyHidden, waitForDownload } from "./checks";
 import { expect, extensionDist, test } from "./fixtures";
 import { startFixtureServer, type FixtureServerHandle } from "./fixture-server";
 import {
@@ -68,37 +68,6 @@ function screenshotPath(fileName: string): string {
     : test.info().outputPath(fileName);
 }
 
-const require = createRequire(import.meta.url);
-const AXE_SOURCE = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
-// Same tag set as WCAG A/AA + best-practice; violations only (not
-// "incomplete" -- those need a human judgment call axe can't make itself,
-// and asserting on them would make this test flaky against axe's own
-// heuristics, not this extension's markup).
-const AXE_RUN_EXPRESSION = `
-  axe.run(document, {
-    runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"] },
-    resultTypes: ["violations"],
-  }).then((results) => results.violations.map((violation) => ({
-    id: violation.id,
-    impact: violation.impact,
-    nodes: violation.nodes.length,
-    targets: violation.nodes.slice(0, 5).map((node) => node.target.join(" ")),
-  })))
-`;
-
-interface AxeViolationSummary {
-  id: string;
-  impact: string | null;
-  nodes: number;
-  targets: string[];
-}
-
-async function assertNoAxeViolations(evaluate: (expression: string) => Promise<unknown>, label: string): Promise<void> {
-  await evaluate(AXE_SOURCE);
-  const violations = (await evaluate(AXE_RUN_EXPRESSION)) as AxeViolationSummary[];
-  expect(violations, `axe violations on ${label}:\n${JSON.stringify(violations, null, 2)}`).toEqual([]);
-}
-
 async function readKvPairs(session: RawCdpSession): Promise<Record<string, string>> {
   return session.evaluate<Record<string, string>>(`
     Object.fromEntries(
@@ -108,19 +77,6 @@ async function readKvPairs(session: RawCdpSession): Promise<Record<string, strin
       ]),
     )
   `);
-}
-
-async function waitForDownload(dir: string, filename: string, timeoutMs = 5000): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  const target = path.join(dir, filename);
-  while (Date.now() < deadline) {
-    if (existsSync(target)) {
-      const content = readFileSync(target, "utf8");
-      if (content.length > 0) return content;
-    }
-    await sleep(100);
-  }
-  throw new Error(`${filename} never appeared in ${dir} (present: ${readdirSync(dir).join(", ") || "(empty)"})`);
 }
 
 let harness: RealPopupHarness;
@@ -176,6 +132,11 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     await inTheme(popupTheme, "dark", () =>
       assertNoAxeViolations((expression) => popup.evaluate(expression), "popup preview (dark, json-ld)"),
     );
+  });
+
+  await test.step("P07-B revision 2, C1 and D: before Save, the empty status line takes no room, and the hidden secondary buttons really are hidden", async () => {
+    await expectEmptyRegionsCollapsed((expression) => popup.evaluate(expression), "popup preview");
+    await expectHiddenReallyHidden((expression) => popup.evaluate(expression), "popup preview");
   });
 
   await test.step("captures the P07A popup screenshots from the real popup, each proven dark or light", async () => {
@@ -439,6 +400,12 @@ test("options page: 0 axe violations unpaired, light and dark; screenshots captu
   await page.evaluate(() => document.fonts.ready);
 
   const optionsTheme = pageThemeTarget(page, "options");
+
+  // P07-B revision 2, C1 and D: unpaired, the Pairing status line is empty
+  // and the Un-pair row is hidden -- a .row, whose own display:flex beats
+  // the UA [hidden] rule without base.css's !important one.
+  await expectEmptyRegionsCollapsed((expression) => page.evaluate(expression), "options (unpaired)");
+  await expectHiddenReallyHidden((expression) => page.evaluate(expression), "options (unpaired)");
 
   await assertNoAxeViolations((expression) => page.evaluate(expression), "options (light, unpaired)");
   await captureInTheme(optionsTheme, "light", "P07A-options-light.png", screenshotPath);

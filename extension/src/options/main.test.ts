@@ -83,7 +83,12 @@ beforeEach(() => {
   globalThis.fetch = (() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // The page keeps working after a test's last assertion: render()'s
+  // status check goes on to re-sync Pairing and read the outbox. Let that
+  // finish against this test's fakes before they are torn down --
+  // otherwise it rejects with "chrome is not defined" after the test.
+  await new Promise((resolve) => setTimeout(resolve, 20));
   document.body.innerHTML = "";
   globalThis.fetch = originalFetch;
   // @ts-expect-error -- test cleanup of a partial chrome stub
@@ -404,14 +409,23 @@ describe("runner status section (P07-B deliverable 2: GET /status)", () => {
     }
   });
 
-  it("P07-B revision 1, B10: shows an outbox summary line and a 'Check again' button", async () => {
+  it("P07-B revision 1, B10: shows a 'Check again' button, and -- revision 2 polish -- no outbox line on a fresh install, where nothing was ever queued", async () => {
     installFakeChrome();
+    await import("./main");
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-section="status"]')?.textContent).toContain("Pair this browser above");
+    });
+    const section = document.querySelector('[data-section="status"]')!;
+    expect([...section.querySelectorAll("button")].some((b) => b.textContent === "Check again")).toBe(true);
+    expect(section.textContent).not.toContain("saved job");
+  });
+
+  it("P07-B revision 1, B10: 'All saved jobs sent.' once something queued in this browser session has gone out", async () => {
+    installFakeChrome({ jobCaptureOutboxUsedThisSession: true });
     await import("./main");
     await vi.waitFor(() => {
       expect(document.querySelector('[data-section="status"]')?.textContent).toContain("All saved jobs sent.");
     });
-    const section = document.querySelector('[data-section="status"]')!;
-    expect([...section.querySelectorAll("button")].some((b) => b.textContent === "Check again")).toBe(true);
   });
 
   it("runner not running (network error) shows a clear, recoverable message", async () => {
@@ -467,6 +481,7 @@ describe("runner status section (P07-B deliverable 2: GET /status)", () => {
     });
     const unpairButton = [...document.querySelectorAll('[data-section="pairing"] button')].find((b) => b.textContent === "Un-pair") as HTMLButtonElement;
     expect(unpairButton.disabled).toBe(true);
+    expect(unpairButton.closest("[hidden]"), "P07-B revision 2 polish: nothing to un-pair, so not shown").not.toBeNull();
   });
 
   it("P07-B revision 1, B8: 429 says 'Too many tries', with a minutes countdown from Retry-After", async () => {
@@ -480,6 +495,213 @@ describe("runner status section (P07-B deliverable 2: GET /status)", () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-section="status"]')?.textContent).toContain("Too many tries. Try again in about 3 minutes.");
     });
+  });
+});
+
+describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing keeps up", () => {
+  const PAIRED = { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T09:00:00.000Z" };
+  const STATUS_OK = { version: "0.4.0", workspaceId: "ws_fictional_workspace_id", budget: { dailyRunLimit: 0, runsUsedToday: 0, paused: false }, schedules: [] };
+  const TOKEN_INVALID = { ok: false, error: { code: "token_invalid", message: "This device token is not valid (unknown, revoked or expired). Pair the extension again." } };
+
+  /** Lets every pending promise chain (the fake storage and fetch are
+   * promise-only) run to the end. */
+  function settle(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  function statusSection(): Element {
+    return document.querySelector('[data-section="status"]')!;
+  }
+
+  function checkAgainButton(): HTMLButtonElement {
+    return [...statusSection().querySelectorAll("button")].find((b) => b.textContent === "Check again") as HTMLButtonElement;
+  }
+
+  function watch(target: Node): MutationRecord[] {
+    const records: MutationRecord[] = [];
+    new MutationObserver((batch) => records.push(...batch)).observe(target, { subtree: true, childList: true, characterData: true, attributes: true });
+    return records;
+  }
+
+  it("'Check again' keeps focus, and a check that finds the same problem leaves the section untouched -- the alert is not re-inserted or re-announced", async () => {
+    installFakeChrome({ deviceToken: PAIRED });
+    let statusCalls = 0;
+    globalThis.fetch = (() => {
+      statusCalls += 1;
+      return Promise.reject(new TypeError("Failed to fetch"));
+    }) as typeof fetch;
+    await import("./main");
+    await vi.waitFor(() => expect(statusSection().querySelector('[role="alert"]')).not.toBeNull());
+    await settle();
+    const section = statusSection();
+    const alertBefore = section.querySelector('[role="alert"]');
+    const button = checkAgainButton();
+    button.focus();
+    const callsBefore = statusCalls;
+    const records = watch(section);
+
+    button.click();
+    expect(button.textContent, "shows the check it started").toBe("Checking…");
+    await vi.waitFor(() => expect(statusCalls).toBe(callsBefore + 1));
+    await vi.waitFor(() => expect(button.textContent).toBe("Check again"));
+    await settle();
+
+    expect(statusSection(), "the section itself is never rebuilt").toBe(section);
+    expect(document.activeElement, "revision 1 dropped focus to <body> here").toBe(button);
+    expect(section.querySelector('[role="alert"]'), "the same alert node, not a re-inserted one").toBe(alertBefore);
+    expect(records.filter((record) => !button.contains(record.target)), "nothing but the button's own label changed").toEqual([]);
+  });
+
+  it("a re-check on window focus that finds nothing new changes nothing; one that finds a change shows it in the polite region and removes the alert", async () => {
+    installFakeChrome({ deviceToken: PAIRED });
+    let runnerUp = false;
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      runnerUp && String(input).endsWith("/status") ? Promise.resolve(jsonResponse(200, STATUS_OK)) : Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
+    await import("./main");
+    await vi.waitFor(() => expect(statusSection().querySelector('[role="alert"]')).not.toBeNull());
+    await settle();
+    const section = statusSection();
+    const politeRegion = section.querySelector('[role="status"]')!;
+    const records = watch(section);
+
+    window.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(records, "the same 'can't reach the runner' state: no DOM change, so nothing is re-announced").toEqual([]);
+
+    runnerUp = true;
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(politeRegion.textContent).toContain("Connected"));
+    expect(section.querySelector('[role="alert"]')).toBeNull();
+    expect(section.querySelector('[role="status"]'), "the polite region is the same node throughout").toBe(politeRegion);
+  });
+
+  it("after a 401, the code label keeps crediting npm run pair, and a re-check keeps 'expired or was revoked' instead of 'Pair this browser above…'", async () => {
+    installFakeChrome({ deviceToken: PAIRED });
+    stubFetch(() => jsonResponse(401, TOKEN_INVALID));
+    await import("./main");
+    await vi.waitFor(() => expect(statusSection().textContent).toContain("expired or was revoked"));
+    await vi.waitFor(() => expect(document.querySelector('[data-section="pairing"]')?.textContent).toContain("Not paired yet."));
+    expect(document.querySelector('label[for] code')?.textContent, "revision 1 reverted to npm run setup here").toBe("npm run pair");
+
+    checkAgainButton().click();
+    await vi.waitFor(() => expect(checkAgainButton()).toBeDefined());
+    await settle();
+    expect(statusSection().querySelector('[role="alert"]')?.textContent).toBe("Your pairing has expired or was revoked. Pair again above.");
+    expect(statusSection().textContent).not.toContain("Pair this browser above");
+  });
+
+  it("when a re-check's 401 rebuilds Pairing while focus is inside it, focus moves to the code field instead of <body>", async () => {
+    installFakeChrome({ deviceToken: PAIRED });
+    let revoked = false;
+    globalThis.fetch = (() => Promise.resolve(revoked ? jsonResponse(401, TOKEN_INVALID) : jsonResponse(200, STATUS_OK))) as typeof fetch;
+    await import("./main");
+    await vi.waitFor(() => expect(statusSection().textContent).toContain("Connected"));
+    const pairAgain = [...document.querySelectorAll("button")].find((b) => b.textContent === "Pair again") as HTMLButtonElement;
+    pairAgain.focus();
+
+    revoked = true;
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(document.querySelector('[data-section="pairing"]')?.textContent).toContain("Not paired yet."));
+
+    expect(document.activeElement).toBe(document.querySelector('[data-section="pairing"] input[type="text"]'));
+  });
+
+  it("a routine re-check never rebuilds Pairing (the same section node, focus untouched)", async () => {
+    installFakeChrome({ deviceToken: PAIRED });
+    stubFetch(() => jsonResponse(200, STATUS_OK));
+    await import("./main");
+    await vi.waitFor(() => expect(statusSection().textContent).toContain("Connected"));
+    const pairing = document.querySelector('[data-section="pairing"]');
+
+    checkAgainButton().click();
+    await settle();
+
+    expect(document.querySelector('[data-section="pairing"]')).toBe(pairing);
+  });
+
+  it("unpaired, the Un-pair row is hidden, so the first control in Pairing is the code field", async () => {
+    installFakeChrome();
+    await import("./main");
+    await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull());
+    const pairing = document.querySelector('[data-section="pairing"]')!;
+    const firstVisibleControl = [...pairing.querySelectorAll("button, input, a")].find((control) => control.closest("[hidden]") === null);
+    expect(firstVisibleControl).toBe(pairing.querySelector('input[type="text"]'));
+  });
+
+  it("message tones: 'Paired.' is the neutral .flash.ok, a refused code .flash.bad", async () => {
+    installFakeChrome();
+    let accept = false;
+    stubFetch(() =>
+      accept
+        ? jsonResponse(200, { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "opaque-token" })
+        : jsonResponse(401, { ok: false, error: { code: "pairing_code_invalid", message: "This pairing code is not valid." } }),
+    );
+    await import("./main");
+    await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull());
+    const pairingStatus = document.querySelector('[data-section="pairing"] [role="status"]')!;
+    const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+
+    input.value = "AAAAA-AAAAA";
+    (document.querySelector("form") as HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(pairingStatus.textContent).toBe("This pairing code is not valid."));
+    expect(pairingStatus.className).toBe("flash bad");
+
+    accept = true;
+    (document.querySelector("form") as HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(pairingStatus.textContent).toBe("Paired."));
+    expect(pairingStatus.className).toBe("flash ok");
+  });
+
+  it("B3: the outbox line says why a capture is waiting when something other than the runner answered on its port", async () => {
+    installFakeChrome({
+      jobCaptureOutboxUsedThisSession: true,
+      "jobCaptureOutbox:11111111-1111-4111-8111-111111111111": {
+        capture: {
+          protocol: 1,
+          type: "job_capture",
+          eventId: "11111111-1111-4111-8111-111111111111",
+          url: "https://jobs.example/postings/1",
+          text: "Backend Engineer — Quill, a fictional posting for tests.",
+          extractorVersion: "extractor@0.1.0",
+          contentHash: "a".repeat(64),
+          occurredAt: "2026-09-22T00:00:00.000Z",
+        },
+        attempts: 2,
+        queuedAt: "2026-09-22T00:00:01.000Z",
+        lastErrorCode: "invalid_response",
+      },
+    });
+    await import("./main");
+    await vi.waitFor(() =>
+      expect(statusSection().textContent).toContain("1 saved job waiting to send. Something other than the runner answered on its port; trying again."),
+    );
+  });
+
+  it("the outbox line follows the queue as it changes, without a re-check", async () => {
+    const fake = installFakeChrome();
+    await import("./main");
+    await vi.waitFor(() => expect(statusSection().textContent).toContain("Pair this browser above"));
+    await settle();
+    expect(statusSection().textContent).not.toContain("saved job");
+
+    const { enqueueCapture } = await import("../shared/outbox");
+    await enqueueCapture(
+      {
+        protocol: 1,
+        type: "job_capture",
+        eventId: "11111111-1111-4111-8111-111111111111",
+        url: "https://jobs.example/postings/1",
+        text: "Backend Engineer — Quill, a fictional posting for tests.",
+        extractorVersion: "extractor@0.1.0",
+        contentHash: "a".repeat(64),
+        occurredAt: "2026-09-22T00:00:00.000Z",
+      },
+      { code: "not_paired", message: "not paired" },
+    );
+    for (const listener of fake.changeListeners) {
+      listener({ "jobCaptureOutbox:11111111-1111-4111-8111-111111111111": { newValue: {} } }, "session");
+    }
+    await vi.waitFor(() => expect(statusSection().textContent).toContain("1 saved job waiting until this browser is paired."));
   });
 });
 

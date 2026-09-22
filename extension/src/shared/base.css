@@ -161,10 +161,26 @@ button.primary:hover {
   opacity: 0.9;
 }
 
+/* P07-B revision 2, C4: a secondary action still looks like a button --
+ * the design reference's ghost button (docs/spec/visuals/index.html)
+ * drops the fill and the shadow but keeps the 1px border. With the border
+ * made transparent, "Pair again", "Check again", "Save as a file" and
+ * "Open settings" read as plain text. */
 button.ghost {
   background: transparent;
   box-shadow: none;
-  border-color: transparent;
+}
+
+/* P07-B revision 2 polish: an inert button looks inert. The popup's
+ * "Saved ✓" uses aria-disabled rather than the disabled attribute so it
+ * keeps focus (see popup/render.ts); this gives it the disabled look, and
+ * hovering it changes nothing. After button.primary:hover, which has the
+ * same specificity. */
+button[aria-disabled="true"],
+button[aria-disabled="true"]:hover {
+  opacity: 0.5;
+  cursor: default;
+  box-shadow: none;
 }
 
 input[type="text"] {
@@ -262,6 +278,39 @@ input[type="text"][aria-invalid="true"] {
 
 .flash.bad {
   border-left-color: var(--destructive);
+}
+
+/* P07-B revision 2 polish: a success ("Paired.", "Sent to the runner.")
+ * is the reference's neutral .flash.ok, not the amber that means
+ * "waiting". */
+.flash.ok {
+  border-left-color: var(--foreground);
+}
+
+/* P07-B revision 2, C1: an empty message area takes no room and draws
+ * nothing. Status lines and live regions exist before their first message
+ * (a screen reader only announces a change to a region that was already
+ * there), and an empty .flash used to draw as a 16px amber-edged bar.
+ * Not display:none, which would take the region out of the accessibility
+ * tree: out of the flow, with no padding, border or background, it stays
+ * in the page with nothing to show. It returns to normal the moment it
+ * has text. */
+.flash:empty,
+[role="status"]:empty,
+[role="alert"]:empty,
+[aria-live]:empty {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* P07-B revision 2 polish: commands in messages and labels (`npm run
+ * pair`) in the mono face, as in the design reference. */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
 }
 
 a {

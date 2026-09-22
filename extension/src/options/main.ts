@@ -4,11 +4,13 @@ import { bridgeClient, type BridgeError } from "../shared/bridge-client";
 import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
 import { abbreviateUuid, formatTimestamp } from "../shared/format";
-import { listQueuedCaptures, resumeAfterPairing } from "../shared/outbox";
+import { isOutboxStorageKey, listQueuedCaptures, outboxUsedThisSession, resumeAfterPairing, type OutboxEntry } from "../shared/outbox";
 import {
   forgetPairing,
   getDeviceToken,
   getLastJobCapture,
+  getPairedBefore,
+  getPairingExpired,
   getPairingOriginMismatch,
   recordPairing,
   type StoredDeviceToken,
@@ -82,25 +84,44 @@ function tooManyTriesMessage(retryAfterSeconds: number | undefined): string {
 const pairingStatusId = nextId("pairing-status");
 const pairingStatus = el("p", { className: "flash", attrs: { id: pairingStatusId, role: "status", "aria-live": "polite" } });
 
-function setPairingStatus(text: string, problem: boolean): void {
+/** A message line's tone (P07-B revision 2 polish), after the design
+ * reference's `.flash` variants: `ok` is the neutral `.flash.ok` for a
+ * success ("Paired.", "Un-paired."), `wait` the amber default for work in
+ * progress ("Pairing…"), `bad` a problem. */
+type Tone = "ok" | "wait" | "bad";
+const FLASH_CLASS: Record<Tone, string> = { ok: "flash ok", wait: "flash", bad: "flash bad" };
+
+function setPairingStatus(text: string, tone: Tone): void {
   pairingStatus.replaceChildren(...withInlineCode(text));
-  pairingStatus.className = problem ? "flash bad" : "flash";
+  pairingStatus.className = FLASH_CLASS[tone];
 }
+
+function pairCommand(everPaired: boolean): string {
+  return everPaired ? "npm run pair" : "npm run setup";
+}
+
+/** True if this browser has paired before in this browser session -- see
+ * `pairingSection`'s `everPaired`. */
+async function hasPairedBefore(current: StoredDeviceToken | null): Promise<boolean> {
+  return current !== null || (await getPairedBefore()) || (await getPairingExpired());
+}
+
+/** The deviceId the Pairing section on screen was built for (`null`:
+ * unpaired) -- lets `syncPairingSection` rebuild it only when storage has
+ * actually moved on. */
+let pairingShownFor: string | null = null;
 
 /**
  * `everPaired` (P07-B revision 1, E3/B12): the code field's own label
  * names the command that actually printed the code on screen -- `npm run
  * setup` runs once and prints the very first code; every code after that
  * (re-pairing while still paired, or right after an Un-pair) comes from
- * `npm run pair` instead. `buildPairingSection` passes `current !== null`
- * (a token is stored right now); the Un-pair handler below passes a
- * hardcoded `true` instead of recomputing it, since it has just forgotten
- * the token itself and `current` would otherwise read `null` a moment too
- * early. Nothing here distinguishes "never paired" from "was paired, then
- * silently lost the token some other way" (e.g. bridge-client.ts's
- * onTokenInvalid hook clearing a dead one after a 401) -- that path's next
- * Pairing re-render goes back through `buildPairingSection`, sees no
- * current token, and shows "npm run setup" again, same as a fresh install.
+ * `npm run pair` instead. P07-B revision 2 polish: `hasPairedBefore` also
+ * remembers a pairing this browser session made and then lost -- an
+ * Un-pair, or bridge-client.ts's onTokenInvalid hook forgetting a dead
+ * token after a 401 (storage.ts's pairedBefore/pairingExpired flags) -- so
+ * the label no longer reverts to `npm run setup` then, as if this were a
+ * fresh install.
  *
  * Polish: the code-entry form collapses to a single "Pair again" button
  * while already paired (`current !== null`), instead of always showing a
@@ -119,7 +140,7 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
   }) as HTMLInputElement;
   const codeLabel = el("label", { className: "small", attrs: { for: codeFieldId } }, [
     "Code from ",
-    el("code", { text: everPaired ? "npm run pair" : "npm run setup" }),
+    el("code", { text: pairCommand(everPaired) }),
   ]);
   const pairButton = el("button", { className: "primary", attrs: { type: "submit" }, text: "Pair" });
   const form = el("form", { className: "field" }, [codeInput, pairButton]);
@@ -145,12 +166,16 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
 
   const unpairButton = el("button", { text: "Un-pair", attrs: { "data-action": "unpair" } });
   unpairButton.toggleAttribute("disabled", !paired);
+  // P07-B revision 2 polish: with nothing paired there is nothing to
+  // un-pair, so the row is hidden and the code field is the first control
+  // -- not a disabled Un-pair.
+  const actions = el("div", { className: "row" }, [unpairButton, pairAgainButton]);
+  actions.hidden = !paired;
   unpairButton.addEventListener("click", () => {
     void (async () => {
       await forgetPairing();
-      setPairingStatus("Un-paired. You can pair again below.", false);
-      const fresh = pairingSection(null, true);
-      replaceSection("pairing", fresh);
+      setPairingStatus("Un-paired. You can pair again below.", "ok");
+      const fresh = showPairing(null, true);
       // Un-pairing tears down and rebuilds the whole section -- the old,
       // focused Un-pair button no longer exists to keep focus on, so it
       // was silently dropping to <body>. Land on the field the next
@@ -166,7 +191,7 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
       const code = codeInput.value.trim();
       if (code.length === 0) {
         codeInput.setAttribute("aria-invalid", "true");
-        setPairingStatus(`Enter the code shown by ${everPaired ? "npm run pair" : "npm run setup"}.`, true);
+        setPairingStatus(`Enter the code shown by ${pairCommand(everPaired)}.`, "bad");
         codeInput.focus();
         return;
       }
@@ -179,13 +204,13 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
       const parsed = pairRequestSchema.safeParse({ code });
       if (!parsed.success) {
         codeInput.setAttribute("aria-invalid", "true");
-        setPairingStatus(`Enter the code shown by ${everPaired ? "npm run pair" : "npm run setup"}.`, true);
+        setPairingStatus(`Enter the code shown by ${pairCommand(everPaired)}.`, "bad");
         codeInput.focus();
         return;
       }
       codeInput.removeAttribute("aria-invalid");
       pairButton.disabled = true;
-      setPairingStatus("Pairing…", false);
+      setPairingStatus("Pairing…", "wait");
       const result = await bridgeClient.pair(parsed.data);
       pairButton.disabled = false;
       if (!result.ok) {
@@ -197,7 +222,7 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
         }
         setPairingStatus(
           result.error.status === 429 ? tooManyTriesMessage(result.error.retryAfterSeconds) : result.error.message,
-          true,
+          "bad",
         );
         codeInput.focus();
         return;
@@ -207,9 +232,8 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
       // flagged (an origin mismatch, an expired token): a fresh pairing can
       // only ever make those stale.
       await recordPairing(token);
-      setPairingStatus("Paired.", false);
-      const fresh = pairingSection(token, true);
-      replaceSection("pairing", fresh);
+      setPairingStatus("Paired.", "ok");
+      const fresh = showPairing(token, true);
       // B7: focus the thing paired state actually offers next, not
       // whichever <button> happens to come first in document order (the
       // Pair button, which the old querySelector("button") picked, even
@@ -224,11 +248,11 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
     })();
   });
 
-  return el("section", {}, [
+  const section = el("section", {}, [
     el("h2", { text: "Pairing" }),
     el("div", { className: "card pad stack" }, [
       currentState,
-      el("div", { className: "row" }, [unpairButton, pairAgainButton]),
+      actions,
       // Polish: the outcome message belongs next to the button that
       // caused it, not stranded below the (possibly now-hidden) code
       // field.
@@ -237,13 +261,36 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
       statusPageLink(),
     ]),
   ]);
-}
-
-async function buildPairingSection(): Promise<HTMLElement> {
-  const current = await getDeviceToken();
-  const section = pairingSection(current, current !== null);
   section.dataset.section = "pairing";
   return section;
+}
+
+/** Puts a Pairing section built for `current` on the page (replacing the
+ * one there, if any) and records what it shows. */
+function showPairing(current: StoredDeviceToken | null, everPaired: boolean): HTMLElement {
+  const fresh = pairingSection(current, everPaired);
+  replaceSection("pairing", fresh);
+  pairingShownFor = current?.deviceId ?? null;
+  return fresh;
+}
+
+/**
+ * Brings the Pairing section in line with storage after a status check
+ * -- e.g. that check's 401 just made bridge-client.ts forget a dead token
+ * -- and only when what it shows is actually out of date, so a routine
+ * re-check never rebuilds it (P07-B revision 2). If focus was inside it,
+ * focus moves to the rebuilt section's next action instead of dropping to
+ * <body>.
+ */
+async function syncPairingSection(): Promise<void> {
+  const current = await getDeviceToken();
+  if ((current?.deviceId ?? null) === pairingShownFor) return;
+  const hadFocus = app!.querySelector('[data-section="pairing"]')?.contains(document.activeElement) ?? false;
+  const fresh = showPairing(current, await hasPairedBefore(current));
+  if (hadFocus) {
+    const next = current ? '[data-action="unpair"]' : 'input[type="text"]';
+    fresh.querySelector<HTMLElement>(next)?.focus();
+  }
 }
 
 /**
@@ -279,82 +326,177 @@ function renderConnectedStatus(status: { version: string; workspaceId: string })
   ]);
 }
 
-/** P07-B revision 1, B10: "1 saved job waiting to send" / "All saved jobs
- * sent" -- the outbox's own current size, refreshed every time Status is
- * (gate 4's queued-then-delivered capture is invisible from this page
- * otherwise; nothing else here ever surfaces it). */
-async function outboxSummaryLine(): Promise<HTMLElement> {
-  const queued = await listQueuedCaptures();
-  const text = queued.length === 0 ? "All saved jobs sent." : `${queued.length} saved job${queued.length === 1 ? "" : "s"} waiting to send.`;
-  return el("p", { className: "small", text });
+/** What the Status section shows. Two states with the same `statusKey`
+ * look and read the same, so moving between them changes nothing on the
+ * page. */
+type StatusState =
+  | { readonly kind: "checking" }
+  | { readonly kind: "connected"; readonly version: string; readonly workspaceId: string }
+  | { readonly kind: "info"; readonly message: string }
+  | { readonly kind: "problem"; readonly message: string };
+
+function statusKey(state: StatusState): string {
+  if (state.kind === "checking") return "checking";
+  if (state.kind === "connected") return `connected|${state.version}|${state.workspaceId}`;
+  return `${state.kind}|${state.message}`;
 }
 
-/** P07-B revision 1, B10: a manual way to re-check without reloading the
- * whole page. Paired with a `window` focus listener (see `render` below)
- * for the common case (someone starts the runner, then alt-tabs back)
- * without needing to find this button at all. */
-function checkAgainButton(): HTMLButtonElement {
-  const button = el("button", { className: "ghost", text: "Check again" }) as HTMLButtonElement;
-  button.addEventListener("click", () => {
-    void refreshStatusSection();
-  });
-  return button;
-}
-
-async function buildStatusSection(): Promise<HTMLElement> {
-  const statusId = nextId("bridge-status");
-  // P07-B revision 1, B3: GET /status never carries an Origin header
-  // (Chrome doesn't send one on a GET) and so can never itself observe a
-  // wrong-origin token the way job_capture's POST /events can -- this
-  // flag (set by bridge-client.ts's onOriginMismatch hook, cleared on the
-  // next successful pairing or explicit Un-pair) is the only way this
-  // page can ever reflect that.
-  const mismatch = await getPairingOriginMismatch();
-  let body: HTMLElement;
-  if (mismatch) {
-    body = el(
-      "div",
-      { className: "flash bad", attrs: { role: "alert", id: statusId } },
-      withInlineCode("This pairing belongs to a different install. Pair again above."),
-    );
-  } else {
-    const result = await bridgeClient.getStatus();
-    if (result.ok) {
-      body = renderConnectedStatus(result.value);
-      body.setAttribute("role", "status");
-      body.id = statusId;
-    } else if (result.error.code === "not_paired") {
-      body = el("p", { className: "small", attrs: { role: "status", id: statusId } }, withInlineCode(statusFailureMessage(result.error)));
-    } else {
-      body = el("div", { className: "flash bad", attrs: { role: "alert", id: statusId } }, withInlineCode(statusFailureMessage(result.error)));
-      if (result.error.status === 401) {
-        // bridge-client.ts's onTokenInvalid already cleared the dead
-        // token from storage (B3) -- refresh Pairing too, so it doesn't
-        // keep claiming paired with Un-pair enabled for a token that's
-        // gone, and Status and Pairing never disagree for long.
-        replaceSection("pairing", await buildPairingSection());
-      }
-    }
+/**
+ * The runner's status for this browser, from the three places it can
+ * come from:
+ * - P07-B revision 1, B3: GET /status never carries an Origin header
+ *   (Chrome doesn't send one on a GET) and so can never itself observe a
+ *   wrong-origin token the way job_capture's POST /events can -- the
+ *   stored flag (set by bridge-client.ts's onOriginMismatch hook, cleared
+ *   on the next successful pairing or explicit Un-pair) is the only way
+ *   this page can ever reflect that;
+ * - GET /status itself;
+ * - P07-B revision 2 polish: with no token stored, the pairingExpired flag
+ *   tells a pairing the bridge refused (bridge-client.ts's onTokenInvalid
+ *   forgot the token) apart from one that never happened. Without it, the
+ *   next re-check replaced "expired or was revoked" with "Pair this
+ *   browser above…".
+ */
+async function readStatusState(): Promise<StatusState> {
+  if (await getPairingOriginMismatch()) {
+    return { kind: "problem", message: "This pairing belongs to a different install. Pair again above." };
   }
-  const section = el("section", {}, [el("h2", { text: "Status" }), body, await outboxSummaryLine(), checkAgainButton()]);
-  section.dataset.section = "status";
-  return section;
+  const result = await bridgeClient.getStatus();
+  if (result.ok) return { kind: "connected", version: result.value.version, workspaceId: result.value.workspaceId };
+  if (result.error.code === "not_paired") {
+    if (await getPairingExpired()) return { kind: "problem", message: "Your pairing has expired or was revoked. Pair again above." };
+    return { kind: "info", message: statusFailureMessage(result.error) };
+  }
+  return { kind: "problem", message: statusFailureMessage(result.error) };
 }
 
-async function refreshStatusSection(): Promise<void> {
-  replaceSection("status", await buildStatusSection());
+interface StatusView {
+  readonly section: HTMLElement;
+  show(state: StatusState): void;
+  setChecking(checking: boolean): void;
+  setOutboxLine(text: string): void;
 }
 
-/** Shown the instant the page renders, before the real (network-bound)
- * Status section has resolved -- see `render` below (P07-B revision 1,
- * B4). */
-function buildStatusPlaceholder(): HTMLElement {
+/**
+ * P07-B revision 2, C2: the Status section is built once and updated in
+ * place. Revision 1 rebuilt it on every check: "Check again" was destroyed
+ * while focused (focus dropped to <body>), and every re-check on window
+ * focus re-inserted -- and re-announced -- the same alert.
+ *
+ * Normal states (checking, not paired, connected) live in one polite live
+ * region that is never replaced, so a change in it is announced. A
+ * problem is an alert inserted after it, which is announced on insertion
+ * -- so it is inserted only when the problem itself changes. `show` with
+ * the same `statusKey` as what is on screen touches nothing, so a re-check
+ * that finds nothing new says nothing.
+ */
+function buildStatusView(): StatusView {
+  const info = el("div", { attrs: { id: nextId("bridge-status"), role: "status", "aria-live": "polite" } });
+  let problem: HTMLElement | null = null;
+  // P07-B revision 1, B10: the outbox's own state -- gate 4's
+  // queued-then-delivered capture is invisible from this page otherwise.
+  const outboxLine = el("p", { className: "small" });
+  outboxLine.hidden = true;
+  // P07-B revision 1, B10: a manual way to re-check without reloading the
+  // whole page. Paired with a `window` focus listener (see `render` below)
+  // for the common case (someone starts the runner, then alt-tabs back)
+  // without needing to find this button at all.
+  const checkAgain = el("button", { className: "ghost", text: "Check again" }) as HTMLButtonElement;
+  checkAgain.addEventListener("click", () => {
+    void refreshStatusSection({ fromButton: true });
+  });
   const section = el("section", {}, [
     el("h2", { text: "Status" }),
-    el("p", { className: "small", attrs: { role: "status", "aria-live": "polite" }, text: "Checking the runner…" }),
+    el("div", { className: "stack" }, [info, outboxLine, el("div", { className: "row" }, [checkAgain])]),
   ]);
   section.dataset.section = "status";
-  return section;
+  let shownKey: string | undefined;
+
+  return {
+    section,
+    show(state) {
+      const key = statusKey(state);
+      if (key === shownKey) return;
+      shownKey = key;
+      if (state.kind === "problem") {
+        info.replaceChildren();
+        const alert = el("div", { className: "flash bad", attrs: { role: "alert" } }, withInlineCode(state.message));
+        if (problem) problem.replaceWith(alert);
+        else info.after(alert);
+        problem = alert;
+        return;
+      }
+      problem?.remove();
+      problem = null;
+      if (state.kind === "connected") {
+        info.replaceChildren(renderConnectedStatus(state));
+      } else {
+        const text = state.kind === "checking" ? "Checking the runner…" : state.message;
+        info.replaceChildren(el("p", { className: "small" }, withInlineCode(text)));
+      }
+    },
+    // Both write only on a real change: an unchanged re-check leaves the
+    // section's DOM untouched.
+    setChecking(checking) {
+      const label = checking ? "Checking…" : "Check again";
+      if (checkAgain.textContent !== label) checkAgain.textContent = label;
+    },
+    setOutboxLine(text) {
+      if (outboxLine.textContent === text) return;
+      outboxLine.textContent = text;
+      outboxLine.hidden = text === "";
+    },
+  };
+}
+
+/**
+ * P07-B revision 1, B10, and revision 2: "N saved jobs waiting to send",
+ * with the reason when it's one a person can act on (B3: something other
+ * than the runner answered on its port), or "All saved jobs sent." --
+ * but only once something was actually queued in this browser session
+ * (polish: not on a fresh install). Empty means no line at all.
+ */
+function outboxSummaryText(entries: readonly OutboxEntry[], usedThisSession: boolean): string {
+  if (entries.length === 0) return usedThisSession ? "All saved jobs sent." : "";
+  const jobs = `${entries.length} saved job${entries.length === 1 ? "" : "s"}`;
+  if (entries.every((entry) => entry.pausedReason)) return `${jobs} waiting until this browser is paired.`;
+  const notTheRunner = entries.some(
+    (entry) => !entry.pausedReason && (entry.lastErrorCode === "invalid_response" || entry.lastErrorCode === "unknown_error"),
+  );
+  if (notTheRunner) return `${jobs} waiting to send. Something other than the runner answered on its port; trying again.`;
+  return `${jobs} waiting to send.`;
+}
+
+const statusView = buildStatusView();
+
+let statusCheck = 0;
+
+/** Re-checks the runner and updates Status (and Pairing, if the check
+ * changed what's stored) in place. Checks can overlap -- a click, a window
+ * focus, a pairing -- and only the latest one's answer is shown. The
+ * button reads "Checking…" only for a check it started itself: a re-check
+ * on window focus is silent unless it finds something new. */
+async function refreshStatusSection(options: { fromButton?: boolean } = {}): Promise<void> {
+  statusCheck += 1;
+  const thisCheck = statusCheck;
+  if (options.fromButton) statusView.setChecking(true);
+  const state = await readStatusState();
+  if (thisCheck !== statusCheck) return;
+  statusView.setChecking(false);
+  statusView.show(state);
+  await syncPairingSection();
+  await refreshOutboxLine();
+}
+
+let outboxCheck = 0;
+
+async function refreshOutboxLine(): Promise<void> {
+  outboxCheck += 1;
+  const thisCheck = outboxCheck;
+  const entries = await listQueuedCaptures();
+  const used = await outboxUsedThisSession();
+  if (thisCheck !== outboxCheck) return;
+  statusView.setOutboxLine(outboxSummaryText(entries, used));
 }
 
 function renderSessionSummary(manifest: SessionManifest): HTMLElement {
@@ -504,14 +646,16 @@ function replaceSection(id: string, replacement: HTMLElement): void {
  * but still the only slow part of this page) fills in afterwards, behind
  * its own "Checking the runner…" placeholder. A runner that accepts the
  * TCP connection but never answers used to leave the whole page blank
- * (`render()` awaited `buildStatusSection()` before mounting anything at
- * all): #app now always has real, interactive content on the very first
- * paint.
+ * (`render()` awaited the status check before mounting anything at all):
+ * #app now always has real, interactive content on the very first paint.
  */
 async function render(): Promise<void> {
-  const pairing = await buildPairingSection();
+  const current = await getDeviceToken();
+  const pairing = pairingSection(current, await hasPairedBefore(current));
+  pairingShownFor = current?.deviceId ?? null;
   const lastCapture = await getLastJobCapture();
   const fileBridge = fileBridgeSection(lastCapture !== null);
+  statusView.show({ kind: "checking" });
 
   mount(
     app!,
@@ -519,7 +663,7 @@ async function render(): Promise<void> {
       el("h1", { text: "Job Assistant" }),
       el("span", { className: "small", text: "Pairing, runner status, and the file-bridge fallback." }),
       pairing,
-      buildStatusPlaceholder(),
+      statusView.section,
       fileBridge,
       // E4 (mvp-spec §7.5): storage.session's lifetime is tied to this
       // browser staying open -- quitting Chrome forgets the pairing, by
@@ -527,6 +671,12 @@ async function render(): Promise<void> {
       el("p", { className: "small", text: "Pairing lives only in this browser session — quitting Chrome un-pairs it." }),
     ]),
   );
+
+  // The outbox line follows the queue as the popup and the worker change
+  // it, without waiting for the next status check.
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "session" && Object.keys(changes).some(isOutboxStorageKey)) void refreshOutboxLine();
+  });
 
   await refreshStatusSection();
 
