@@ -86,7 +86,14 @@ export function pageThemeTarget(page: Page, label: string): ThemeTarget {
     evaluate: <T>(expression: string) => page.evaluate(expression) as Promise<T>,
     capture: async () => {
       await page.evaluate(AFTER_RESIZE_QUIET);
-      return page.screenshot();
+      // P07-B revision 1: plain page.screenshot() only captures the
+      // current viewport -- on a page taller than that (the options
+      // page, once Pairing + Status + File bridge + the E4 note are all
+      // stacked, easily is) it silently crops, which is exactly how the
+      // committed P07B options screenshots ended up as 400x620 crops
+      // that cut off File bridge. fullPage captures the whole scrollable
+      // document regardless of the viewport height that's set.
+      return page.screenshot({ fullPage: true });
     },
   };
 }

@@ -43,7 +43,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 import { DEVICE_TOKEN_TTL_MS } from "@workflow-catalog/runner/store/devices.ts";
 import { listen } from "@workflow-catalog/runner/server/app.ts";
 import { expect, extensionDist, test } from "./fixtures";
@@ -495,19 +495,99 @@ test("job_capture (gate 4): Save queues when the runner is unreachable, and the 
   await checkPage.close();
 });
 
-test("P07B screenshots: options page, paired (light and dark)", async () => {
+/** Captures `fileState` at both required options widths (P07-B revision 1:
+ * "retake... options at 1280 and 390"), light and dark at each -- full
+ * page height throughout (pageThemeTarget's own fullPage: true), so a
+ * section as far down as File bridge is never cropped out the way the
+ * original 400x620 captures cropped it. Leaves the page's viewport at the
+ * last width used; every caller here closes its page right after. */
+async function captureOptionsBothWidths(page: Page, fileState: string): Promise<void> {
+  for (const width of [1280, 390] as const) {
+    await page.setViewportSize({ width, height: 800 });
+    const theme = pageThemeTarget(page, `options-${fileState}-${width}`);
+    await captureInTheme(theme, "light", `P07B-options-${fileState}-light-${width}.png`, screenshotPath);
+    await captureInTheme(theme, "dark", `P07B-options-${fileState}-dark-${width}.png`, screenshotPath);
+  }
+}
+
+test("P07B screenshots: options page, unpaired (1280 and 390, light and dark)", async () => {
+  const page = await openFreshOptionsPage();
+  await captureOptionsBothWidths(page, "unpaired");
+  await page.close();
+});
+
+test("P07B screenshots: options page, paired with status (1280 and 390, light and dark)", async () => {
+  const page = await openFreshOptionsPage();
+  const { code } = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(page, code);
+  await captureOptionsBothWidths(page, "paired");
+  await page.close();
+});
+
+test("P07B screenshots: options page, checking the runner (1280 and 390, light and dark)", async () => {
+  test.setTimeout(60_000);
+  // Not-paired never makes a network request at all -- bridge-client.ts's
+  // own getStatus() returns a local not_paired error the instant it sees
+  // no stored token (see its "or no request was attempted at all
+  // (not_paired)" doc comment), so there is no in-flight GET /status to
+  // hold for an unpaired page. "Checking the runner…" only exists on a
+  // fresh render while paired, in the window before that real request
+  // settles -- pair once via a throwaway page, then open one brand-new
+  // page per width (route armed before it ever navigates there), so
+  // there's never a reload/unroute race over the same page's requests.
+  const pairingPage = await openFreshOptionsPage();
+  const { code } = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(pairingPage, code);
+  await pairingPage.close();
+
+  for (const width of [1280, 390] as const) {
+    let releaseStatus: () => void = () => undefined;
+    const statusHeld = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    const page = await harness.context.newPage();
+    // Holds GET /status open so the placeholder (B4: "Checking the
+    // runner…", shown the instant the page renders, before that request
+    // settles) stays up long enough to actually capture -- a real
+    // loopback response normally lands in well under a millisecond,
+    // faster than this state could ever otherwise be observed.
+    await page.route(`${bridge.bridge.url}/status`, async (route: Route) => {
+      await statusHeld;
+      await route.continue();
+    });
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto(optionsUrl());
+    await expect(page.locator('[data-section="status"] [role="status"]')).toHaveText("Checking the runner…");
+
+    const theme = pageThemeTarget(page, `options-checking-${width}`);
+    await captureInTheme(theme, "light", `P07B-options-checking-light-${width}.png`, screenshotPath);
+    await captureInTheme(theme, "dark", `P07B-options-checking-dark-${width}.png`, screenshotPath);
+
+    releaseStatus();
+    await page.close();
+  }
+});
+
+test("P07B screenshots: options page, runner not responding (1280 and 390, light and dark)", async () => {
   const page = await openFreshOptionsPage();
   const { code } = await bridge.ctx.pairing.issue();
   await pairThroughTheRealForm(page, code);
 
-  const optionsTheme = pageThemeTarget(page, "options-paired");
-  await captureInTheme(optionsTheme, "light", "P07B-options-paired-light.png", screenshotPath);
-  await captureInTheme(optionsTheme, "dark", "P07B-options-paired-dark.png", screenshotPath);
+  await bridge.bridge.close();
+  await page.reload();
+  await expect(statusAlert(page)).toHaveText("Can't reach the runner. Is it running? Start it with npm run runner.");
+
+  await captureOptionsBothWidths(page, "runner-not-responding");
+
+  // Restart so afterEach's close() (already-closed is a needless risk) and
+  // this file's other tests see a bridge in the state startBridgeHarness
+  // always hands back (same restart gate 9's own status test already does).
+  bridge.bridge = await listen(bridge.app, bridge.port);
 
   await page.close();
 });
 
-test("P07B screenshots: options page, pairing error (light and dark)", async () => {
+test("P07B screenshots: options page, pairing error (1280 and 390, light and dark)", async () => {
   const page = await openFreshOptionsPage();
   await page.getByLabel("Code from npm run setup").fill("ZZZZZ-ZZZZZ");
   await page.getByRole("button", { name: "Pair", exact: true }).click();
@@ -515,14 +595,30 @@ test("P07B screenshots: options page, pairing error (light and dark)", async () 
     "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run npm run pair for a new one.",
   );
 
-  const optionsTheme = pageThemeTarget(page, "options-error");
-  await captureInTheme(optionsTheme, "light", "P07B-options-error-light.png", screenshotPath);
-  await captureInTheme(optionsTheme, "dark", "P07B-options-error-dark.png", screenshotPath);
+  await captureOptionsBothWidths(page, "pairing-error");
 
   await page.close();
 });
 
-test("P07B screenshots: popup, saved (light and dark)", async () => {
+test("P07B screenshots: popup, preview (light and dark)", async () => {
+  const tabPage = await harness.context.newPage();
+  await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+
+  const state = await waitForPopupState(popup);
+  expect(state).toBe("preview");
+
+  const popupTheme = popupThemeTarget(popup);
+  await captureInTheme(popupTheme, "light", "P07B-popup-preview-light.png", screenshotPath);
+  await captureInTheme(popupTheme, "dark", "P07B-popup-preview-dark.png", screenshotPath);
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await tabPage.close();
+});
+
+test("P07B screenshots: popup, sent (light and dark)", async () => {
   const optionsPage = await openFreshOptionsPage();
   const { code } = await bridge.ctx.pairing.issue();
   await pairThroughTheRealForm(optionsPage, code);
@@ -548,8 +644,156 @@ test("P07B screenshots: popup, saved (light and dark)", async () => {
   expect(statusText).toBe("Sent to the runner.");
 
   const popupTheme = popupThemeTarget(popup);
-  await captureInTheme(popupTheme, "light", "P07B-popup-saved-light.png", screenshotPath);
-  await captureInTheme(popupTheme, "dark", "P07B-popup-saved-dark.png", screenshotPath);
+  await captureInTheme(popupTheme, "light", "P07B-popup-sent-light.png", screenshotPath);
+  await captureInTheme(popupTheme, "dark", "P07B-popup-sent-dark.png", screenshotPath);
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await tabPage.close();
+});
+
+test("P07B screenshots: popup, queued -- runner down (light and dark)", async () => {
+  const optionsPage = await openFreshOptionsPage();
+  const { code } = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(optionsPage, code);
+  await optionsPage.close();
+
+  await bridge.bridge.close();
+
+  const tabPage = await harness.context.newPage();
+  await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+
+  const state = await waitForPopupState(popup);
+  expect(state).toBe("preview");
+
+  await focusSaveButton(popup);
+  await pressEnter(popup);
+
+  let statusText = "";
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
+    if (statusText.includes("isn't reachable right now")) break;
+    await sleep(100);
+  }
+  expect(statusText).toBe("The runner isn't reachable right now — it'll be sent automatically once it's back.");
+
+  const popupTheme = popupThemeTarget(popup);
+  await captureInTheme(popupTheme, "light", "P07B-popup-queued-runner-down-light.png", screenshotPath);
+  await captureInTheme(popupTheme, "dark", "P07B-popup-queued-runner-down-dark.png", screenshotPath);
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await tabPage.close();
+
+  bridge.bridge = await listen(bridge.app, bridge.port);
+});
+
+test("P07B screenshots: popup, not paired (light and dark)", async () => {
+  const tabPage = await harness.context.newPage();
+  await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+
+  const state = await waitForPopupState(popup);
+  expect(state).toBe("preview");
+
+  await focusSaveButton(popup);
+  await pressEnter(popup);
+
+  let statusText = "";
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
+    if (statusText.includes("Not paired yet")) break;
+    await sleep(100);
+  }
+  expect(statusText).toBe("Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.");
+
+  const popupTheme = popupThemeTarget(popup);
+  await captureInTheme(popupTheme, "light", "P07B-popup-not-paired-light.png", screenshotPath);
+  await captureInTheme(popupTheme, "dark", "P07B-popup-not-paired-dark.png", screenshotPath);
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await tabPage.close();
+});
+
+test("P07B screenshots: popup, pairing expired -- 401 (light and dark)", async () => {
+  const optionsPage = await openFreshOptionsPage();
+  const { code } = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(optionsPage, code);
+
+  const deviceId = await optionsPage.evaluate(async () => {
+    const stored = await chrome.storage.session.get("deviceToken");
+    return (stored.deviceToken as { deviceId: string } | undefined)?.deviceId;
+  });
+  if (deviceId === undefined) throw new Error("expected a deviceId in chrome.storage.session after pairing, got none");
+  expect(await bridge.ctx.devices.revoke(deviceId)).toBe(true);
+  await optionsPage.close();
+
+  const tabPage = await harness.context.newPage();
+  await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+
+  const state = await waitForPopupState(popup);
+  expect(state).toBe("preview");
+
+  await focusSaveButton(popup);
+  await pressEnter(popup);
+
+  let statusText = "";
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
+    if (statusText.includes("expired or was revoked")) break;
+    await sleep(100);
+  }
+  expect(statusText).toBe("Your pairing expired or was revoked. Pair again in Settings and it's sent.");
+
+  const popupTheme = popupThemeTarget(popup);
+  await captureInTheme(popupTheme, "light", "P07B-popup-pairing-expired-light.png", screenshotPath);
+  await captureInTheme(popupTheme, "dark", "P07B-popup-pairing-expired-dark.png", screenshotPath);
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await tabPage.close();
+});
+
+test("P07B screenshots: popup, other install -- 403 (light and dark)", async () => {
+  const otherOrigin = "chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba";
+  const mismatched = await pairFictionalDevice(bridge, otherOrigin);
+  const seedPage = await harness.context.newPage();
+  await seedPage.goto(optionsUrl());
+  await seedPage.evaluate(async (token) => {
+    await chrome.storage.session.set({
+      deviceToken: { deviceId: token.deviceId, token: token.token, pairedAt: new Date().toISOString() },
+    });
+  }, mismatched);
+  await seedPage.close();
+
+  const tabPage = await harness.context.newPage();
+  await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+
+  const state = await waitForPopupState(popup);
+  expect(state).toBe("preview");
+
+  await focusSaveButton(popup);
+  await pressEnter(popup);
+
+  let statusText = "";
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
+    if (statusText.includes("different install")) break;
+    await sleep(100);
+  }
+  expect(statusText).toBe("This pairing belongs to a different install. Pair again in Settings.");
+
+  const popupTheme = popupThemeTarget(popup);
+  await captureInTheme(popupTheme, "light", "P07B-popup-other-install-light.png", screenshotPath);
+  await captureInTheme(popupTheme, "dark", "P07B-popup-other-install-dark.png", screenshotPath);
 
   await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
   await popup.detach();
