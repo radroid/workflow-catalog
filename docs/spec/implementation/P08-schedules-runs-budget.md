@@ -1,7 +1,7 @@
 # P08 · Schedules, run log, and budget pause
 
-Status: claimed (paused) (part A, iter 005)
-Assignee: iter-005 implementer (Sonnet)
+Status: claimed (part A, iter 005)
+Assignee: iter-005 implementer (Sonnet, successor)
 Blocked by: P05
 Owns: runner/agent/schedules/, runner/store/runs.ts, runner/scheduler/ (catch-up + fallback trigger), runner/server/routes/runs.ts, runner/ui/runs.html, runner/ui/settings.html (schedules and budget sections)
 Spec: F10, F11, §8 schedules and run modes, hard-problems #4 and #7
