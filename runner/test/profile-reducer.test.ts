@@ -271,7 +271,8 @@ function readyToApproveProfile(newId: () => string): { profile: ReturnType<typeo
 describe("profile-reducer: R1 — approval version numbers are never reused", () => {
   it("re-confirming a claim withdraws v1; approving again produces v2, never v1 again", () => {
     const newId = idGen("id");
-    let { profile, claimId } = readyToApproveProfile(newId);
+    const { profile: initialProfile, claimId } = readyToApproveProfile(newId);
+    let profile = initialProfile;
     profile = reduce(profile, { type: "approve", now: NOW }).profile;
     expect(profile.approval).toEqual({ version: 1, at: NOW });
 
@@ -293,7 +294,8 @@ describe("profile-reducer: R1 — approval version numbers are never reused", ()
 
   it("acceptRevision refuses once approval has been withdrawn — accepting a stale revision can never re-approve on its own", () => {
     const newId = idGen("id");
-    let { profile, claimId } = readyToApproveProfile(newId);
+    const { profile: initialProfile, claimId } = readyToApproveProfile(newId);
+    let profile = initialProfile;
     profile = reduce(profile, {
       type: "extractClaims",
       category: "resume",
@@ -331,7 +333,8 @@ describe("profile-reducer: R1 — approval version numbers are never reused", ()
 describe("profile-reducer: R2 — any claim change but exclusion withdraws approval; statement edits become revisions too", () => {
   it("disputing an approved, confirmed claim withdraws approval", () => {
     const newId = idGen("id");
-    let { profile, claimId } = readyToApproveProfile(newId);
+    const { profile: initialProfile, claimId } = readyToApproveProfile(newId);
+    let profile = initialProfile;
     profile = reduce(profile, { type: "approve", now: NOW }).profile;
     expect(profile.approval).not.toBeNull();
 

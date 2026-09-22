@@ -1,4 +1,4 @@
-import type { OnboardingProfile, ProfileStatement } from "./profile-types.ts";
+import type { Claim, OnboardingProfile, ProfileStatement } from "./profile-types.ts";
 
 /**
  * `career-profile.md`: rendered from the JSON profile, and parsed back so an
@@ -41,6 +41,13 @@ interface RenderItem {
   readonly text: string;
   /** Only `needsDecisionClaims` items carry one; rendered as a nested line, never editable via round-trip. */
   readonly question?: string;
+  /** Only `confirmedClaims` items carry one (P03 revision 1, C10 — the UI critic's "career-profile.md has no evidence lines"): a human-readable rendering of `Claim.evidence`, nested the same way `question` is, and for the same reason never editable via round-trip. */
+  readonly evidence?: string;
+}
+
+/** `Claim.evidence` (`{kind: "passage" | "statement", ref, quote}`) rendered for a person to read, matching `docs/spec/visuals/index.html`'s `profileMarkdown()` convention ("Evidence: …" nested under each confirmed claim). A `statement` is the person's own words (recorded once a follow-up question is answered, R6) — worth saying explicitly, since it is not the same kind of evidence as a verbatim source passage. */
+function evidenceLine(claim: Claim): string {
+  return claim.evidence.kind === "statement" ? `your own statement — "${claim.evidence.quote}"` : `"${claim.evidence.quote}"`;
 }
 
 export interface ProfileMarkdownView {
@@ -58,7 +65,7 @@ export function toMarkdownView(profile: OnboardingProfile): ProfileMarkdownView 
   return {
     profileVersion: profile.approval?.version ?? null,
     approvedAt: profile.approval?.at ?? null,
-    confirmedClaims: profile.claims.filter((c) => c.status === "confirmed").map((c) => ({ id: c.id, text: c.text })),
+    confirmedClaims: profile.claims.filter((c) => c.status === "confirmed").map((c) => ({ id: c.id, text: c.text, evidence: evidenceLine(c) })),
     presentation: profile.presentation,
     needsDecisionClaims: profile.claims
       .filter((c) => c.status === "candidate" || c.status === "disputed")
@@ -97,7 +104,7 @@ export function renderProfileMarkdown(profile: OnboardingProfile): string {
       "",
       "## Confirmed claims",
       "",
-      bulletList(view.confirmedClaims, "None yet."),
+      bulletList(view.confirmedClaims, "None yet.", (item) => (item.evidence ? `\n  - **Evidence:** ${item.evidence}` : "")),
       "",
       "## Presentation that can change",
       "",

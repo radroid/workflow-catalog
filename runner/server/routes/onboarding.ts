@@ -201,6 +201,17 @@ export default defineRouteModule({
       return c.json({ ok: result.ok, message: result.message, sources: result.profile.sources });
     });
 
+    // Polish (P03 revision 1): the onboarding page had no way to show what
+    // had already been saved for a category — the textarea always started
+    // empty, even after a successful paste/upload. Read-only, mirrors
+    // ProfileStore.sourceText (already used server-side to build the
+    // extraction prompt); same shape as the existing GET /markdown route.
+    router.get("/sources/:category/content", async (c) => {
+      const category = c.req.param("category");
+      if (!isSourceCategory(category)) return errorResponse(404, "not_found", "No such source category.");
+      return c.json({ text: await store().sourceText(category) });
+    });
+
     router.post("/sources/:category/content", async (c) => {
       const category = c.req.param("category");
       if (!isSourceCategory(category)) return errorResponse(404, "not_found", "No such source category.");

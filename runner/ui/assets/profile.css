@@ -5,14 +5,19 @@
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 
+#last-action { padding: 0.5rem 0.75rem; border-left: 3px solid var(--border); }
+
 .markdown-editor {
   width: 100%; min-height: 28rem; resize: vertical;
   font: 0.85rem/1.6 var(--font-mono); color: inherit; background: var(--background);
   border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.75rem;
 }
 .markdown-editor:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+/* Polish: Save now follows the textarea in both visual and keyboard/DOM order (previously the button sat in a card-head above the textarea, so Tab reached "Save edits" before the text it saves). */
+.markdown-actions { display: flex; gap: 0.75rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
 
 .revision { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.875rem 1rem; }
+.revision:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .revision + .revision { margin-top: 0.625rem; }
 .revision-diff { font-size: 0.9rem; }
 .revision-diff .old { color: var(--muted-foreground); text-decoration: line-through; }
@@ -21,3 +26,12 @@
 .revision-actions { display: flex; gap: 0.5rem; }
 
 .empty { color: var(--muted-foreground); font-size: 0.9rem; }
+
+/* C1: see onboarding.css's identical rule for why aria-disabled (not the disabled attribute) marks an in-flight button busy. Duplicated rather than shared: runner.css is P02-owned, out of this packet's Owns. */
+.button[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+
+/* C8: see onboarding.css's identical rule for the WCAG contrast verification (6.46:1 light / 7.60:1 dark) behind these exact hex values, in place of runner.css's shared `.error { color: var(--destructive); } */
+.error { color: #b91c1c; }
+@media (prefers-color-scheme: dark) {
+  .error { color: #f87171; }
+}

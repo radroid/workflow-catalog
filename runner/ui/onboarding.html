@@ -14,20 +14,20 @@
     <main class="page">
       <h1>Onboarding</h1>
       <p class="lede">Account for every career source, extract claims from what you provide, and decide each one. Nothing is invented — a claim without your evidence gets a question, never a guess.</p>
+      <p id="last-action" class="small" role="status" hidden></p>
 
       <section class="card" aria-labelledby="readiness-title">
         <div class="card-head">
           <h2 id="readiness-title">Readiness</h2>
-          <button class="button" type="button" id="approve-button" disabled>Approve career profile</button>
+          <button class="button" type="button" id="approve-button" aria-disabled="true">Approve career profile</button>
         </div>
-        <ul class="reasons" id="readiness-reasons"></ul>
-        <p class="small" id="readiness-ready" hidden>Ready. Approving unlocks generation.</p>
-        <p id="approve-result" class="small" hidden></p>
+        <div class="readiness-lines" id="readiness-reasons"></div>
+        <p id="approve-result" class="small" tabindex="-1" hidden></p>
       </section>
 
       <section class="card" aria-labelledby="sources-title">
         <h2 id="sources-title">Sources</h2>
-        <p class="muted small">Mark each source provided (and paste or type what you have), unavailable, or not applicable. All seven need an answer before the profile can be approved.</p>
+        <p class="muted small">Mark each source provided (and paste, type, or upload a .txt/.md file with what you have), unavailable, or not applicable — with a reason if you have one. All seven need an answer before the profile can be approved.</p>
         <div id="sources"></div>
       </section>
 
@@ -35,6 +35,12 @@
         <h2 id="claims-title">Claims</h2>
         <p class="muted small">Every claim starts as a candidate. A metric, title, date, superlative, role, or scope claim always gets a question before it can be confirmed.</p>
         <div id="claims"></div>
+      </section>
+
+      <section class="card" aria-labelledby="statements-title">
+        <h2 id="statements-title">Preferences, boundaries &amp; presentation</h2>
+        <p class="muted small">Boundaries are rules generation must never cross. Preferences and presentation notes shape tone and wording — never a new fact. See the full current list, and edit existing text, on the <a href="/ui/profile">Profile</a> page.</p>
+        <div id="statements"></div>
       </section>
 
       <p id="page-error" class="error" role="alert" hidden></p>

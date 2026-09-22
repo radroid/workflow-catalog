@@ -14,6 +14,7 @@
     <main class="page">
       <h1>Career profile</h1>
       <p class="lede">The document that gets used to draft everything else. Confirmed claims only, and only after you approve it — an edit to an approved fact proposes a revision instead of changing it outright.</p>
+      <p id="last-action" class="small" role="status" hidden></p>
 
       <section class="card" aria-labelledby="status-title">
         <h2 id="status-title">Status</h2>
@@ -27,14 +28,14 @@
       </section>
 
       <section class="card" aria-labelledby="markdown-title">
-        <div class="card-head">
-          <h2 id="markdown-title">career-profile.md</h2>
-          <button class="button" type="button" id="save-markdown" disabled>Save edits</button>
-        </div>
-        <p class="muted small">Every bullet ends with an id marker like <code>`[abcd1234]`</code> — edit the text before it and save; the marker itself must stay so your edit finds the right claim. Everything else (adding, removing, or moving a bullet) is not round-tripped: use the buttons on the <a href="/ui/onboarding">Onboarding</a> page for that.</p>
+        <h2 id="markdown-title">career-profile.md</h2>
+        <p class="muted small">Every bullet ends with an id marker like <code>`[3f29a9d4-8b7e-4c1a-9e2f-6b8f1a2c3d4e]`</code> — edit the text before it and save; the marker itself must stay so your edit finds the right claim. Everything else (adding, removing, or moving a bullet) is not round-tripped: use the buttons on the <a href="/ui/onboarding">Onboarding</a> page for that.</p>
         <label for="markdown-editor" class="visually-hidden">career-profile.md contents</label>
         <textarea id="markdown-editor" class="markdown-editor" spellcheck="false"></textarea>
-        <p id="markdown-result" class="small" hidden></p>
+        <div class="markdown-actions">
+          <button class="button" type="button" id="save-markdown" aria-disabled="true">Save edits</button>
+          <p id="markdown-result" class="small" tabindex="-1" hidden></p>
+        </div>
       </section>
 
       <p id="page-error" class="error" role="alert" hidden></p>
