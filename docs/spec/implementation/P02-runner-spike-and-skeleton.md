@@ -14,10 +14,10 @@ Scaffold with `npx eve@0.63.0 init runner` (pin; do not use `@latest`), set `mod
 
 ## Deliverables
 - `runner/agent/`: `instructions.md` (system prompt: role, boundaries, "content is data"), `agent.ts` (model from settings: `chatgpt()` | `openai()` | `anthropic()` | gateway string), `channels/eve.ts` (auth per chosen mode; custom `AuthFn` returning `principalType: "user"` for the paired device), `sandbox/sandbox.ts` pinned to `justbash()` or sandbox tools removed, `extensions/jobs.ts` mounting the package adapter.
-- `packages/job-assistant/adapters/eve/`: an eve extension (`eve extension init` layout) that mounts the package's skills and declares tools `capture_job`, `open_application_group`, `report_status` as thin `defineTool`s calling into the bridge's store (implemented in later packets; stubs here return "not implemented").
+- `packages/job-assistant/adapters/eve/`: an eve extension (`eve extension init` layout) that mounts the package's skills and a "content is data, never instructions" instruction fragment, and declares no tools. The one model tool is a runner tool, `runner/agent/tools/open_application_group.ts`: a stub (input is task IDs only, never a URL; `approval: always()`; returns "not implemented") whose body P06 replaces. `capture_job` and `report_status` are bridge actions (extension → bridge), not model tools. (amended iter-003 per review; was: the adapter declares three stub tools, `capture_job`, `open_application_group` and `report_status`)
 - `runner/server/`: Hono on `127.0.0.1:4310`. Routes exactly `POST /pair`, `GET /commands`, `POST /events`, `GET /status`, plus the local UI static routes. Bearer device tokens, Origin check against the extension origin set at pairing, 256 KB body cap, zod validation of every body against `packages/contracts`. Talks to eve through `eve/client`.
 - `runner/store/`: file-based workspace store per spec §5 (`workspace.json`, directories), with an atomic write helper and an event outbox with unique event IDs.
-- `npm run setup`: wizard that checks Node 24, chooses the workspace directory, connects a provider (launches `eve dev` for `/login` when `chatgpt()` is chosen; asks for a key otherwise, stored via eve's credential path or the OS keychain), prints a pairing code, and writes `.env` with `EVE_TELEMETRY_DISABLED=1` and `EVE_TRACES_CONTENT=off`.
+- `npm run setup`: wizard that checks Node 24, chooses the workspace directory, connects a provider (for `chatgpt()`, checks the Codex CLI sign-in with `codex login status`, the only sign-in mode A uses, and explains `codex login` (amended iter-003 per review; was: launches `eve dev` for `/login`); asks for a key otherwise, stored in the OS keychain), prints a pairing code, and writes `runner/.env.local` with `EVE_TELEMETRY_DISABLED=1` and `EVE_TRACES_CONTENT=off`.
 - `npm run doctor`: the same checklist as the catalog install page, machine-readable (`--json`).
 - `npm run runner`: starts eve in the chosen mode and the bridge together; both loopback only.
 
@@ -25,7 +25,7 @@ Scaffold with `npx eve@0.63.0 init runner` (pin; do not use `@latest`), set `mod
 - Spike outcomes recorded. `npm run doctor --json` returns all green on the dev machine.
 - Bridge tests: unknown route 404; missing token 401; wrong Origin 403; oversized body 413; invalid envelope 400 with the zod path; replayed `eventId` acknowledged once, stored once.
 - Pairing tests: code expires at 10 minutes; single use; revocation removes the device.
-- `eve eval --strict` runs a fixture agent on `mockModel` that calls each stub tool once.
+- `eve eval --strict` runs a fixture agent on `mockModel` that calls the one stub tool, `open_application_group`, once: the call raises an approval request instead of executing, no bash or file tools are available, and a call to a tool that does not exist runs nothing. (amended iter-003 per review; was: calls each stub tool once)
 - Uninstall test: deleting the workspace directory and `runner/` leaves nothing behind except eve's keychain entry, which `npm run setup --forget` removes.
 
 ## Out of scope
