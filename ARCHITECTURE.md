@@ -55,6 +55,7 @@ Owned by `packages/contracts`; full shapes in spec §5. Main entities:
 - **Application** — `applications/<taskId>.json` (stage, revision, documents, notes, deadlines) plus generated documents and diffs.
 - **Session manifest** and **bridge envelopes** — `open_application_group`, `browser_command_result`, `job_capture`, `application_status_changed`, `protocol: 1`.
 - **Run log** — `runs/<date>/<runId>.json`; budget pause and schedules read from it.
+- **Bridge state** — `.runner/` in the workspace: paired devices (token hashes), hashed one-time codes, the event journal (holds captured job text, so personal), and the command queue. Every POST carries the paired extension `Origin`; a GET without one is accepted on a valid device token (spec §5).
 
 ## 5. Key flows
 

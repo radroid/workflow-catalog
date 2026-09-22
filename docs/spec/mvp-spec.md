@@ -86,6 +86,7 @@ applications/<taskId>/docs/       resume-v<n>.md/.docx/.pdf, cover-v<n>.*, diff-
 sessions/<sessionId>.json         session manifest (below)
 runs/<date>/<runId>.json          run log records
 outbox/, inbox/                   file-bridge fallback: job-capture.json out of the extension, application-session.json into it
+.runner/                          the bridge's own state (P02): devices/ (token hashes, paired origin, expiry), pairing/ and ui-login/ (hashed one-time codes), events/ (the event journal; holds captured job text, so personal), commands/ (the GET /commands queue), model-check.json
 ```
 
 **Claim** `{ id, text, kind: fact|metric|title|date|credential, status: candidate|disputed|confirmed|excluded, source, evidence: {kind: passage|statement, ref, quote}, question?, answeredAt? }`. Answering a question replaces the evidence with `{kind: statement}` (the person's own statement, as in the walkthrough); the superseded passage stays in `revisions[]`. `presentation[]` holds the profile's wording rules ("Presentation that can change"), not claims.
@@ -101,7 +102,7 @@ POST /events               job_capture | browser_command_result | application_st
 GET  /status               { version, workspaceId, budget, schedules }   (no personal data)
 ```
 
-Every request: `Authorization: Bearer <device token>`, `Origin` must be the extension's origin, body size cap 256 KB, JSON schema validated, no other routes. CORS is not authentication.
+Every request: `Authorization: Bearer <device token>` and a loopback `Host` of the bridge, body size cap 256 KB, JSON schema validated, no other routes. Every `POST` (including `/pair`, which records it) must carry `Origin` equal to the paired extension origin. A `GET` that carries `Origin` must match it too; a `GET` without `Origin` is accepted only with a valid device token, because Chrome sends no `Origin` on an extension's own GET requests (verified on Chromium 153 in the P02 review, 2026-09-22). CORS is not authentication.
 
 ## 6. Screens
 

@@ -1,6 +1,6 @@
 # P09 · Catalog site on Vercel Hobby
 
-Status: claimed (part B)
+Status: done (part A iter 002, PR #4, squash 3d64f23; part B iter 003, PR #6, squash a9032b3)
 Assignee: iter-002 implementer (Sonnet), part A; iter-003 implementer (Sonnet), part B
 Blocked by: P00, P01
 Owns: apps/catalog/, .github/workflows/release-package.yml

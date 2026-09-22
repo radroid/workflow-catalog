@@ -1,6 +1,6 @@
 # P02 · Runner spike and skeleton
 
-Status: claimed
+Status: done (spike iter 002, mode A; skeleton iter 003, PR #8, squash 9a0c5b7)
 Assignee: iter-003 implementer (Opus); revision 2 iter-003 (Opus)
 Blocked by: P01
 Owns: runner/ (eve project), packages/job-assistant/adapters/eve/

@@ -8,7 +8,7 @@ Repo-level instructions for Claude Code. Project: `workflow-catalog`. Tech stack
 
 ## Dev server
 
-The catalog dev server is `pnpm --filter catalog dev` (Next.js) once P00 lands. The runner is `eve build && eve start` inside `runner/` (mode A, decided by the P02 spike; see `docs/spec/research/eve-spike.md`). The bridge listens on `127.0.0.1:4310`, loopback only.
+The catalog dev server is `pnpm --filter catalog dev` (Next.js) once P00 lands. The runner is `npm run runner` inside `runner/`. It builds when needed (`eve extension build`, then `eve build`), then starts `eve start` on `127.0.0.1:3210` and the bridge on `127.0.0.1:4310`, both loopback only. This is mode A, decided by the P02 spike; see `docs/spec/research/eve-spike.md` and `runner/README.md`.
 
 If a dev server is part of the workflow: assume the user starts it on port `3000`. Do NOT run `npm run dev`, `next dev`, or equivalent foreground server commands without explicit instruction. **The one standing authorization:** an implementer or the UI critic may start the catalog dev server to take a packet's acceptance screenshot, and must stop it before writing its report. Nothing else starts a server.
 
