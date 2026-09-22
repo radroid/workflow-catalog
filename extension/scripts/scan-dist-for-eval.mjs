@@ -25,10 +25,43 @@ import { fileURLToPath } from "node:url";
 
 // Detection-only patterns: this file never calls eval()/Function() itself —
 // these regexes exist solely to flag those calls in *other* built output.
-const EVAL_RE = /(?<![.\w$])eval\s*\(/;
-const NEW_FUNCTION_RE = /\bnew\s+Function\b/;
+//
+// EVAL_RE used to be `(?<![.\w$])eval\s*\(`, which was meant to skip
+// `obj.eval2(` (eval as a substring of a longer identifier) but, as a side
+// effect, also skipped `window.eval(`/`globalThis.eval(` (real eval calls
+// with a `.` immediately before them) and never matched an aliased call
+// with no adjacent `(` at all, e.g. `(0, eval)(x)`. `\beval\b` fixes both:
+// it requires a real word boundary on *both* sides, so `evaluate`/
+// `retrieval` still don't match (no boundary between the shared letters),
+// but `window.eval(`, `globalThis.eval(`, and `(0, eval)` all do (`.` and
+// `(`/`,`/`)` are non-word characters, so the boundary is there).
+const EVAL_RE = /\beval\b/;
+// Same false-negative class on the Function side: minifiers drop `new`
+// (zod's own probe below calls plain `Function(...)`), so requiring
+// `new\s+Function` missed the built output's actual shape entirely. Matches
+// `Function(` whether or not `new` precedes it, but not when it's a suffix
+// of a longer identifier (`myFunction(`, `getFunction(`) via the negative
+// lookbehind.
+const NEW_FUNCTION_RE = /(?<![\w$.])(?:new\s+)?Function\s*\(/;
 const REMOTE_SCRIPT_SRC_RE = /<script\b[^>]*\bsrc\s*=\s*["']https?:\/\//i;
 const REMOTE_DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'`]https?:\/\//;
+
+// zod v4's own capability probe (bundled into assets/zod-jitless-*.js,
+// unminified source in node_modules/zod): a lazy, memoized check that
+// short-circuits on the global `jitless` flag *before* ever reaching this
+// call — `extension/src/shared/zod-jitless.ts` sets that flag as the
+// literal first import of every entry point (see that file and
+// `zod-jitless.test.ts` for why import order guarantees this runs first).
+// Even if it were somehow reached, MV3's default CSP has no `unsafe-eval`,
+// so the call would just throw, which this probe catches and treats as
+// "no eval available" — the exact outcome jitless mode assumes already.
+// Allowed by this one exact literal snippet (observed in the current
+// built output — the minifier's own choice of backtick-delimited empty
+// string, `Function(``)`), not by filename or a broader pattern: any
+// *other* eval/Function usage anywhere, including a future change to
+// zod's own bundled probe that no longer matches this snippet verbatim,
+// still fails the scan.
+const ZOD_JITLESS_PROBE_SNIPPET = "try{return Function(``),!0}catch{return!1}";
 
 const JS_EXTENSIONS = new Set([".js", ".mjs", ".cjs"]);
 const HTML_EXTENSIONS = new Set([".html", ".htm"]);
@@ -66,10 +99,10 @@ export function scanDistForViolations(distDir) {
       const lineNo = index + 1;
 
       if ((isJs || isHtml) && EVAL_RE.test(line)) {
-        offenses.push(`${rel}:${lineNo}: forbidden eval(...) call in built output`);
+        offenses.push(`${rel}:${lineNo}: forbidden eval reference in built output`);
       }
-      if ((isJs || isHtml) && NEW_FUNCTION_RE.test(line)) {
-        offenses.push(`${rel}:${lineNo}: forbidden "new Function" in built output`);
+      if ((isJs || isHtml) && NEW_FUNCTION_RE.test(line) && !line.includes(ZOD_JITLESS_PROBE_SNIPPET)) {
+        offenses.push(`${rel}:${lineNo}: forbidden Function(...) constructor call in built output`);
       }
       if (isHtml && REMOTE_SCRIPT_SRC_RE.test(line)) {
         offenses.push(`${rel}:${lineNo}: forbidden remote <script src="http(s)://..."> in built output`);

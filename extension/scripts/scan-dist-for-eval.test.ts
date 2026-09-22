@@ -45,7 +45,51 @@ describe("scanDistForViolations", () => {
   it("flags new Function(...)", () => {
     write("worker.js", 'const f = new Function("a", "return a");');
     const offenses = scanDistForViolations(dir);
-    expect(offenses.some((o) => o.includes("new Function"))).toBe(true);
+    expect(offenses.some((o) => o.includes("Function(...)"))).toBe(true);
+  });
+
+  it("flags a bare Function(...) call with no 'new' (the minified shape a real build emits)", () => {
+    write("worker.js", 'const f = Function("a", "return a");');
+    const offenses = scanDistForViolations(dir);
+    expect(offenses.some((o) => o.includes("Function(...)"))).toBe(true);
+  });
+
+  it("does not flag an identifier that merely ends with 'Function' (myFunction(, getFunction()", () => {
+    write("worker.js", "myFunction(1); getFunction()(2); obj.doFunction();");
+    expect(scanDistForViolations(dir)).toEqual([]);
+  });
+
+  it("flags window.eval(...) and globalThis.eval(...) (a '.' immediately before eval must not hide a real call)", () => {
+    write("worker.js", "window.eval(x);\nglobalThis.eval(y);");
+    const offenses = scanDistForViolations(dir);
+    expect(offenses.filter((o) => o.includes("eval")).length).toBe(2);
+  });
+
+  it("flags an aliased eval reference with no adjacent '(' at all, e.g. (0, eval)(x)", () => {
+    write("worker.js", "const e = (0, eval); e(x);");
+    const offenses = scanDistForViolations(dir);
+    expect(offenses.some((o) => o.includes("eval"))).toBe(true);
+  });
+
+  it("allows zod's own jitless capability probe by its exact known snippet", () => {
+    write(
+      "zod-jitless-abc123.js",
+      'var p=r(()=>{if(Q.jitless)return!1;try{return Function(``),!0}catch{return!1}});',
+    );
+    expect(scanDistForViolations(dir)).toEqual([]);
+  });
+
+  it("still flags a different Function(...) call elsewhere in the same file as the allowed zod snippet (the allowlist is snippet-exact, not file-wide)", () => {
+    write(
+      "zod-jitless-abc123.js",
+      [
+        'var p=r(()=>{if(Q.jitless)return!1;try{return Function(``),!0}catch{return!1}});',
+        'const evil = new Function("a", "return a");',
+      ].join("\n"),
+    );
+    const offenses = scanDistForViolations(dir);
+    expect(offenses.length).toBe(1);
+    expect(offenses[0]).toMatch(/:2: forbidden Function/);
   });
 
   it("flags a remote <script src> in an HTML file", () => {
