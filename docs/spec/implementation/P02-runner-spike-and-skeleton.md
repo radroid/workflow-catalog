@@ -1,7 +1,7 @@
 # P02 · Runner spike and skeleton
 
 Status: claimed
-Assignee: iter-003 implementer (Opus)
+Assignee: iter-003 implementer (Opus); revision 2 iter-003 (Opus)
 Blocked by: P01
 Owns: runner/ (eve project), packages/job-assistant/adapters/eve/
 Spec: §8 runner platform notes, §5 bridge, F3
@@ -32,6 +32,97 @@ Scaffold with `npx eve@0.63.0 init runner` (pin; do not use `@latest`), set `mod
 Onboarding, capture, preparation logic. Any UI beyond a status page.
 
 ## Report
+
+### 2026-09-22 — Revision 2 (iter-003, Opus escalation)
+This answers the second Opus review of PR #8: 2 medium issues and 3 follow-ups. The code head is `ca60534`; this report is the next commit. CI on PR #8 passed at `ca60534`.
+
+**What changed, by review item**
+
+1. **Pairing limits under concurrency** (`89307f0`, `server/extension-api.ts`).
+   - `/pair` reads and validates the body first. It then runs check → redeem → record → withdraw inside `PairThrottle.exclusive`, a promise chain like the one in `store/commands.ts`. Each request is judged only after every earlier failure has been recorded.
+   - The body is read before the queue, bounded by the 256 KiB cap and the server's timeouts. The device is registered after the queue.
+   - One visible change: an origin already at its limit now gets its 429 after its body is read. So a body that is too large, or not JSON, now gets its 413, 415 or 400 first.
+   - Tests (`test/bridge.test.ts`). A helper holds every redeem until the whole burst is in flight, like a slow disk, so each race is deterministic:
+
+     | Test | Result |
+     |---|---|
+     | 150 wrong codes from 150 origins at once, then the real code, sent last | 150 × 401; the real code gets 401 "withdrawn after too many wrong tries"; no device |
+     | 30 wrong codes from one origin at once | exactly 10 × 401 and 20 × 429, with only 10 redeems; the code then pairs |
+     | a valid code racing 50 wrong codes from other origins, judged at position 0, 25 and 50 | 200 each time, beside 50 × 401 |
+     | a body still arriving while the real extension pairs | the pairing gets 200 at once; the slow request then gets 401 |
+
+   - On the unfixed code, the first two fail: `expected 200 to be 401` and `expected { '401': 30 } to deeply equal { '401': 10, '429': 20 }`. With the lock moved around the body read, the fourth fails with `Test timed out in 3000ms`. All four passed 10 runs out of 10.
+2. **Closing the terminal (SIGHUP)** (`635bc74`, in `lib/launcher.ts`, `cli/runner.ts` and `README.md`).
+   - The launcher registers SIGHUP with SIGINT and SIGTERM, before the spawn, and removes it on failure. Closing the terminal now stops eve, both while starting and once ready.
+   - `cli/runner.ts` adds a no-op `error` listener to `process.stdout` and to `process.stderr`.
+   - The README's `runner` row now says that closing the terminal stops both.
+   - Tests:
+     - SIGHUP while waiting for eve to be ready: eve gets SIGTERM, the result is `{ state: "stopped" }`, and the listeners are removed.
+     - SIGHUP once ready: the bridge closes, eve stops, and the launcher exits 0.
+     - The listener count taken at the spawn now includes SIGHUP.
+3. **Follow-ups**
+   - **3a** (`b430be7`). A new test holds the health check open, sends SIGTERM, and asserts that eve gets SIGTERM at once.
+     - With `void stopEve();` removed: `expected [] to deeply equal [ 'SIGTERM' ]` (1 failed, 13 passed).
+     - Restored: 14 passed, and `git diff` was empty.
+   - **3b** (`1d984f2`, `server/app.ts`). When a start hook throws, `startModules` stops the modules already started, newest first, then rethrows the start failure. A stop that fails is logged with its file name, and the stops after it still run.
+     - Test: six modules, and the fifth fails. The stops run as `delta stopped, beta stopping, alpha stopped`, and the sixth never starts. The test failed on the old code.
+   - **Found with 3b** (`7c4b7bd`, `lib/launcher.ts`). The launcher's shutdown ran `Promise.resolve(stop())`, which misses a stop that throws synchronously.
+     - The effect: shutdown rejected, the bridge stayed open and eve was never stopped. Node 24 then crashes on the unhandled rejection and leaves eve running.
+     - Shutdown now runs `Promise.resolve().then(stop)`. Its new test failed before the fix, with `Unhandled Rejection: Error: stop failed` and no exit.
+     - This is outside the listed items. The fix is one expression, and I flag it for review.
+   - **3c** (`ca60534`). The GET `/commands` handler answers HEAD after the token, Origin and query checks, without touching the queue. `HEAD /status` is unchanged, and its test stays green.
+     - Test: after a HEAD, the queued command has no lease and 0 deliveries. HEAD without a token gets 401, and HEAD with a bad `since` gets 400. The next GET delivers the command at once.
+     - It failed on the old code with `expected 1 to be +0`.
+
+**Tests run** (worktree, at `ca60534`)
+- `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm -r lint` and `pnpm check:fixtures` all exited 0. `git status --porcelain` was then empty.
+
+  | Suite | Result |
+  |---|---|
+  | runner | 14 files, 153 tests (143 before), then `EVALS 4`; `Results: 4 passed`; `Gates: 20 passed` |
+  | contracts | 235 tests |
+  | job-assistant | 151 tests |
+  | catalog | 139 tests |
+  | `scripts/*.test.mjs` | 2 pass |
+
+- The eval on its own, as `node --import ./lib/register-ts.mjs cli/eval.ts` (the command `npm run eval` runs): `Results: 4 passed (4 total)`, `Gates: 20 passed`.
+- CI on PR #8 at `ca60534`: `ci` passed in 1m26s, with runner 153 tests and the eval at 4/4 and 20 gates.
+
+**Live verification.** I ran these on a scratch copy of `ca60534`, made with `git archive`, in `/tmp/wc-p02-r2-live`. HOME was `/tmp/wc-p02-r2-live-home`, codex was off PATH, the provider was chatgpt, and no model was called. The drivers are in `/tmp/wc-p02-r2`.
+- **Setup** exited 0 with "the Codex CLI was not found on PATH", as in the review.
+- **SIGHUP once ready.**
+  - Before: ready at +6.4 s, with eve's 2 processes running and 3210 and 4310 listening.
+  - On SIGHUP, the launcher printed `[runner] Stopping...` and `[runner] Stopped.`, then exited 0 about 20 ms later.
+  - 1.5 s later there were 0 eve processes, and nothing was listening on 2000, 3210 or 4310.
+  - In the review, the launcher died from SIGHUP, eve kept 3210, and the next start refused.
+- **SIGHUP once ready, with the terminal's pipes closed first,** so that every write fails with EPIPE: exit 0, 0 eve processes, and the ports were free.
+- **SIGHUP while starting,** 150 ms after `Starting eve` and before ready: `[runner] Stopped before it was ready.`, exit 0, 0 eve processes, and the ports were free.
+- **Without the two `error` listeners** (removed in the scratch copy only, then restored):
+  - The closed-pipes run exited 1 instead of 0.
+  - With only stdout closed, it exited 0. `console.log` guards its own write errors; the crash comes from relaying eve's lines with `process.stderr.write`.
+  - In this timing eve had already been sent SIGTERM. But any eve output before that point would crash the launcher and leave eve running.
+- **The review's race, over TCP,** against the same runner:
+  - 1,000 wrong codes from 1,000 origins at once: `{"401":1000}`. The real code, sent last, got 401 `pairing_code_invalid`; the review measured 200.
+  - 300 wrong codes from one origin at once: `{"401":10,"429":290}`; the review measured 59 × 401. The real code, from another origin, got 200.
+  - The log had one line, `Withdrew 2 pairing code(s)`: setup's still-valid code and the burst's.
+  - SIGTERM then exited 0.
+- **Afterwards,** `ps` showed no runner or eve process, and `lsof` showed nothing listening on 2000, 3210 or 4310.
+
+**Skipped, and why**
+- **`README.md:200–204` and the comment at `extension-api.ts:64`** are unchanged, because the wording about the limits still holds. Only `PairThrottle`'s own comment, which describes the mechanism, changed.
+- **`HEAD /ui/login?nonce=…`** is outside this round's items, so I left it; I checked it by reading, not by running it. Hono answers HEAD with the GET handler, so a HEAD spends the one-time sign-in link, and its response carries the `Set-Cookie`. The link is printed only to the terminal, so only a link previewer that sends HEAD would hit this. It is worth a follow-up.
+- **How commands were run.** This session's command guard refuses:
+  - the bare word "eval", so I ran the eval by its script's command;
+  - git operations outside the worktree, so the live runs used `git archive` instead of a clone;
+  - HOME set inline, so node drivers set HOME for their child processes only. No git runs in them.
+- **Scratch folders** are left in `/tmp` for the OS: `wc-p02-r2`, `wc-p02-r2-live` and `wc-p02-r2-live-home`.
+
+**Assumptions**
+- One bridge process owns the `/pair` queue, as it owns leasing. Like the guess budget, the queue lives in memory.
+- A flood of wrong codes can delay a valid code in the queue but never refuse it. After 100 wrong codes, the code is withdrawn anyway.
+
+**Sharpen next time**
+Beside every one-at-a-time test of a limit or a one-time token, write a burst test that holds the work open, so the race is deterministic. Both the single-use bug and the guess-limit bug passed their one-at-a-time tests.
 
 ### 2026-09-22 — Revision 1 (iter-003 implementer, Opus)
 This answers the PR #8 review (VERDICT: REVISE, 7 issues and 4 more items) and the security review of `aa59afd`. The code head is `7dd7794`; this report is the next commit. CI on PR #8 passed at `cfe590e` and `7dd7794`.
