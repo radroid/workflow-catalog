@@ -29,6 +29,14 @@ const nextConfig: NextConfig = {
     "/learn": ["../../docs/learn/**/*"],
     "/learn/**": ["../../docs/learn/**/*"],
   },
+  // @electric-sql/pglite loads a WASM payload via its own import.meta.url
+  // -relative resolution; bundling it (Turbopack rewrites module paths)
+  // broke that resolution with "The path argument must be of type string
+  // ... Received an instance of URL" the first time a PGlite-backed route
+  // actually ran under `next dev`. Opting it out of Server Components
+  // bundling (native `require`/`import` straight from node_modules) fixes
+  // it — the same treatment Next.js's own default list gives e.g. `pg`.
+  serverExternalPackages: ["@electric-sql/pglite"],
 };
 
 export default nextConfig;
