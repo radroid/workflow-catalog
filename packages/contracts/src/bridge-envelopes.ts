@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { httpUrlSchema, isoDateTimeSchema, nonEmptyStringSchema, protocolVersionSchema, uuidSchema } from "./primitives";
+import {
+  httpUrlSchema,
+  isoDateTimeSchema,
+  MAX_APPLICATION_GROUP_SIZE,
+  nonEmptyStringSchema,
+  protocolVersionSchema,
+  utf8BoundedTextSchema,
+  uuidSchema,
+} from "./primitives";
 
 /**
  * The four bridge envelopes, shaped per
@@ -17,9 +25,6 @@ import { httpUrlSchema, isoDateTimeSchema, nonEmptyStringSchema, protocolVersion
  * that flows the other direction (runner → extension) and browser-boundary.md's
  * own illustrative JSON includes `deviceId` there, so it is kept.
  */
-
-/** browser-boundary.md's acceptance gates require rejecting "unknown or partial results" and an oversized group; picked to comfortably cover a single day's applications while staying well short of a runaway group. */
-export const MAX_APPLICATION_GROUP_SIZE = 20;
 
 export const openApplicationGroupItemSchema = z
   .object({
@@ -72,7 +77,19 @@ export type OpenApplicationGroup = z.infer<typeof openApplicationGroupSchema>;
 export const browserCommandResultStatusSchema = z.enum(["completed", "failed", "partial"]);
 export type BrowserCommandResultStatus = z.infer<typeof browserCommandResultStatusSchema>;
 
-export const browserCommandItemStatusSchema = z.enum(["opened", "failed", "skipped"]);
+/**
+ * `"closed"`: the person closed the tab themselves without the extension
+ * ever observing an applied/deferred action on it. This is informational
+ * only — reported so the runner has full visibility into what happened to
+ * every task in the group — and, like every `BrowserCommandResultItem`
+ * status, it never moves `Application.stage` on its own. Only an explicit
+ * `application_status_changed` event with `status: "applied"` does that
+ * (see `applicationStatusChangedSchema` below); a closed tab with no
+ * status-changed event is exactly the "unknown or partial result" case
+ * browser-boundary.md's acceptance gates say requires human review, not an
+ * inferred stage transition.
+ */
+export const browserCommandItemStatusSchema = z.enum(["opened", "failed", "skipped", "closed"]);
 export type BrowserCommandItemStatus = z.infer<typeof browserCommandItemStatusSchema>;
 
 export const browserCommandResultItemSchema = z
@@ -107,7 +124,7 @@ export type BrowserCommandResult = z.infer<typeof browserCommandResultSchema>;
  * hostile-content test, which this shape shares its bounded-text
  * reasoning with.
  */
-export const MAX_JOB_CAPTURE_TEXT_LENGTH = 200_000;
+export const MAX_JOB_CAPTURE_TEXT_BYTES = 200_000;
 
 export const jobCaptureSchema = z
   .object({
@@ -115,7 +132,7 @@ export const jobCaptureSchema = z
     type: z.literal("job_capture"),
     eventId: uuidSchema,
     url: httpUrlSchema,
-    text: nonEmptyStringSchema.max(MAX_JOB_CAPTURE_TEXT_LENGTH),
+    text: utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES),
     extractorVersion: nonEmptyStringSchema,
     contentHash: z.string().regex(/^[0-9a-fA-F]{8,}$/, "must be a hex digest string"),
     occurredAt: isoDateTimeSchema,

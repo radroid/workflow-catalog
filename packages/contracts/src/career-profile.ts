@@ -4,13 +4,14 @@ import { claimSchema } from "./claim";
 import { sourceSchema } from "./source";
 
 /**
- * A single preference or boundary statement the person owns. mvp-spec §5
- * doesn't give an inner shape for `preferences`/`boundaries` beyond naming
- * the two fields; modelled the same way as a claim's identity (an id plus
- * text) so a revision or a template can cite a specific entry, matching the
- * "every claim rendered with its ID so P03 can round-trip it" requirement
- * for the career-profile template — extended here to preferences and
- * boundaries for the same round-trip reason. Assumption to revisit in P03.
+ * A single preference, boundary, or presentation statement the person owns.
+ * mvp-spec §5 doesn't give an inner shape for `preferences`/`boundaries`
+ * beyond naming the two fields; modelled the same way as a claim's identity
+ * (an id plus text) so a revision or a template can cite a specific entry,
+ * matching the "every claim rendered with its ID so P03 can round-trip it"
+ * requirement for the career-profile template — extended here to
+ * preferences, boundaries, and presentation for the same round-trip
+ * reason. Assumption to revisit in P03.
  */
 export const profileStatementSchema = z
   .object({
@@ -59,6 +60,16 @@ export type CareerProfileRevision = z.infer<typeof careerProfileRevisionSchema>;
  * boundaries, approval{version, at}, revisions[]." `approval` is nullable
  * (never generated/approved yet is a real, common state — see hard-problems.md
  * #1, "generation is locked until readiness").
+ *
+ * `presentation` is a modelling addition beyond mvp-spec §5's literal field
+ * list (docs/spec/visuals/index.html's walkthrough and CONTEXT.md): profile-
+ * level *wording* rules — how to present true claims, not a claim's status
+ * or evidence itself — e.g. "Emphasise backend work for infrastructure
+ * roles" or "Reorder projects by relevance; rewrite bullets, keep meaning."
+ * Rendered by career-profile.md.hbs's "Presentation that can change"
+ * section. Distinct from `claims[]` (facts with a status/evidence) and from
+ * `preferences`/`boundaries` (what the person will and won't do), which
+ * this file's other statement fields already cover.
  */
 export const careerProfileSchema = z
   .object({
@@ -66,6 +77,7 @@ export const careerProfileSchema = z
     sources: sourceSchema,
     preferences: z.array(profileStatementSchema),
     boundaries: z.array(profileStatementSchema),
+    presentation: z.array(profileStatementSchema),
     approval: careerProfileApprovalSchema.nullable(),
     revisions: z.array(careerProfileRevisionSchema),
   })

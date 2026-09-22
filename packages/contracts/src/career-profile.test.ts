@@ -12,6 +12,7 @@ function minimalProfile() {
     sources: emptySources(),
     preferences: [],
     boundaries: [],
+    presentation: [],
     approval: null,
     revisions: [],
   };
@@ -37,6 +38,10 @@ describe("careerProfileSchema", () => {
       ],
       preferences: [{ id: "a1b2c3d4-58cc-4372-a567-0e02b2c3d479", text: "Prefers remote roles" }],
       boundaries: [{ id: "b1b2c3d4-58cc-4372-a567-0e02b2c3d479", text: "Never invent a metric that wasn't confirmed" }],
+      presentation: [
+        { id: "d1b2c3d4-58cc-4372-a567-0e02b2c3d479", text: "Emphasise backend work for infrastructure roles." },
+        { id: "e1b2c3d4-58cc-4372-a567-0e02b2c3d479", text: "Reorder projects by relevance; rewrite bullets, keep meaning." },
+      ],
       approval: { version: 1, at: new Date().toISOString() },
       revisions: [
         {
@@ -68,5 +73,19 @@ describe("careerProfileSchema", () => {
     const { approval: _approval, ...rest } = minimalProfile();
     void _approval;
     expect(careerProfileSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it("rejects presentation missing entirely (profile-level wording rules, not a claim status)", () => {
+    const { presentation: _presentation, ...rest } = minimalProfile();
+    void _presentation;
+    expect(careerProfileSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it("accepts presentation entries independent of claims — wording rules, not evidence-backed facts", () => {
+    const profile = {
+      ...minimalProfile(),
+      presentation: [{ id: "d1b2c3d4-58cc-4372-a567-0e02b2c3d479", text: "Emphasise backend work for infrastructure roles." }],
+    };
+    expect(careerProfileSchema.safeParse(profile).success).toBe(true);
   });
 });

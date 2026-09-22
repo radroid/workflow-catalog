@@ -28,8 +28,18 @@ export const uuidSchema = z.uuid();
  * browser URLs, and arbitrary code" and mvp-spec §7.2 ("no action can be
  * triggered by content"). `javascript:`, `file:`, `chrome:`, `chrome-extension:`
  * and similar all fail the protocol check below.
+ *
+ * The `.regex(...)` is deliberately redundant with `z.url({ protocol })`:
+ * the `protocol` option is a zod-only runtime refinement invisible to
+ * `z.toJSONSchema` (it never lowers to a JSON Schema keyword), so on its
+ * own the *emitted* `.schema.json` would describe any absolute URL —
+ * `javascript:`, `file:`, `chrome-extension:` included — as valid. The
+ * trailing `.regex()` is a zod "check" that *does* lower to JSON Schema's
+ * `"pattern"`, so an ajv-based consumer (the bridge server) enforces the
+ * same http(s)-only restriction the zod runtime does. See
+ * `job-assistant/test/url-schema-parity.test.ts`.
  */
-export const httpUrlSchema = z.url({ protocol: /^https?$/ });
+export const httpUrlSchema = z.url({ protocol: /^https?$/ }).regex(/^https?:\/\//);
 
 /**
  * An ISO-8601 datetime string with an explicit timezone — either the `Z`
@@ -61,3 +71,41 @@ export const hexDigestSchema = z
 
 /** Trimmed, non-empty single-line-or-more text. The common case for required free text fields (claim text, notes headers, etc.) where an empty string would silently mean "nothing was extracted." */
 export const nonEmptyStringSchema = z.string().min(1);
+
+/**
+ * browser-boundary.md's acceptance gates require rejecting "unknown or
+ * partial results" and an oversized group; picked to comfortably cover a
+ * single day's applications while staying well short of a runaway group.
+ * Shared by `OpenApplicationGroupPayload.items` (`bridge-envelopes.ts`) and
+ * `SessionManifest.items` (`session.ts`) — a session manifest is the
+ * runner-side record an `OpenApplicationGroup` command is derived from
+ * (mvp-spec §5), so the two must never disagree on the ceiling.
+ */
+export const MAX_APPLICATION_GROUP_SIZE = 20;
+
+/**
+ * A non-empty string bounded by UTF-8 *byte* length, not JS string
+ * `.length` (UTF-16 code units, which is what `z.string().max(n)` counts).
+ * For multi-byte text (CJK, emoji, accented Latin, ...) `.length` undercounts
+ * real wire size by up to 3x — one UTF-16 code unit can be up to 3 UTF-8
+ * bytes, and a surrogate pair is 2 units but only 4 bytes (2x). A cap sized
+ * purely off `.max()` (e.g. a "200,000 character" limit) can admit a
+ * payload of 600 KB-1.2 MB of actual UTF-8 bytes despite passing the
+ * schema — comfortably over the bridge's 256 KB HTTP body cap (mvp-spec
+ * §5). This check counts real bytes instead.
+ *
+ * No JSON Schema keyword counts UTF-8 bytes (`maxLength` counts Unicode
+ * codepoints), so — like the extra `.regex()` on `httpUrlSchema` is
+ * JSON-Schema-*visible* — this bound is necessarily JSON-Schema-*invisible*:
+ * a `.refine()`, enforced by the zod runtime (the bridge server and any
+ * other real parser) but not expressible as an ajv-checkable keyword in the
+ * emitted `.schema.json`. The bridge's own HTTP body-size cap is the actual
+ * wire-level backstop; this is a fail-fast, precisely-worded error for
+ * in-process producers (the runner) before a payload ever reaches the wire.
+ */
+export function utf8BoundedTextSchema(maxBytes: number) {
+  return nonEmptyStringSchema.refine(
+    (value: string) => new TextEncoder().encode(value).length <= maxBytes,
+    `must be at most ${maxBytes} bytes when UTF-8 encoded`,
+  );
+}

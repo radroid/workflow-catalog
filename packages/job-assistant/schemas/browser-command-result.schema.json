@@ -44,7 +44,8 @@
             "enum": [
               "opened",
               "failed",
-              "skipped"
+              "skipped",
+              "closed"
             ]
           }
         },

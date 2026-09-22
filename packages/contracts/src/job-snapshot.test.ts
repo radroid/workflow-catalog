@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { jobSnapshotSchema, jobStructuredSchema } from "./job-snapshot";
+import { jobSnapshotSchema, jobStructuredSchema, MAX_JOB_SNAPSHOT_TEXT_BYTES } from "./job-snapshot";
 
 function validSnapshot() {
   return {
@@ -15,6 +15,9 @@ function validSnapshot() {
       company: "Northwind Labs",
       location: "Remote",
       requirements: ["5+ years experience", "TypeScript"],
+      niceToHave: ["Kubernetes", "Go"],
+      deadline: "2026-01-15",
+      applyUrl: "https://jobs.example/apply/42",
     },
   };
 }
@@ -59,15 +62,49 @@ describe("jobSnapshotSchema", () => {
     expect(jobSnapshotSchema.safeParse({ ...validSnapshot(), source: "resume" }).success).toBe(false);
   });
 
-  it("rejects text over the bounded-text cap", () => {
-    const tooLong = "a".repeat(200_001);
+  it("rejects text over the bounded-text cap (ASCII: 1 char = 1 byte)", () => {
+    const tooLong = "a".repeat(MAX_JOB_SNAPSHOT_TEXT_BYTES + 1);
     expect(jobSnapshotSchema.safeParse({ ...validSnapshot(), text: tooLong }).success).toBe(false);
+  });
+
+  // Issue 9 regression: the cap is a UTF-8 *byte* bound, not a JS string
+  // `.length` (UTF-16 code unit) bound. "字" is 1 UTF-16 code unit but 3
+  // UTF-8 bytes — a string short enough to pass a naive `.max(N)` char
+  // check can still be 3x over the real byte cap the bridge enforces.
+  it("rejects multi-byte text that is under the char cap but over the UTF-8 byte cap", () => {
+    const charCount = MAX_JOB_SNAPSHOT_TEXT_BYTES / 2; // well under 200_000 chars
+    const multiByteText = "字".repeat(charCount); // 3 bytes each => 3x MAX_JOB_SNAPSHOT_TEXT_BYTES
+    expect(new TextEncoder().encode(multiByteText).length).toBeGreaterThan(MAX_JOB_SNAPSHOT_TEXT_BYTES);
+    expect(jobSnapshotSchema.safeParse({ ...validSnapshot(), text: multiByteText }).success).toBe(false);
+  });
+
+  it("accepts multi-byte text that fits within the UTF-8 byte cap", () => {
+    const multiByteText = "字".repeat(100);
+    const snapshot = { ...validSnapshot(), text: multiByteText };
+    expect(jobSnapshotSchema.safeParse(snapshot).success).toBe(true);
   });
 
   it("rejects a non-http(s) url", () => {
     expect(jobSnapshotSchema.safeParse({ ...validSnapshot(), url: "javascript:alert(1)" }).success).toBe(
       false,
     );
+  });
+
+  it("rejects a non-http(s) structured.applyUrl", () => {
+    const snapshot = {
+      ...validSnapshot(),
+      structured: { ...validSnapshot().structured, applyUrl: "javascript:alert(1)" },
+    };
+    expect(jobSnapshotSchema.safeParse(snapshot).success).toBe(false);
+  });
+
+  it("accepts structured with niceToHave/deadline/applyUrl omitted — extraction can fail to find any of them", () => {
+    const { niceToHave: _n, deadline: _d, applyUrl: _a, ...rest } = validSnapshot().structured;
+    void _n;
+    void _d;
+    void _a;
+    const snapshot = { ...validSnapshot(), structured: rest };
+    expect(jobSnapshotSchema.safeParse(snapshot).success).toBe(true);
   });
 
   // The core "no field that could be mistaken for an action" guarantee:

@@ -19,12 +19,11 @@
         },
         "url": {
           "type": "string",
-          "format": "uri"
+          "pattern": "^https?:\\/\\/"
         },
         "text": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 200000
+          "minLength": 1
         },
         "extractorVersion": {
           "type": "string",
@@ -97,7 +96,8 @@
                 "enum": [
                   "opened",
                   "failed",
-                  "skipped"
+                  "skipped",
+                  "closed"
                 ]
               }
             },

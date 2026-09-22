@@ -1,14 +1,31 @@
 import { z } from "zod";
-import { hexDigestSchema, isoDateTimeSchema, httpUrlSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
+import {
+  hexDigestSchema,
+  isoDateSchema,
+  isoDateTimeSchema,
+  httpUrlSchema,
+  nonEmptyStringSchema,
+  utf8BoundedTextSchema,
+  uuidSchema,
+} from "./primitives";
 
 /**
  * mvp-spec §5: `jobs/<jobId>/snapshot-<rev>.json` — "structured" data only,
- * e.g. title/company/location/requirements[]. Every field is optional
- * because extraction from an arbitrary posting can legitimately fail to
- * find any one of them; the schema never guesses a value. This is *typed
- * data*, never a place for free-form instructions — see hard-problems.md #3
- * and the "no field that could be mistaken for an action" test in
- * `job-snapshot.test.ts`.
+ * e.g. title/company/location/requirements[]. Every field, `niceToHave`
+ * included, is optional because extraction from an arbitrary posting can
+ * legitimately fail to find any one of them — the same reasoning that lets
+ * a hostile or garbled posting extract to `structured: {}` (see
+ * `job-snapshot.test.ts`'s hostile-posting test): the schema never guesses
+ * a value, and partial or empty extraction is never itself a validation
+ * failure. `niceToHave` mirrors `requirements` (a "should have but not
+ * required" bucket split from the same qualifications section) and
+ * `deadline`/`applyUrl` describe facts that may not exist for a given
+ * posting at all (not every posting states a deadline or links a separate
+ * apply URL).
+ *
+ * This is *typed data*, never a place for free-form instructions — see
+ * hard-problems.md #3 and the "no field that could be mistaken for an
+ * action" test in `job-snapshot.test.ts`.
  */
 export const jobStructuredSchema = z
   .object({
@@ -16,13 +33,26 @@ export const jobStructuredSchema = z
     company: nonEmptyStringSchema.optional(),
     location: nonEmptyStringSchema.optional(),
     requirements: z.array(nonEmptyStringSchema).optional(),
+    niceToHave: z.array(nonEmptyStringSchema).optional(),
+    /** The posting's stated application deadline, if any — a calendar date, not a time (postings essentially never state a time of day). Distinct from `Application.deadlines[]` (application.ts), which is the person's own tracked, labeled deadlines and may be copied from here or entered by hand. */
+    deadline: isoDateSchema.optional(),
+    /** A separate "apply here" URL, when the posting itself is a listing (e.g. an aggregator) that links out to the employer's own application form. Absent when the posting URL (`JobSnapshot.url`) *is* the apply URL. */
+    applyUrl: httpUrlSchema.optional(),
   })
   .strict();
 
 export type JobStructured = z.infer<typeof jobStructuredSchema>;
 
-/** Bounded so a hostile or oversized posting can't blow past the bridge's 256 KB body cap (mvp-spec §5) on its own. */
-export const MAX_JOB_SNAPSHOT_TEXT_LENGTH = 200_000;
+/**
+ * Bounded so a hostile or oversized posting can't blow past the bridge's
+ * 256 KB HTTP body cap (mvp-spec §5) on its own. This is a *byte* cap
+ * (`utf8BoundedTextSchema`, primitives.ts) even though the field is prose
+ * text likely to contain multi-byte characters — a naive
+ * `z.string().max(200_000)` counts UTF-16 code units, and 200,000
+ * multi-byte characters can encode to 600 KB-1.2 MB of real UTF-8 bytes,
+ * well past the bridge cap despite passing a char-counted schema.
+ */
+export const MAX_JOB_SNAPSHOT_TEXT_BYTES = 200_000;
 
 /**
  * mvp-spec §5 / F6: "Every capture stores a snapshot with revision, content
@@ -42,7 +72,7 @@ export const jobSnapshotSchema = z
     capturedAt: isoDateTimeSchema,
     extractorVersion: nonEmptyStringSchema,
     contentHash: hexDigestSchema,
-    text: nonEmptyStringSchema.max(MAX_JOB_SNAPSHOT_TEXT_LENGTH),
+    text: utf8BoundedTextSchema(MAX_JOB_SNAPSHOT_TEXT_BYTES),
     structured: jobStructuredSchema,
   })
   .strict();

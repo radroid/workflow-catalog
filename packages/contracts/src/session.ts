@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { httpUrlSchema, isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
+import {
+  httpUrlSchema,
+  isoDateTimeSchema,
+  MAX_APPLICATION_GROUP_SIZE,
+  nonEmptyStringSchema,
+  protocolVersionSchema,
+  uuidSchema,
+} from "./primitives";
 
 /**
  * CONTEXT.md: "Session manifest: The declarative list of browser tasks
@@ -16,12 +23,19 @@ export const sessionManifestItemSchema = z
   .strict();
 export type SessionManifestItem = z.infer<typeof sessionManifestItemSchema>;
 
-/** mvp-spec §5: `sessions/<sessionId>.json`. The runner-side record an `OpenApplicationGroup` command is derived from. */
+/**
+ * mvp-spec §5: `sessions/<sessionId>.json`. The runner-side record an
+ * `OpenApplicationGroup` command is derived from — `protocol` and the
+ * `MAX_APPLICATION_GROUP_SIZE` ceiling on `items` deliberately match that
+ * command's envelope (`OpenApplicationGroupPayload`, `bridge-envelopes.ts`)
+ * so a manifest that's valid here can never fail to derive a valid command.
+ */
 export const sessionManifestSchema = z
   .object({
+    protocol: protocolVersionSchema,
     sessionId: uuidSchema,
     title: nonEmptyStringSchema,
-    items: z.array(sessionManifestItemSchema).min(1),
+    items: z.array(sessionManifestItemSchema).min(1).max(MAX_APPLICATION_GROUP_SIZE),
     createdAt: isoDateTimeSchema,
   })
   .strict();

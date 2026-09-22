@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_APPLICATION_GROUP_SIZE,
   applicationStatusChangedSchema,
   browserCommandResultSchema,
   jobCaptureSchema,
+  MAX_JOB_CAPTURE_TEXT_BYTES,
   openApplicationGroupSchema,
 } from "./bridge-envelopes";
+import { MAX_APPLICATION_GROUP_SIZE } from "./primitives";
 
 const uuid1 = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
 const uuid2 = "0d3a4b0e-58cc-4372-a567-0e02b2c3d479";
@@ -101,6 +102,16 @@ describe("browserCommandResultSchema", () => {
   it("rejects an unknown top-level key (strict)", () => {
     expect(browserCommandResultSchema.safeParse({ ...valid(), deviceId: uuid1 }).success).toBe(false);
   });
+
+  // Issue 4: "closed" is informational only (the person closed the tab
+  // without an explicit Applied/Deferred action) — it must parse like any
+  // other item status, but the schema layer has no notion of "moves the
+  // stage" to begin with; only `applicationStatusChangedSchema` with
+  // `status: "applied"` does that, enforced by the runner, not this shape.
+  it("accepts a 'closed' item status (informational; never moves Application.stage on its own)", () => {
+    const withClosed = { ...valid(), status: "partial" as const, items: [{ taskId: uuid1, status: "closed" as const }] };
+    expect(browserCommandResultSchema.safeParse(withClosed).success).toBe(true);
+  });
 });
 
 describe("jobCaptureSchema", () => {
@@ -132,6 +143,18 @@ describe("jobCaptureSchema", () => {
 
   it("rejects an unknown top-level key (strict)", () => {
     expect(jobCaptureSchema.safeParse({ ...valid(), jobId: uuid1 }).success).toBe(false);
+  });
+
+  // Issue 9 regression — see the matching job-snapshot.test.ts case for the
+  // full explanation: the cap is UTF-8 bytes, not JS string `.length`.
+  it("rejects multi-byte text under the char cap but over the UTF-8 byte cap", () => {
+    const multiByteText = "字".repeat(MAX_JOB_CAPTURE_TEXT_BYTES / 2);
+    expect(new TextEncoder().encode(multiByteText).length).toBeGreaterThan(MAX_JOB_CAPTURE_TEXT_BYTES);
+    expect(jobCaptureSchema.safeParse({ ...valid(), text: multiByteText }).success).toBe(false);
+  });
+
+  it("accepts multi-byte text within the UTF-8 byte cap", () => {
+    expect(jobCaptureSchema.safeParse({ ...valid(), text: "字".repeat(100) }).success).toBe(true);
   });
 });
 

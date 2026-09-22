@@ -68,10 +68,19 @@ export type ApplicationDeadline = z.infer<typeof applicationDeadlineSchema>;
 
 /**
  * mvp-spec §5: `applications/<taskId>.json` — `{ jobId, stage, revision,
- * documents[], notes, deadlines }`. `revision` is the `JobSnapshot.revision`
- * this application was last prepared against (F6: "the old preparation
- * still says it used revision 1" after the job posting changes underneath
- * it).
+ * documents[], notes, deadlines }`. `revision` is this *task's own*
+ * optimistic-concurrency counter — incremented on every write to this
+ * application record, not the job posting's. `application_status_changed`
+ * events carry `expectedRevision` as the extension last saw it, so the
+ * runner can reject a stale write (mvp-spec §5: "stale revisions
+ * rejected"; see `applicationStatusChangedSchema`, bridge-envelopes.ts).
+ *
+ * The job-posting revision a given prepared document used is tracked
+ * per-document instead, on `ApplicationDocument.jobRevision` below (F6:
+ * "the old preparation still says it used revision 1" after the posting
+ * changes underneath it) — a single application can hold documents
+ * prepared against different `JobSnapshot` revisions over time, so that
+ * number cannot live on the application record itself.
  */
 export const applicationSchema = z
   .object({

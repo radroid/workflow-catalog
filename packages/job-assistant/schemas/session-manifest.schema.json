@@ -2,6 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "protocol": {
+      "type": "number",
+      "const": 1
+    },
     "sessionId": {
       "type": "string",
       "format": "uuid",
@@ -13,6 +17,7 @@
     },
     "items": {
       "minItems": 1,
+      "maxItems": 20,
       "type": "array",
       "items": {
         "type": "object",
@@ -29,7 +34,7 @@
           },
           "url": {
             "type": "string",
-            "format": "uri"
+            "pattern": "^https?:\\/\\/"
           }
         },
         "required": [
@@ -47,6 +52,7 @@
     }
   },
   "required": [
+    "protocol",
     "sessionId",
     "title",
     "items",
