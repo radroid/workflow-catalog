@@ -24,6 +24,11 @@
  *     mismatched-origin token is indistinguishable from a valid one to
  *     that route, and only actually shows up on job_capture's POST
  *     /events, the only authenticated POST this extension makes
+ *   - the P07B acceptance screenshots (docs/screenshots/P07B-*.png):
+ *     options paired, options pairing-error, and popup saved, each light
+ *     and dark, via theme-capture.ts's captureInTheme (shared with
+ *     real-popup.spec.ts's own P07A screenshots) -- opt-in writes gated on
+ *     P07B_UPDATE_SCREENSHOTS=1, see screenshotPath below
  *
  * Runs serially (test.describe.configure below) against ONE shared
  * Chromium context/extension instance, like real-popup.spec.ts, but starts
@@ -37,6 +42,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Locator, Page } from "@playwright/test";
 import { DEVICE_TOKEN_TTL_MS } from "@workflow-catalog/runner/store/devices.ts";
 import { listen } from "@workflow-catalog/runner/server/app.ts";
@@ -59,6 +65,22 @@ import {
   startBridgeHarness,
   type BridgeHarness,
 } from "./real-bridge-harness";
+import { captureInTheme, pageThemeTarget, popupThemeTarget } from "./theme-capture";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const committedScreenshotsDir = path.resolve(here, "../../docs/screenshots");
+
+/** The committed P07B acceptance screenshots are rewritten only on request
+ * (`P07B_UPDATE_SCREENSHOTS=1 pnpm --filter @workflow-catalog/extension
+ * test:e2e`), the same opt-in shape P07A_UPDATE_SCREENSHOTS uses in
+ * real-popup.spec.ts. A normal run writes the same verified captures into
+ * this test's own output dir under test-results/ (gitignored), so
+ * `test:e2e` never dirties the working tree. */
+function screenshotPath(fileName: string): string {
+  return process.env.P07B_UPDATE_SCREENSHOTS === "1"
+    ? path.join(committedScreenshotsDir, fileName)
+    : test.info().outputPath(fileName);
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -448,4 +470,65 @@ test("job_capture (gate 4): Save queues when the runner is unreachable, and the 
   });
   expect(stillQueued, "the outbox should be empty once the alarm delivered it").toBe(0);
   await checkPage.close();
+});
+
+test("P07B screenshots: options page, paired (light and dark)", async () => {
+  const page = await openFreshOptionsPage();
+  const { code } = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(page, code);
+
+  const optionsTheme = pageThemeTarget(page, "options-paired");
+  await captureInTheme(optionsTheme, "light", "P07B-options-paired-light.png", screenshotPath);
+  await captureInTheme(optionsTheme, "dark", "P07B-options-paired-dark.png", screenshotPath);
+
+  await page.close();
+});
+
+test("P07B screenshots: options page, pairing error (light and dark)", async () => {
+  const page = await openFreshOptionsPage();
+  await page.getByLabel("Code from npm run setup").fill("ZZZZZ-ZZZZZ");
+  await page.getByRole("button", { name: "Pair", exact: true }).click();
+  await expect(page.locator('[data-section="pairing"] [role="status"]')).toHaveText(
+    "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run `npm run pair` for a new one.",
+  );
+
+  const optionsTheme = pageThemeTarget(page, "options-error");
+  await captureInTheme(optionsTheme, "light", "P07B-options-error-light.png", screenshotPath);
+  await captureInTheme(optionsTheme, "dark", "P07B-options-error-dark.png", screenshotPath);
+
+  await page.close();
+});
+
+test("P07B screenshots: popup, saved (light and dark)", async () => {
+  const optionsPage = await openFreshOptionsPage();
+  const { code } = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(optionsPage, code);
+  await optionsPage.close();
+
+  const tabPage = await harness.context.newPage();
+  await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+
+  const state = await waitForPopupState(popup);
+  expect(state).toBe("preview");
+
+  await focusSaveButton(popup);
+  await pressEnter(popup);
+
+  let statusText = "";
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
+    if (statusText.includes("sent it to the runner")) break;
+    await sleep(100);
+  }
+  expect(statusText).toContain("sent it to the runner");
+
+  const popupTheme = popupThemeTarget(popup);
+  await captureInTheme(popupTheme, "light", "P07B-popup-saved-light.png", screenshotPath);
+  await captureInTheme(popupTheme, "dark", "P07B-popup-saved-dark.png", screenshotPath);
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await tabPage.close();
 });
