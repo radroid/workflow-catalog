@@ -269,6 +269,17 @@ export default eveChannel({
       - Share logic in directive-free modules under `runner/agent/lib/`.
       - Keep a thin executor and step wrapper in each root.
       - Never re-export or copy a tool's logic into the eval agent. Evals must exercise the shared helper, not a copy.
+15. **An aborted client turn can end quietly as `completed`.** This is not in the docs. It was verified at eve@0.63.0 during the P08-A review (2026-09-22; logs/blocks.md, "P08-A peer review, round 1"), by probes with the real `Client` and a stubbed `fetch`, and by reading `dist/src/client/`.
+    - `open-stream.js` `followStreamIterable`: when the `signal` aborts while the client is opening or reopening the event stream, or while it backs off between attempts, the stream returns without throwing (`catch … if (signal.aborted) return`, and the `aborted` checks after the read loop and after `sleep`). An abort while an open stream is being read does throw.
+    - `session-utils.js` `summarizeTurnEvents`: `status` is `waiting` or `failed` only when a boundary event (`session.waiting`, `session.failed`) was seen. With no boundary it defaults to `completed`. So `response.result()` resolves `completed` for a turn that never finished.
+    - The client reconnects an idle stream after 15 s (`streamReadIdleTimeoutMs`, default 15e3). A turn that goes silent more than about 15 s before its deadline therefore hits the quiet path.
+    - `MessageResponse.cancel()` sends nothing until the client has seen the turn start, and nothing once the turn is parked. `ClientSession.cancel()` (`POST …/session/:id/cancel`) is the reliable cancel.
+    - Pattern for every caller that sets a timeout:
+      - After `result()` resolves, check `signal.aborted`.
+      - Treat a turn as ok only when `summarizeTurnEvents(...).boundary` (a terminal `session.*` event) is present.
+      - Cancel through the session.
+      - Read the stream event by event, so partial `step.completed` usage survives a timeout.
+    - Callers: P08-A `runTurn` (fixed in its revision), P03's extraction route (R3 timeout), and P02's `checkModel` (a runner follow-up).
 
 **Recommended pin (read 2026-09-20):** `"eve": "0.63.0"` exact (no caret), `"ai"` and `"zod"` at whatever `eve init` writes for 0.63.0, Node `24` in `.nvmrc`/`engines`, and read docs from `node_modules/eve/docs` at that version rather than `main`. Re-evaluate the pin deliberately; do not float `eve@latest` in the template.
 

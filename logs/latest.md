@@ -1,10 +1,10 @@
 Latest: iter-005 in progress. The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
 
-Running now: three implementers, one worktree each. The P03 round-2 reviewer and UI critic have finished; their worktrees and the pre-pause ones were clean and pushed, and were removed.
+Running now: two escalation implementers and the P08-A round-1 pair, one worktree each. The P03 round-2 reviewer and UI critic have finished; their worktrees and the pre-pause ones were clean and pushed, and were removed.
 - **P03 (#11):** round 2 returned REVISE from both (reviewer 6, UI critic 9). A fresh **Opus escalation implementer** is working the combined list and decisions D8–D16 in `logs/handoff/P03-round-2-review.md`. Round 3 follows.
 - **P07-B (#12):** a fresh Opus escalation implementer works the combined list in `logs/handoff/P07-B-round-2-review.md`, red CI first.
   - Then a full round 3 (reviewer and UI critic), including what round 2 never checked.
-- **P08-A:** a fresh Sonnet successor builds its predecessor's design (the P08 packet's "Part A paused" note), with the decisions logged in blocks.md ("Loop resumed").
+- **P08-A (#13):** the Sonnet successor opened PR #13 at 0af2945 (chain green, both TZ runs, 4 mutation proofs). Round 1 is running: an Opus reviewer and an Opus UI critic. A REVISE goes back to the same implementer once (its worktree is kept).
 - **Then:** P04 after P03; P05 (Opus) after P04; P03.1 after P03 and P04; P08-B after P05. After that, the wave plan continues.
 
 If this session dies: every agent pushes its branch at green steps. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.

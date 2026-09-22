@@ -865,3 +865,67 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - **D15:** an edit that adds an always-ask item re-opens the question.
 - **D16:** all 48 screenshots.
 - Contracts follow-up (for a later contracts packet): withdrawals are stored as `accepted` revisions, because the revision status list is closed.
+
+## 2026-09-22 — P08-A peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** high
+
+**Charter / context:** an Opus reviewer and an Opus UI critic reviewed PR #13 at 0af2945: the run log, the budget pause, the run harness, and the Runs and Settings Budget pages.
+**Verdict text / failure detail:** the full findings are in `logs/handoff/P08-A-round-1-review.md`.
+- **Reviewer: VERDICT: REVISE — 5 issues.**
+  - What holds:
+    - the chain is green at the head and on the merge, and CI passes;
+    - all four mutation proofs reproduce;
+    - tests pass in 5 time zones;
+    - the seven eve facts are verified;
+    - the API guard, bounds and uuid checks hold;
+    - there are no HTML sinks, and the scope is clean.
+  - Issues:
+    1. A timed-out turn is recorded as a success, with no cancel, because eve's client ends quietly on an abort during stream open or reopen.
+    2. `withRun` rejects on empty error text, which breaks decision 3.
+    3. Usage is lost on a timeout.
+    4. The idempotency lookup is capped at 200 records, not the 14-day window.
+    5. Budget writes race.
+- **UI critic: VERDICT: REVISE — 9 issues.**
+  1. The failure pill (P02's `.badge.fail`) fails contrast.
+  2. Error text fails contrast.
+  3. Resume drops focus.
+  4. No page error for out-of-range limits.
+  5. Long model ids scroll sideways at 390.
+  6. The empty state is doubled.
+  7. UUIDs, "n/a" and error codes are visible.
+  8. Amber is used for information.
+  9. The corrupt-budget state is unexplained, and "Saved." contradicts the pause.
+
+**Action taken:** one combined revision went to the same Sonnet implementer (its one round), with decisions G1–G10:
+- **G1:** stream turns event by event, require a boundary event and no abort, and cancel through the session, with real-`Client` regression tests.
+- **G2:** `withRun` never rejects.
+- **G3:** idempotency scans the whole window.
+- **G4:** budget writes are serialised now, not deferred to P08-B.
+- **G5:** a 429 in `statusCode` or `upstreamStatusCode` counts as a provider limit when no id is present.
+- **G6:** `paused` stays the manual pause; consumers derive "daily limit reached" from the two numbers.
+- **G7:** approved `runner.css` edits, for `.badge.fail` contrast and form-control borders only.
+- **G8:** shortened paths with Copy path, and no model or code noise.
+- **G9:** skipped files are named.
+- **G10:** "Did not finish (or still running)".
+- The screenshots grow to 24, adding the corrupt and daily-limit states.
+
+## 2026-09-22 — eve client ends an aborted turn quietly as "completed" [DRIFT]
+
+**Iter:** 005
+**Source:** contract-drift
+**Severity:** high
+
+**Charter / context:** the P08-A reviewer found that eve@0.63.0's client stream returns without throwing when the signal aborts during stream open, reopen or backoff (`dist/src/client/open-stream.js`). `summarizeTurnEvents` then defaults the status to `completed` when no boundary event was seen (`session-utils.js`). The orchestrator checked both in the installed code. `MessageResponse.cancel()` sends nothing before the turn starts; `ClientSession.cancel()` is the reliable cancel.
+**Verdict text / failure detail:** a caller that sets `AbortSignal.timeout` and trusts `response.result()` records a timed-out turn as success. Three callers are affected:
+- P08-A `runTurn`;
+- P03's extraction route (R3 timeout);
+- P02's `checkModel` in `runner/server/eve-gateway.ts`.
+
+**Action taken:**
+- Recorded as `docs/spec/research/eve-runtime.md` §8 item 15, with the safe pattern.
+- P08-A fixes it in its revision (G1).
+- The P03 escalation implementer was told to apply the pattern to the extraction route and to test it.
+- **Follow-up:** `checkModel` (P02's file) needs the same fix. It is queued as a runner follow-up for after P03 and P08-A merge, and must reuse P08-A's `runTurn` rather than a third copy.
