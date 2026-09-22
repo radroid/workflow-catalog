@@ -1,0 +1,48 @@
+{
+  "name": "job-assistant",
+  "version": "0.1.0",
+  "description": "Prepares and tracks job applications from a career profile the person owns: every source is accounted for, every extracted claim is confirmed or excluded before it can be used, and every generated statement cites a confirmed claim ID.",
+  "requiredSources": [
+    "resume",
+    "previousCoverLetters",
+    "portfolioSite",
+    "repositories",
+    "socialProfiles",
+    "workSamples",
+    "targetRolesAndPreferences"
+  ],
+  "connections": ["file_upload", "pasted_text", "url_import", "github", "social_export_files"],
+  "browserPermissions": ["activeTab", "scripting", "tabGroups", "storage", "sidePanel", "alarms"],
+  "actions": ["capture_job", "open_application_group", "report_status"],
+  "schemas": [
+    "claim.schema.json",
+    "source.schema.json",
+    "career-profile.schema.json",
+    "workspace-manifest.schema.json",
+    "job-snapshot.schema.json",
+    "application.schema.json",
+    "session-manifest.schema.json",
+    "run-record.schema.json",
+    "open-application-group.schema.json",
+    "browser-command-result.schema.json",
+    "job-capture.schema.json",
+    "application-status-changed.schema.json",
+    "pair-request.schema.json",
+    "pair-response.schema.json",
+    "commands-response.schema.json",
+    "events-request.schema.json",
+    "status-response.schema.json",
+    "workflow.schema.json"
+  ],
+  "adapters": ["eve"],
+  "changelog": [
+    {
+      "version": "0.1.0",
+      "date": "2026-09-22",
+      "notes": [
+        "Initial package: onboarding-by-accounting, claim extraction and matching, resume and cover letter drafting with claim citations, job capture, and the browser bridge envelopes.",
+        "Provider-neutral; the eve adapter (adapters/eve/) is a stub — P02 fills it in."
+      ]
+    }
+  ]
+}
