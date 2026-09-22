@@ -1,7 +1,7 @@
 # P01 · Workflow package and shared contracts
 
-Status: open
-Assignee: none
+Status: claimed
+Assignee: iter-002 implementer (Sonnet)
 Blocked by: P00
 Owns: packages/job-assistant/, packages/contracts/
 Spec: §5 data contracts, F12 (manifest only), execution-options.md package layout
