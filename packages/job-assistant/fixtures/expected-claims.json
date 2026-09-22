@@ -37,7 +37,9 @@
       "kind": "passage",
       "ref": "resume.md#senior-platform-engineer-northwind-labs",
       "quote": "Shipped the on-call rotation tooling used by three engineering teams."
-    }
+    },
+    "question": "How do you know three engineering teams use this tooling — usage data, or teams that specifically adopted it?",
+    "answeredAt": "2026-09-19T10:03:00.000Z"
   },
   {
     "id": "402fb692-149d-47a5-b549-0e8367328656",
@@ -62,7 +64,9 @@
       "kind": "passage",
       "ref": "resume.md#open-source",
       "quote": "Maintainer of Ledgerkit, an open-source ledger reconciliation library."
-    }
+    },
+    "question": "Are you the sole maintainer of Ledgerkit, or one of several, and is that still the case today?",
+    "answeredAt": "2026-09-19T10:04:00.000Z"
   },
   {
     "id": "dcdbd2e7-ffc8-4d6a-8bfe-0f71f3512801",
