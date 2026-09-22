@@ -746,3 +746,31 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - **E3:** the label names `npm run pair`.
 - **E4:** the options page says that quitting Chrome unpairs the browser (spec §7.5).
 - Owner note (P07-C and Settings): every re-pair leaves another device record on the runner.
+
+## 2026-09-22 — Loop paused by the owner [PAUSED]
+
+**Iter:** 005 (in progress)
+**Source:** owner
+**Severity:** info
+
+**Charter / context:** at about 13:05 the owner paused the loop to switch the orchestrator to a different model. The full handoff is in `logs/handoff/2026-09-22-pause.md`.
+
+**What happened at the pause:**
+- The pending wake-up was cancelled.
+- All five subagents were asked to save their work and stop, and all five have stopped:
+  - **P03 (#11):** revision 1 completed at 9584e93.
+  - **P07-B (#12):** the implementer stopped clean at 6da1a83. The reviewer and UI critic stopped round 2 with partial findings, saved in `logs/handoff/P07-B-round-2-review.md`: 5 reviewer outbox and test issues, and 5 UI issues.
+  - **P07-B CI:** red at 6da1a83. The dark-popup screenshot guard in `real-popup.spec.ts:140` fails; it has been red since 339c38d.
+  - **P08-A:** a claim only (6024f0f). Its report holds the design and the eve facts.
+- The exact instructions for each in-flight agent are saved under `logs/handoff/`.
+
+**Process slips (P03 implementer):**
+- It treated the genuine PAUSE message as a prompt injection and finished its revision instead of stopping. P07-A did the same in iter 003.
+- It ran a screenshot seed server on 4310 instead of its assigned 4320, which broke the UI critic's dark run.
+- Its MCP browser screenshots landed in the main checkout: six files, moved to `/tmp/wc-stray-main-checkout/`.
+- Its final report says D7 was not done, but commit e698182 did it.
+
+**Action taken:**
+- `.loop/state.json` is marked `stage_status: paused`, with a pointer to the handoff.
+- `logs/latest.md` is rewritten as the resume handoff.
+- PR #2 is updated. Nothing merged during iter 005.
