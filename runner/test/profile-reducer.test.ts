@@ -165,6 +165,8 @@ describe("profile-reducer: 4 - A closed tab is not an application", () => {
     const reconfirm = reduce(profile, { type: "decideClaim", claimId: keep!.id, decision: "confirmed", now: LATER, newId });
     // keep! is already confirmed and needs no question, so this is a no-op decision through the same path as a genuine change:
     expect(reconfirm.ok).toBe(true);
+    expect(reconfirm.profile.approval).toBeNull(); // R4 mutation #1: dropping the withdrawal on confirm must fail here.
+    expect(reconfirm.message).toMatch(/withdrawn/);
   });
 });
 

@@ -3,6 +3,7 @@ import { draftQuestion, needsQuestion } from "./profile-questions.ts";
 import {
   isSourcesComplete,
   SOURCE_CATEGORY_LABELS,
+  statementField,
   unaccountedCategories,
   type OnboardingProfile,
   type SourceCategory,
@@ -64,6 +65,7 @@ export type Action =
       readonly now: string;
       readonly newId: () => string;
     }
+  | { readonly type: "addStatement"; readonly kind: StatementKind; readonly text: string; readonly now: string; readonly newId: () => string }
   | { readonly type: "acceptRevision"; readonly revisionId: string; readonly now: string }
   | { readonly type: "rejectRevision"; readonly revisionId: string; readonly now: string };
 
@@ -412,6 +414,33 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       };
       const next: OnboardingProfile = { ...profile, revisions: [...profile.revisions, revision] };
       return ok(next, `A revision to this ${action.kind} is proposed. Profile v${profile.approval.version} stays in force until the revision is accepted.`);
+    }
+
+    case "addStatement": {
+      // D3 (P03 revision 1): boundaries/preferences/presentation had no way
+      // to be created at all — only edited once they already existed
+      // (createInitialProfile seeds the two boundaries; nothing ever seeded
+      // a preference). A brand-new statement is immediately "in force" (it
+      // has no candidate/confirm cycle the way a claim does — it shows up
+      // under a heading the walkthrough already presents as authoritative,
+      // e.g. "Rules generation must never cross"), so unlike a newly
+      // extracted candidate CLAIM (which sits inert until decided, and does
+      // not withdraw approval), adding one is treated as a content change:
+      // approval is withdrawn if the profile was approved, the same as
+      // editing an existing statement's text would eventually require
+      // (editStatementText proposes a revision instead; a *new* statement
+      // has no prior id for a revision to reference, so this reducer does
+      // not attempt to invent a "revision that creates something" — the
+      // simpler, more conservative withdrawal is what it does instead).
+      const field = statementField(action.kind);
+      const statement = { id: action.newId(), text: action.text };
+      let next: OnboardingProfile = { ...profile, [field]: [...profile[field], statement] };
+      let message = `A new ${action.kind} was recorded.`;
+      if (next.approval !== null) {
+        next = withdrawApproval(next, action.now, action.newId, `a ${action.kind} was added`);
+        message += " Profile approval withdrawn (the profile's content changed).";
+      }
+      return ok(next, message);
     }
 
     case "acceptRevision": {

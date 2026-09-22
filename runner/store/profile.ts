@@ -231,6 +231,11 @@ export class ProfileStore {
     return this.#mutate({ type: "editStatementText", kind, statementId, text, now: this.#now(), newId });
   }
 
+  /** Records a brand-new boundary/preference/presentation statement (D3: "Recordable Preferences" — there was previously no way to add one at all, only edit an existing one's text). */
+  async addStatement(kind: StatementKind, text: string): Promise<ReduceResult> {
+    return this.#mutate({ type: "addStatement", kind, text, now: this.#now(), newId });
+  }
+
   async acceptRevision(revisionId: string): Promise<ReduceResult> {
     return this.#mutate({ type: "acceptRevision", revisionId, now: this.#now() });
   }
