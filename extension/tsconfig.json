@@ -4,7 +4,14 @@
     "noEmit": true,
     "rootDir": ".",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["chrome", "node"]
+    "types": ["chrome", "node"],
+    // scan-dist-for-eval.test.ts imports scan-dist-for-eval.mjs directly
+    // (the check-fixtures.mjs / check-fixtures.test.mjs split this repo
+    // already uses at the root) — allowJs lets tsc infer that plain JS
+    // module's exported types from its JSDoc, without turning on checkJs
+    // (so the .mjs scripts themselves stay un-type-checked, same as
+    // scripts/check-fixtures.mjs is today).
+    "allowJs": true
   },
   "include": ["src", "scripts", "e2e", "playwright.config.ts", "vite.config.ts"]
 }
