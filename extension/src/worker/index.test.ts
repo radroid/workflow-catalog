@@ -36,8 +36,11 @@ function installFakeChrome(sessionSeed: Record<string, unknown> = {}): {
     },
     storage: {
       session: {
-        async get(keys: string | string[] | undefined) {
-          if (keys === undefined) return { ...sessionData };
+        async get(keys: string | string[] | null | undefined) {
+          // null/undefined both mean "everything" -- shared/outbox.ts's
+          // readOutbox() relies on get(null) to enumerate every
+          // jobCaptureOutbox:<eventId> key (P07-B revision 1, B2).
+          if (keys === undefined || keys === null) return { ...sessionData };
           const list = Array.isArray(keys) ? keys : [keys];
           const out: Record<string, unknown> = {};
           for (const key of list) if (key in sessionData) out[key] = sessionData[key];
@@ -45,6 +48,9 @@ function installFakeChrome(sessionSeed: Record<string, unknown> = {}): {
         },
         async set(items: Record<string, unknown>) {
           Object.assign(sessionData, items);
+        },
+        async remove(keys: string | string[]) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete sessionData[key];
         },
       },
     },
@@ -85,7 +91,11 @@ afterEach(() => {
 describe("worker/index.ts: job_capture outbox retry alarm", () => {
   it("flushes the outbox when the retry alarm fires, and delivers a queued capture", async () => {
     const fake = installFakeChrome({
-      jobCaptureOutbox: [{ capture: jobCapture("11111111-1111-4111-8111-111111111111"), attempts: 1, queuedAt: "2026-09-22T00:00:00.000Z" }],
+      "jobCaptureOutbox:11111111-1111-4111-8111-111111111111": {
+        capture: jobCapture("11111111-1111-4111-8111-111111111111"),
+        attempts: 1,
+        queuedAt: "2026-09-22T00:00:00.000Z",
+      },
     });
     postEventMock.mockResolvedValue({ ok: true, value: { duplicate: false } });
 
@@ -100,7 +110,11 @@ describe("worker/index.ts: job_capture outbox retry alarm", () => {
 
   it("ignores an alarm with a different name", async () => {
     const fake = installFakeChrome({
-      jobCaptureOutbox: [{ capture: jobCapture("11111111-1111-4111-8111-111111111111"), attempts: 0, queuedAt: "2026-09-22T00:00:00.000Z" }],
+      "jobCaptureOutbox:11111111-1111-4111-8111-111111111111": {
+        capture: jobCapture("11111111-1111-4111-8111-111111111111"),
+        attempts: 0,
+        queuedAt: "2026-09-22T00:00:00.000Z",
+      },
     });
     await import("./index");
 
@@ -112,7 +126,11 @@ describe("worker/index.ts: job_capture outbox retry alarm", () => {
 
   it("arms the retry alarm at startup when captures are already queued from a previous session", async () => {
     const fake = installFakeChrome({
-      jobCaptureOutbox: [{ capture: jobCapture("11111111-1111-4111-8111-111111111111"), attempts: 0, queuedAt: "2026-09-22T00:00:00.000Z" }],
+      "jobCaptureOutbox:11111111-1111-4111-8111-111111111111": {
+        capture: jobCapture("11111111-1111-4111-8111-111111111111"),
+        attempts: 0,
+        queuedAt: "2026-09-22T00:00:00.000Z",
+      },
     });
 
     await import("./index");

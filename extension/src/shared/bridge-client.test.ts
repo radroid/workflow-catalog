@@ -95,14 +95,28 @@ describe("createBridgeClient: pair()", () => {
     expect(result.error.message).toContain("npm run pair");
   });
 
-  it("carries a 429 too_many_attempts through", async () => {
-    stubFetch(() => jsonResponse(429, { ok: false, error: { code: "too_many_attempts", message: "Too many wrong pairing codes. Wait, then issue a new code with `npm run pair`." } }));
+  it("carries a 429 too_many_attempts through, with the Retry-After header parsed as retryAfterSeconds (P07-B revision 1, B8)", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ ok: false, error: { code: "too_many_attempts", message: "Too many wrong pairing codes. Wait, then issue a new code with `npm run pair`." } }),
+        { status: 429, headers: { "content-type": "application/json", "retry-after": "137" } },
+      )) as typeof fetch;
     const client = createBridgeClient();
     const result = await client.pair({ code: "AAAAA-AAAAA" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.status).toBe(429);
     expect(result.error.code).toBe("too_many_attempts");
+    expect(result.error.retryAfterSeconds).toBe(137);
+  });
+
+  it("leaves retryAfterSeconds undefined when the response has no Retry-After header", async () => {
+    stubFetch(() => jsonResponse(401, { ok: false, error: { code: "pairing_code_invalid", message: "invalid" } }));
+    const client = createBridgeClient();
+    const result = await client.pair({ code: "AAAAA-AAAAA" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.retryAfterSeconds).toBeUndefined();
   });
 
   it("classifies a fetch rejection (runner not running) as network_error, with an actionable message", async () => {

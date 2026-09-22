@@ -38,6 +38,12 @@ export interface BridgeError {
   readonly status?: number;
   readonly code: string;
   readonly message: string;
+  /** From the response's own `Retry-After` header (seconds), when present
+   * -- currently only `/pair`'s 429 `too_many_attempts` sends one
+   * (runner/server/extension-api.ts). P07-B revision 1, B8: lets the
+   * options page say "try again in about N minutes" instead of a vague
+   * "wait". */
+  readonly retryAfterSeconds?: number;
 }
 
 export type BridgeResult<T> = { ok: true; value: T } | { ok: false; error: BridgeError };
@@ -137,12 +143,19 @@ async function request(baseUrl: string, path: string, init: RequestInit): Promis
   if (response.ok) {
     return { ok: true, value: body };
   }
+  const rawRetryAfter = response.headers.get("retry-after");
+  const retryAfterSeconds = rawRetryAfter !== null && /^\d+$/.test(rawRetryAfter) ? Number(rawRetryAfter) : undefined;
   if (looksLikeWireErrorBody(body)) {
-    return { ok: false, error: { status: response.status, code: body.error.code, message: body.error.message } };
+    return { ok: false, error: { status: response.status, code: body.error.code, message: body.error.message, retryAfterSeconds } };
   }
   return {
     ok: false,
-    error: { status: response.status, code: "unknown_error", message: `The runner answered with an unexpected error (HTTP ${response.status}).` },
+    error: {
+      status: response.status,
+      code: "unknown_error",
+      message: `The runner answered with an unexpected error (HTTP ${response.status}).`,
+      retryAfterSeconds,
+    },
   };
 }
 

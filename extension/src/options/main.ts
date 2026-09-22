@@ -4,7 +4,16 @@ import { bridgeClient, type BridgeError } from "../shared/bridge-client";
 import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
 import { abbreviateUuid, formatTimestamp } from "../shared/format";
-import { clearDeviceToken, getDeviceToken, getLastJobCapture, setDeviceToken, type StoredDeviceToken } from "../shared/storage";
+import { flushOutbox, listQueuedCaptures } from "../shared/outbox";
+import {
+  clearDeviceToken,
+  getDeviceToken,
+  getLastJobCapture,
+  getPairingOriginMismatch,
+  setDeviceToken,
+  setPairingOriginMismatch,
+  type StoredDeviceToken,
+} from "../shared/storage";
 import { applyColorScheme } from "../shared/theme-init";
 import { checkImportFileSize, parseSessionManifestFile } from "../file-bridge/session-import";
 import "./style.css";
@@ -30,33 +39,95 @@ function nextId(prefix: string): string {
 
 function statusPageLink(): HTMLElement {
   return el("p", { className: "small" }, [
-    "Manage paired devices, including actual revocation, on the runner's ",
+    "Manage paired devices on the runner's ",
     el("a", { attrs: { href: RUNNER_STATUS_URL, target: "_blank", rel: "noopener" }, text: "status page" }),
     ".",
   ]);
 }
 
-/** `flashMessage`, when given, is shown in the status line as soon as the
- * section renders -- used for "Un-paired." after a successful un-pair,
- * since that action tears down and rebuilds this whole section (the old
- * status paragraph, and the message any earlier render put in it, goes
- * with it). */
-function pairingSection(current: StoredDeviceToken | null, flashMessage?: string): HTMLElement {
+/**
+ * Splits `text` on backtick pairs into plain-text and `<code>` segments.
+ * Several of the bridge's own error messages (runner/server/*.ts) write a
+ * command as literal backtick-delimited text, e.g. "Start it with `npm run
+ * runner`." -- shown via `.textContent` (this codebase's strict
+ * hostile-content-is-data rule, see shared/dom.ts) that would render as
+ * literal backtick characters, not styled code, which is what E3/B12 (P07-B
+ * revision 1) ask for instead. Every segment here still only ever goes
+ * through `el()`'s `text` option or a plain text node, never `innerHTML` --
+ * this is markup structure, not content trust. An odd number of backticks
+ * (should never happen; every source message pairs them) just leaves a
+ * trailing segment as plain text instead of losing it.
+ */
+function withInlineCode(text: string): Array<string | HTMLElement> {
+  return text.split("`").map((part, index) => (index % 2 === 1 ? el("code", { text: part }) : part)).filter((part) => part !== "");
+}
+
+/** `retryAfterSeconds` (from the bridge's own `Retry-After` header, see
+ * bridge-client.ts) rounded up to whole minutes for a person-readable
+ * countdown (P07-B revision 1, B8): "Too many tries. Try again in about N
+ * minutes." instead of a vague "wait". */
+function tooManyTriesMessage(retryAfterSeconds: number | undefined): string {
+  if (retryAfterSeconds === undefined) return "Too many tries. Wait, then try again.";
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+  return `Too many tries. Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+}
+
+// P07-B revision 1, B7: one persistent live region for the Pairing
+// section's own status line, created once and never rebuilt. Screen
+// readers only announce a mutation to a live region that was already
+// present (not one that was just (re)inserted) -- rebuilding the whole
+// Pairing section on every pair/un-pair used to recreate this element
+// each time, which silently dropped the "Paired."/"Un-paired."
+// announcement. Every rebuild below re-appends this SAME node instance
+// into its fresh wrapper instead of creating a new one.
+const pairingStatusId = nextId("pairing-status");
+const pairingStatus = el("p", { className: "flash", attrs: { id: pairingStatusId, role: "status", "aria-live": "polite" } });
+
+function setPairingStatus(text: string, problem: boolean): void {
+  pairingStatus.replaceChildren(...withInlineCode(text));
+  pairingStatus.className = problem ? "flash bad" : "flash";
+}
+
+/**
+ * `everPaired` (P07-B revision 1, E3/B12): the code field's own label
+ * names the command that actually printed the code on screen -- `npm run
+ * setup` runs once and prints the very first code; every code after that
+ * (re-pairing after an Un-pair, or pairing a second browser) comes from
+ * `npm run pair` instead. True whenever this browser has held a token at
+ * any point up to now, including right after Un-pair (which always passes
+ * `true` -- it just forgot one).
+ *
+ * Polish: the code-entry form collapses to a single "Pair again" button
+ * while already paired (`current !== null`), instead of always showing a
+ * code field next to an active pairing -- expanding it is `formVisible`,
+ * a plain closure flag local to one render of this section (not persisted:
+ * every fresh render, e.g. after Un-pair, starts from its own natural
+ * default -- expanded when there's nothing paired, collapsed when there
+ * is).
+ */
+function pairingSection(current: StoredDeviceToken | null, everPaired: boolean): HTMLElement {
   const codeFieldId = nextId("pairing-code");
-  const statusId = nextId("pairing-status");
+  const paired = current !== null;
 
   const codeInput = el("input", {
-    attrs: { type: "text", id: codeFieldId, placeholder: "e.g. 7KQ2M-X9RTB", "aria-describedby": statusId },
+    attrs: { type: "text", id: codeFieldId, placeholder: "e.g. 7KQ2M-X9RTB", "aria-describedby": pairingStatusId },
   }) as HTMLInputElement;
-  const codeLabel = el("label", { className: "small", attrs: { for: codeFieldId }, text: "Code from npm run setup" });
+  const codeLabel = el("label", { className: "small", attrs: { for: codeFieldId } }, [
+    "Code from ",
+    el("code", { text: everPaired ? "npm run pair" : "npm run setup" }),
+  ]);
   const pairButton = el("button", { className: "primary", attrs: { type: "submit" }, text: "Pair" });
-  const status = el("p", {
-    className: "small",
-    attrs: { id: statusId, role: "status", "aria-live": "polite" },
-    text: flashMessage ?? "",
-  });
+  const form = el("form", { className: "field" }, [codeInput, pairButton]);
+  const formWrap = el("div", { className: "stack" }, [codeLabel, form]);
+  formWrap.hidden = paired;
 
-  const paired = current !== null;
+  const pairAgainButton = el("button", { className: "ghost", text: "Pair again" });
+  pairAgainButton.hidden = !paired;
+  pairAgainButton.addEventListener("click", () => {
+    formWrap.hidden = false;
+    pairAgainButton.hidden = true;
+    codeInput.focus();
+  });
 
   const currentState = paired
     ? el("dl", { className: "kv" }, [
@@ -67,30 +138,32 @@ function pairingSection(current: StoredDeviceToken | null, flashMessage?: string
       ])
     : el("p", { className: "small", text: "Not paired yet." });
 
-  const unpairButton = el("button", { text: "Un-pair", attrs: paired ? {} : { disabled: "true" } });
+  const unpairButton = el("button", { text: "Un-pair", attrs: { "data-action": "unpair" } });
   unpairButton.toggleAttribute("disabled", !paired);
   unpairButton.addEventListener("click", () => {
     void (async () => {
       await clearDeviceToken();
-      const fresh = pairingSection(null, "Un-paired. You can pair again below.");
+      await setPairingOriginMismatch(false);
+      setPairingStatus("Un-paired. You can pair again below.", false);
+      const fresh = pairingSection(null, true);
       replaceSection("pairing", fresh);
       // Un-pairing tears down and rebuilds the whole section -- the old,
       // focused Un-pair button no longer exists to keep focus on, so it
       // was silently dropping to <body>. Land on the field the next
-      // action (pairing again) actually needs, instead.
+      // action (pairing again) actually needs, instead (B7).
       fresh.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
       await refreshStatusSection();
     })();
   });
 
-  const form = el("form", { className: "field" }, [codeInput, pairButton]);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     void (async () => {
       const code = codeInput.value.trim();
       if (code.length === 0) {
         codeInput.setAttribute("aria-invalid", "true");
-        status.textContent = "Enter the code shown by npm run setup.";
+        setPairingStatus(`Enter the code shown by ${everPaired ? "npm run pair" : "npm run setup"}.`, true);
+        codeInput.focus();
         return;
       }
       // Client-side shape check before ever reaching the network (mirrors
@@ -102,52 +175,84 @@ function pairingSection(current: StoredDeviceToken | null, flashMessage?: string
       const parsed = pairRequestSchema.safeParse({ code });
       if (!parsed.success) {
         codeInput.setAttribute("aria-invalid", "true");
-        status.textContent = "Enter the code shown by npm run setup.";
+        setPairingStatus(`Enter the code shown by ${everPaired ? "npm run pair" : "npm run setup"}.`, true);
+        codeInput.focus();
         return;
       }
       codeInput.removeAttribute("aria-invalid");
       pairButton.disabled = true;
-      status.textContent = "Pairing…";
+      setPairingStatus("Pairing…", false);
       const result = await bridgeClient.pair(parsed.data);
       pairButton.disabled = false;
       if (!result.ok) {
-        codeInput.setAttribute("aria-invalid", "true");
-        status.textContent = result.error.message;
+        // P07-B revision 1, B8: only a code-shaped refusal marks the
+        // field invalid -- a runner-down or 429 response is not the code
+        // being wrong, so the field itself must not look wrong either.
+        if (result.error.code === "pairing_code_invalid" || result.error.code === "pairing_code_expired") {
+          codeInput.setAttribute("aria-invalid", "true");
+        }
+        setPairingStatus(
+          result.error.status === 429 ? tooManyTriesMessage(result.error.retryAfterSeconds) : result.error.message,
+          true,
+        );
+        codeInput.focus();
         return;
       }
       const token: StoredDeviceToken = { deviceId: result.value.deviceId, token: result.value.token, pairedAt: new Date().toISOString() };
       await setDeviceToken(token);
-      const fresh = pairingSection(token, "Paired.");
+      // A fresh pairing can only ever make a previous 401/403 stale (E2 +
+      // B3's "after a new pairing, flush"): clear any stored origin
+      // mismatch and give every paused outbox entry (not_paired/401/403)
+      // one more real attempt.
+      await setPairingOriginMismatch(false);
+      await flushOutbox(bridgeClient, { includePaused: true });
+      setPairingStatus("Paired.", false);
+      const fresh = pairingSection(token, true);
       replaceSection("pairing", fresh);
-      fresh.querySelector("button")?.focus();
+      // B7: focus the thing paired state actually offers next, not
+      // whichever <button> happens to come first in document order (the
+      // Pair button, which the old querySelector("button") picked, even
+      // though it's no longer the relevant action once paired).
+      fresh.querySelector<HTMLButtonElement>('[data-action="unpair"]')?.focus();
       await refreshStatusSection();
     })();
   });
 
   return el("section", {}, [
     el("h2", { text: "Pairing" }),
-    el("div", { className: "card pad stack" }, [currentState, codeLabel, form, status, unpairButton, statusPageLink()]),
+    el("div", { className: "card pad stack" }, [
+      currentState,
+      el("div", { className: "row" }, [unpairButton, pairAgainButton]),
+      // Polish: the outcome message belongs next to the button that
+      // caused it, not stranded below the (possibly now-hidden) code
+      // field.
+      pairingStatus,
+      formWrap,
+      statusPageLink(),
+    ]),
   ]);
 }
 
 async function buildPairingSection(): Promise<HTMLElement> {
-  const section = pairingSection(await getDeviceToken());
+  const current = await getDeviceToken();
+  const section = pairingSection(current, current !== null);
   section.dataset.section = "pairing";
   return section;
 }
 
 /**
  * `GET /status` (P07-B deliverable 2): connected/version/workspace when it
- * succeeds, and one of four clear, recoverable, announced states per the
+ * succeeds, and one of several clear, recoverable, announced states per the
  * bridge's own classification of the failure -- never a stuck spinner or a
- * raw error dump.
+ * raw error dump. "Pair this browser" (not "a device"): this page can only
+ * ever act on the one browser it's running in (polish, P07-B revision 1).
  */
 function statusFailureMessage(error: BridgeError): string {
-  if (error.code === "not_paired") return "Pair a device above to see the runner's status.";
+  if (error.code === "not_paired") return "Pair this browser above to see the runner's status.";
   if (error.code === "network_error") return error.message;
   if (error.status === 401) return "Your pairing has expired or was revoked. Pair again above.";
-  if (error.status === 403) return "This device isn't recognized by the runner (wrong extension or device). Pair again above.";
-  if (error.status === 429) return "Too many attempts. Wait, then run `npm run pair` for a new code.";
+  if (error.status === 403) return "This pairing belongs to a different install. Pair again above.";
+  if (error.status === 429) return tooManyTriesMessage(error.retryAfterSeconds);
   return error.message;
 }
 
@@ -159,31 +264,91 @@ function renderConnectedStatus(status: { version: string; workspaceId: string })
       el("dt", { text: "Version" }),
       el("dd", { text: status.version }),
       el("dt", { text: "Workspace" }),
-      el("dd", { text: status.workspaceId }),
+      // Polish: the full workspace UUID crowded this row; abbreviated to
+      // its first 8 characters, with the full value still reachable via
+      // the standard title-attribute affordance (same treatment Device's
+      // id already gets above).
+      el("dd", { text: abbreviateUuid(status.workspaceId), attrs: { title: status.workspaceId } }),
     ]),
   ]);
 }
 
+/** P07-B revision 1, B10: "1 saved job waiting to send" / "All saved jobs
+ * sent" -- the outbox's own current size, refreshed every time Status is
+ * (gate 4's queued-then-delivered capture is invisible from this page
+ * otherwise; nothing else here ever surfaces it). */
+async function outboxSummaryLine(): Promise<HTMLElement> {
+  const queued = await listQueuedCaptures();
+  const text = queued.length === 0 ? "All saved jobs sent." : `${queued.length} saved job${queued.length === 1 ? "" : "s"} waiting to send.`;
+  return el("p", { className: "small", text });
+}
+
+/** P07-B revision 1, B10: a manual way to re-check without reloading the
+ * whole page. Paired with a `window` focus listener (see `render` below)
+ * for the common case (someone starts the runner, then alt-tabs back)
+ * without needing to find this button at all. */
+function checkAgainButton(): HTMLButtonElement {
+  const button = el("button", { className: "ghost", text: "Check again" }) as HTMLButtonElement;
+  button.addEventListener("click", () => {
+    void refreshStatusSection();
+  });
+  return button;
+}
+
 async function buildStatusSection(): Promise<HTMLElement> {
   const statusId = nextId("bridge-status");
-  const result = await bridgeClient.getStatus();
+  // P07-B revision 1, B3: GET /status never carries an Origin header
+  // (Chrome doesn't send one on a GET) and so can never itself observe a
+  // wrong-origin token the way job_capture's POST /events can -- this
+  // flag (set by bridge-client.ts's onOriginMismatch hook, cleared on the
+  // next successful pairing or explicit Un-pair) is the only way this
+  // page can ever reflect that.
+  const mismatch = await getPairingOriginMismatch();
   let body: HTMLElement;
-  if (result.ok) {
-    body = renderConnectedStatus(result.value);
-    body.setAttribute("role", "status");
-    body.id = statusId;
-  } else if (result.error.code === "not_paired") {
-    body = el("p", { className: "small", attrs: { role: "status", id: statusId }, text: statusFailureMessage(result.error) });
+  if (mismatch) {
+    body = el(
+      "div",
+      { className: "flash bad", attrs: { role: "alert", id: statusId } },
+      withInlineCode("This pairing belongs to a different install. Pair again above."),
+    );
   } else {
-    body = el("div", { className: "flash bad", attrs: { role: "alert", id: statusId }, text: statusFailureMessage(result.error) });
+    const result = await bridgeClient.getStatus();
+    if (result.ok) {
+      body = renderConnectedStatus(result.value);
+      body.setAttribute("role", "status");
+      body.id = statusId;
+    } else if (result.error.code === "not_paired") {
+      body = el("p", { className: "small", attrs: { role: "status", id: statusId } }, withInlineCode(statusFailureMessage(result.error)));
+    } else {
+      body = el("div", { className: "flash bad", attrs: { role: "alert", id: statusId } }, withInlineCode(statusFailureMessage(result.error)));
+      if (result.error.status === 401) {
+        // bridge-client.ts's onTokenInvalid already cleared the dead
+        // token from storage (B3) -- refresh Pairing too, so it doesn't
+        // keep claiming paired with Un-pair enabled for a token that's
+        // gone, and Status and Pairing never disagree for long.
+        replaceSection("pairing", await buildPairingSection());
+      }
+    }
   }
-  const section = el("section", {}, [el("h2", { text: "Status" }), body]);
+  const section = el("section", {}, [el("h2", { text: "Status" }), body, await outboxSummaryLine(), checkAgainButton()]);
   section.dataset.section = "status";
   return section;
 }
 
 async function refreshStatusSection(): Promise<void> {
   replaceSection("status", await buildStatusSection());
+}
+
+/** Shown the instant the page renders, before the real (network-bound)
+ * Status section has resolved -- see `render` below (P07-B revision 1,
+ * B4). */
+function buildStatusPlaceholder(): HTMLElement {
+  const section = el("section", {}, [
+    el("h2", { text: "Status" }),
+    el("p", { className: "small", attrs: { role: "status", "aria-live": "polite" }, text: "Checking the runner…" }),
+  ]);
+  section.dataset.section = "status";
+  return section;
 }
 
 function renderSessionSummary(manifest: SessionManifest): HTMLElement {
@@ -326,9 +491,19 @@ function replaceSection(id: string, replacement: HTMLElement): void {
   }
 }
 
+/**
+ * P07-B revision 1, B4: Pairing and File bridge render immediately, from
+ * fast local storage reads alone -- Status (the one section that makes a
+ * real network call, now bounded at 5s by bridge-client.ts's own timeout,
+ * but still the only slow part of this page) fills in afterwards, behind
+ * its own "Checking the runner…" placeholder. A runner that accepts the
+ * TCP connection but never answers used to leave the whole page blank
+ * (`render()` awaited `buildStatusSection()` before mounting anything at
+ * all): #app now always has real, interactive content on the very first
+ * paint.
+ */
 async function render(): Promise<void> {
   const pairing = await buildPairingSection();
-  const status = await buildStatusSection();
   const lastCapture = await getLastJobCapture();
   const fileBridge = fileBridgeSection(lastCapture !== null);
 
@@ -338,10 +513,23 @@ async function render(): Promise<void> {
       el("h1", { text: "Job Assistant" }),
       el("span", { className: "small", text: "Pairing, runner status, and the file-bridge fallback." }),
       pairing,
-      status,
+      buildStatusPlaceholder(),
       fileBridge,
+      // E4 (mvp-spec §7.5): storage.session's lifetime is tied to this
+      // browser staying open -- quitting Chrome forgets the pairing, by
+      // design, not a bug to file.
+      el("p", { className: "small", text: "Pairing lives only in this browser session — quitting Chrome un-pairs it." }),
     ]),
   );
+
+  await refreshStatusSection();
+
+  // B10: re-check on refocus (e.g. the runner was started, then this tab
+  // was switched back to), in addition to the explicit "Check again"
+  // button inside the Status section itself.
+  window.addEventListener("focus", () => {
+    void refreshStatusSection();
+  });
 }
 
 void render();

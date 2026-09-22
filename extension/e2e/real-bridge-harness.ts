@@ -84,11 +84,22 @@ export async function cleanScratchWorkspaces(): Promise<void> {
  * singleton) able to hold a token this process picked, not
  * `chrome.storage.session`. Only for the Node-side pairing helper below --
  * `bridge-e2e.spec.ts`'s real UI-driving tests use the extension's actual
- * `bridgeClient` singleton via the real pages, never this. */
+ * `bridgeClient` singleton via the real pages, never this.
+ *
+ * `onTokenInvalid`/`onOriginMismatch` (P07-B revision 1, B3) default to
+ * `shared/storage.ts`'s real `chrome.storage.session`-backed functions,
+ * which don't exist in this file's plain Node environment -- both are
+ * no-ops here on purpose: this helper never held a token in
+ * `chrome.storage` to begin with (see above), so there's nothing for
+ * either hook to clear/flag, and the vitest gate tests that drive 401/403
+ * through this client assert on the HTTP response itself, not any
+ * storage side effect. */
 export function clientForOrigin(baseUrl: string, origin: string, token: string | null): BridgeClient {
   return createBridgeClient({
     baseUrl,
     getToken: () => Promise.resolve(token ? { token } : null),
+    onTokenInvalid: () => Promise.resolve(),
+    onOriginMismatch: () => Promise.resolve(),
   });
 }
 
