@@ -134,6 +134,28 @@ export class OneTimeCodes {
     return out;
   }
 
+  /**
+   * Withdraws every outstanding code issued at or before `instant`. Each is
+   * claimed the way redeem claims it, so a code is either redeemed or
+   * withdrawn, never both. Returns how many were withdrawn.
+   */
+  async revokeIssuedAtOrBefore(instant: Date): Promise<number> {
+    let revoked = 0;
+    for (const { name, record } of await this.#records()) {
+      if (!record || new Date(record.createdAt).getTime() > instant.getTime()) continue;
+      const file = await this.#path(name);
+      const claimed = `${file}.${randomBytes(8).toString("hex")}${CLAIM_SUFFIX}`;
+      try {
+        await rename(file, claimed);
+      } catch {
+        continue; // redeemed or withdrawn meanwhile
+      }
+      await unlink(claimed).catch(() => undefined);
+      revoked += 1;
+    }
+    return revoked;
+  }
+
   /** How many codes can still be redeemed. */
   async outstanding(): Promise<number> {
     const now = this.#clock.now().getTime();

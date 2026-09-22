@@ -65,6 +65,11 @@ export class PairingCodes {
     return this.#codes.outstanding();
   }
 
+  /** Withdraws every outstanding code issued at or before `instant` (the bridge's guess budget). */
+  revokeIssuedAtOrBefore(instant: Date): Promise<number> {
+    return this.#codes.revokeIssuedAtOrBefore(instant);
+  }
+
   purgeExpired(): Promise<void> {
     return this.#codes.purgeExpired();
   }

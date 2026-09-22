@@ -57,21 +57,46 @@ export interface ExtensionApiOptions {
   readonly modules: readonly LoadedRouteModule[];
 }
 
-/** Most origins the throttle tracks at once; past it, the oldest is forgotten. */
+/**
+ * Wrong codes one pairing code may absorb, from all origins together, before
+ * it is withdrawn. The per-origin window below is only for fairness: a local
+ * process can send any extension origin it likes, so the window alone would
+ * give it 10 guesses per made-up origin. This budget is what bounds guessing.
+ */
+export const PAIR_CODE_GUESS_BUDGET = 100;
+
+/** Most origins the per-origin window tracks at once; past it, the oldest is forgotten. That only affects fairness, never the budget. */
 const PAIR_THROTTLE_MAX_ORIGINS = 1_000;
 
 /**
- * Failed pairing attempts in a sliding window, per extension origin, so one
- * extension's wrong codes never lock another out. An origin at the limit gets
- * 429 without its code being checked, so each origin holds at most
- * PAIR_FAILURE_LIMIT timestamps.
+ * Wrong pairing codes, counted two ways.
+ * - Per origin, in a sliding 10-minute window, so one extension's wrong codes
+ *   never lock another out. An origin at the limit gets 429 without its code
+ *   being checked, so each origin holds at most PAIR_FAILURE_LIMIT timestamps.
+ * - For all origins together: the times of the last PAIR_CODE_GUESS_BUDGET
+ *   wrong codes. A code issued at or before the oldest of them has absorbed
+ *   the whole budget and is withdrawn (see /pair). A code issued later starts
+ *   with a fresh budget, whichever process issued it.
  */
 class PairThrottle {
   readonly #failures = new Map<string, number[]>();
+  readonly #wrongCodes: number[] = [];
   readonly #ctx: RunnerContext;
 
   constructor(ctx: RunnerContext) {
     this.#ctx = ctx;
+  }
+
+  /**
+   * Records a wrong code against every outstanding code. Returns the instant
+   * from which the last PAIR_CODE_GUESS_BUDGET wrong codes were tried: every
+   * code issued at or before it has absorbed the whole budget. Undefined while
+   * fewer have been tried.
+   */
+  wrongCode(): Date | undefined {
+    this.#wrongCodes.push(this.#ctx.clock.now().getTime());
+    if (this.#wrongCodes.length > PAIR_CODE_GUESS_BUDGET) this.#wrongCodes.shift();
+    return this.#wrongCodes.length >= PAIR_CODE_GUESS_BUDGET ? new Date(this.#wrongCodes[0] ?? 0) : undefined;
   }
 
   #prune(now: number): void {
@@ -217,9 +242,22 @@ export function extensionApi(options: ExtensionApiOptions): Hono {
     const redeemed = await ctx.pairing.redeem(parsed.data.code);
     if (redeemed !== "ok") {
       throttle.fail(origin);
-      return redeemed === "expired"
-        ? errorResponse(401, "pairing_code_expired", "This pairing code has expired (codes last 10 minutes). Run `npm run pair` for a new one.", cors)
-        : errorResponse(401, "pairing_code_invalid", "This pairing code is not valid or was already used. Run `npm run pair` for a new one.", cors);
+      if (redeemed === "expired") {
+        return errorResponse(401, "pairing_code_expired", "This pairing code has expired (codes last 10 minutes). Run `npm run pair` for a new one.", cors);
+      }
+      // A wrong code is a guess at every outstanding code. Withdraw each code
+      // that has now absorbed the whole budget.
+      const spentSince = throttle.wrongCode();
+      if (spentSince) {
+        const revoked = await ctx.pairing.revokeIssuedAtOrBefore(spentSince);
+        if (revoked > 0) ctx.log.warn(`Withdrew ${revoked} pairing code(s) after ${PAIR_CODE_GUESS_BUDGET} wrong codes. \`npm run pair\` issues a new one.`);
+      }
+      return errorResponse(
+        401,
+        "pairing_code_invalid",
+        "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run `npm run pair` for a new one.",
+        cors,
+      );
     }
     const { device, token } = await ctx.devices.register(origin);
     ctx.log.info(`Paired device ${device.deviceId} (${origin}).`);

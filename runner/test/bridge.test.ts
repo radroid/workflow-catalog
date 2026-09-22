@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_BRIDGE_BODY_BYTES, commandsResponseSchema, statusResponseSchema, type OpenApplicationGroup } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { MINUTE_MS } from "../lib/clock.ts";
-import { PAIR_FAILURE_LIMIT } from "../server/extension-api.ts";
+import { PAIR_CODE_GUESS_BUDGET, PAIR_FAILURE_LIMIT } from "../server/extension-api.ts";
 import { defineRouteModule, EventRejectedError, type LoadedRouteModule } from "../server/route-modules.ts";
 import { EXTENSION_ORIGIN, OTHER_EXTENSION_ORIGIN, authed, jobCapture, makeBridge, pairDevice, postEvent } from "./helpers.ts";
 
@@ -251,6 +251,86 @@ describe("bridge: POST /pair", () => {
       expect((await send(code, EXTENSION_ORIGIN)).status).toBe(200);
       bridge.clock.advance(10 * MINUTE_MS);
     }
+  });
+
+  /** A well-formed extension origin per index: its hex digits written in Chrome's ID alphabet, a–p. */
+  function extensionOrigin(index: number): string {
+    const id = index
+      .toString(16)
+      .padStart(32, "0")
+      .replace(/[0-9a-f]/g, (digit) => "abcdefghijklmnop".charAt(parseInt(digit, 16)));
+    return `chrome-extension://${id}`;
+  }
+
+  const WRONG = "ZZZZZ-ZZZZZ";
+
+  it(`lets one code absorb at most ${PAIR_CODE_GUESS_BUDGET} wrong codes, from any number of origins`, async () => {
+    const bridge = await makeBridge();
+    const send = (code: string, origin: string) =>
+      bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    const { code } = await bridge.ctx.pairing.issue();
+    // More distinct origins than the per-origin window tracks, one wrong code each.
+    let triedWhileValid = 0;
+    for (let index = 1; index <= 1_100; index += 1) {
+      bridge.clock.advance(1);
+      if ((await bridge.ctx.pairing.outstanding()) > 0) triedWhileValid += 1;
+      expect((await send(WRONG, extensionOrigin(index))).status).toBe(401);
+    }
+    expect(triedWhileValid).toBe(PAIR_CODE_GUESS_BUDGET);
+    // The code was withdrawn: now even the right code is refused.
+    const refused = await send(code, EXTENSION_ORIGIN);
+    expect(refused.status).toBe(401);
+    expect((await errorOf(refused)).message).toContain("withdrawn after too many wrong tries");
+    // A code issued afterwards starts with a fresh budget and pairs normally.
+    bridge.clock.advance(1);
+    const fresh = await bridge.ctx.pairing.issue();
+    expect((await send(fresh.code, EXTENSION_ORIGIN)).status).toBe(200);
+  });
+
+  it("keeps a budget per code: an older code is withdrawn while a newer one keeps its own", async () => {
+    const bridge = await makeBridge();
+    const send = (code: string, origin: string) =>
+      bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    const older = await bridge.ctx.pairing.issue();
+    for (let index = 1; index <= 60; index += 1) {
+      bridge.clock.advance(1);
+      await send(WRONG, extensionOrigin(index));
+    }
+    bridge.clock.advance(1);
+    const newer = await bridge.ctx.pairing.issue(); // as `npm run pair` would, from another process
+    for (let index = 61; index <= PAIR_CODE_GUESS_BUDGET; index += 1) {
+      bridge.clock.advance(1);
+      await send(WRONG, extensionOrigin(index));
+    }
+    // The older code absorbed 100 wrong codes, the newer only 40.
+    expect(await bridge.ctx.pairing.outstanding()).toBe(1);
+    expect((await send(older.code, EXTENSION_ORIGIN)).status).toBe(401);
+    expect((await send(newer.code, EXTENSION_ORIGIN)).status).toBe(200);
+  });
+
+  it("refuses a malformed origin before the throttle, so it never counts against a code", async () => {
+    const bridge = await makeBridge();
+    const { code } = await bridge.ctx.pairing.issue();
+    const malformed = [
+      "chrome-extension://ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP",
+      "chrome-extension://abcdefghijklmnopabcdefghijklmno",
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnopa",
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnoq",
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnop:443",
+      "moz-extension://abcdefghijklmnopabcdefghijklmnop",
+      "null",
+    ];
+    for (let round = 0; round < 20; round += 1) {
+      for (const origin of malformed) {
+        const response = await bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code: WRONG }) });
+        expect(response.status, origin).toBe(403);
+      }
+    }
+    // 160 refused attempts: more than the budget, yet the code is untouched.
+    expect(await bridge.ctx.pairing.outstanding()).toBe(1);
+    const paired = await bridge.request("/pair", { method: "POST", headers: { origin: EXTENSION_ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    expect(paired.status).toBe(200);
   });
 });
 
