@@ -1,0 +1,21 @@
+@import "../shared/base.css";
+
+body {
+  width: 380px;
+}
+
+.popup {
+  padding: 14px;
+}
+
+.popup h1 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}

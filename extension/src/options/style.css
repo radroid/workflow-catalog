@@ -1,0 +1,87 @@
+@import "../shared/base.css";
+
+.wrap {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 32px 20px 60px;
+}
+
+.wrap h1 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+
+.wrap > .small {
+  margin-bottom: 24px;
+  display: block;
+}
+
+section {
+  margin-bottom: 20px;
+}
+
+section h2 {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+
+.field {
+  display: flex;
+  gap: 8px;
+}
+
+.field input[type="text"] {
+  flex: 1;
+}
+
+.item-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.item-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.item-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.item-row .url {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+
+details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+details pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin: 8px 0 0;
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--foreground);
+}
