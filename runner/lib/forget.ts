@@ -56,7 +56,7 @@ async function exists(target: string): Promise<boolean> {
 }
 
 export const RUNNER_LOCAL_STATE: ReadonlyArray<readonly [string, string]> = [
-  [".eve", "eve's local state and build (session content, traces)"],
+  [".eve", "eve's local state and build: session content and traces"],
   [".output", "eve's built server"],
   [".nitro", "eve's build cache"],
   [path.join("eval-agent", ".eve"), "the eval fixture's eve state"],

@@ -356,7 +356,8 @@ after a confirmation (or with `--yes`):
 - the runner's keychain entries
 
 It also lists **eve's own sign-in**, which is shared by every eve project on
-the computer, and removes it too:
+the computer, and asks separately before removing it (default no). `--yes`
+never removes it; only an answer in a terminal does:
 
 - the keychain entries under service `eve`: `chatgpt`, `openai-key`,
   `anthropic-key`, `ai-gateway-key`, `vercel`

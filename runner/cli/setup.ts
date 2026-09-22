@@ -20,7 +20,8 @@ const USAGE = `npm run setup [-- options]
   --forget               remove everything the runner stored (asks first)
     --keep-workspace     ...but keep the workspace folder
     --dry-run            ...only list what would be removed
-    --yes                ...without asking`;
+    --yes                ...without asking (eve's shared sign-in is kept:
+                         it goes only on its own answer in a terminal)`;
 
 async function forget(flags: Record<string, string | boolean | undefined>): Promise<void> {
   const secrets = createOsSecretStore();
@@ -45,12 +46,19 @@ async function forget(flags: Record<string, string | boolean | undefined>): Prom
   }
   for (const note of plan.notes) console.log(`Note: ${note}`);
   if (flags["dry-run"] === true || plan.items.length === 0) return;
-  const confirmed = flags.yes === true || (process.stdin.isTTY && (await terminalPrompter().confirm("Remove all of the above?", false)));
-  if (!confirmed) {
+  const interactive = process.stdin.isTTY === true && flags.yes !== true;
+  const prompter = terminalPrompter();
+  const removeRunner = runnerItems.length > 0 && (flags.yes === true || (interactive && (await prompter.confirm("Remove what the runner stored?", false))));
+  // eve's sign-in is shared with every other eve project on this computer, so
+  // it goes only on its own answer in a terminal, never on --yes.
+  const removeEve = eveItems.length > 0 && interactive && (await prompter.confirm("Also remove eve's sign-in? Other eve projects here would have to sign in again.", false));
+  if (eveItems.length > 0 && !removeEve) console.log("Kept eve's sign-in. Run `npm run setup -- --forget` in a terminal to be asked about it.");
+  const chosen = plan.items.filter((item) => (item.owner === "runner" ? removeRunner : removeEve));
+  if (chosen.length === 0) {
     console.log("Nothing removed.");
     return;
   }
-  const outcome = await executeForget(plan, secrets);
+  const outcome = await executeForget({ items: chosen, notes: plan.notes }, secrets);
   for (const label of outcome.removed) console.log(`Removed ${label}`);
   for (const { label, error } of outcome.failed) console.error(`Could not remove ${label}: ${error}`);
   if (outcome.failed.length > 0) process.exitCode = 1;
