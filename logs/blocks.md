@@ -606,3 +606,171 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 **Action taken:**
 - The owner re-kicked at 09:52. All three agents resumed with SendMessage, keeping their context, and were told to commit and push each green slice at once.
 - P03's new helper files under `runner/agent/lib/` (onboarding-store, extract-claims-schema, ask-follow-up-schema) are approved as new files; P02's files there stay untouched.
+
+## 2026-09-22 — P09.1 peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 004
+**Source:** peer-review
+**Severity:** medium
+
+**Charter / context:** Opus reviewer and UI critic re-checked PR #10 at bc516db, after the Sonnet implementer's one revision round.
+**Verdict text / failure detail:**
+- Reviewer: VERDICT: REVISE — 3 issues.
+  - Confirmed in the real Next runtime: every oversized response closes at 5,120 bytes, including background refreshes. The drift test catches all earlier mutations. The merge is green (catalog 162 tests).
+  1. `unstable_cache` stores the `{kind:"error"}` result, so one 500 shows "temporarily unavailable" for up to an hour. A failed refresh also hides a published checksum.
+  2. "All seven should be green" is wrong: Provider stays `[warn]` until `doctor --live`.
+  3. The build-extension note is wrong about `runner/` and about exit codes.
+- UI critic: VERDICT: REVISE — 1 issue.
+  - All seven round-1 issues are fixed; axe reports 0 violations.
+  - Issue: the re-shot screenshots show the signed-in name "Jordan Rivera", and the report names it. The fixtures policy allows only Ada Quill, Sam Fernwood and Ravi Harbor, and `check:fixtures` cannot read images.
+  - Small fixes:
+    - a `#` comment line inside a copyable block;
+    - a stale README dev address;
+    - the wording of the pairing step.
+- Owner note from the critic: `corepack enable` and `npm install -g` need write access to the Node install folder. That folder is root-owned when Node comes from the nodejs.org installer, so both may fail on a clean macOS account. Cover it in the F3 clean-account test.
+
+**Action taken:**
+- A second REVISE after the one round goes to a fresh Opus implementer (as with P01, P07-A and P02). Its scope: errors thrown inside the cache so they are never cached, Ada Quill screenshots, and the wording fixes.
+- The old worktree was pruned; local and remote were identical at bc516db.
+
+## 2026-09-22 — P09.1 peer review, round 3 [APPROVE]
+
+**Iter:** 004
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** The Opus reviewer and the UI critic re-checked PR #10 at d342160, after the Opus escalation.
+**Verdict text / failure detail:**
+- Reviewer: VERDICT: APPROVE.
+  - Two mutations each fail `release-cache.test.ts`: returning the error instead of throwing it, and dropping the wrapper's catch.
+  - A real `next dev` probe confirmed the cache behaviour:
+    - repeated 500s are never cached;
+    - an error followed by success recovers;
+    - a 404 is cached as `not_found`;
+    - an oversized refresh closes at 5,120 bytes and the result stays "found".
+  - The doctor and build notes match `runner/lib/doctor.ts`.
+  - There is no "Jordan" or "Rivera" anywhere in the tree.
+- UI critic: VERDICT: APPROVE. Ada Quill appears on all 8 screenshots.
+  - Polish left open:
+    - the Corepack command is repeated three times;
+    - inline commands break mid-command, and `@workflow-catalog/extension` breaks at the hyphen;
+    - the right-click icon step may not work while the extension is hidden in the puzzle menu.
+
+**Action taken:** squash-merged as 61f0e2d, P09.1 set to done, and GOALS P2.F ticked. The polish is noted for P10-A's docs pass.
+
+## 2026-09-22 — P03 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 004
+**Source:** peer-review
+**Severity:** high
+
+**Charter / context:** The Opus reviewer and the UI critic reviewed PR #11 at 3774f75: onboarding, the career profile, the extraction eval and the local UI pages.
+**Verdict text / failure detail:**
+- Reviewer: VERDICT: REVISE — 11 issues.
+  - Chain green at the head (runner 170 tests, 5 evals, 41 gates) and merged onto f06688b.
+  - Issues:
+    1. Approval versions are reused, and accepting a revision re-approves without `approve()`.
+    2. Disputes, answers and POST /markdown boundary edits change approved content with no withdrawal or revision.
+    3. The extraction route reports `ok` for failed turns and for turns parked on an input request, and it has no timeout.
+    4. Eight named mutations leave every test green, and there is no HTTP test of `/api/onboarding`.
+    5. The eval runs code copies of the tools. The quote check can be replaced by `if (true)` and the eval stays green.
+    6. `ask_follow_up` is untested, and a freeform answer excludes the claim.
+    7. Extraction is not idempotent per source content hash.
+    8. The markdown round trip loses multi-line text.
+    9. URL, GitHub-token and upload sources are missing and unreported.
+    10. `career-profile.md` is never written.
+    11. The report is inaccurate: out-of-Owns files are unlisted and the eve lesson is wrong.
+  - Probes:
+    - Across app roots, a re-exported workflow tool fails discovery and an imported `"use step"` fails at run time. Within one root, imports work.
+    - Upload paths stay confined.
+- UI critic: VERDICT: REVISE — 10 issues.
+  - Focus is lost after every action, and outcomes aren't announced.
+  - Readiness doesn't match the walkthrough.
+  - Approve can re-approve.
+  - Amber marks the wrong states, and raw ids appear.
+  - Badges overflow at 390, and `.error` contrast is 3.85:1.
+  - Source controls lack context, and evidence is never shown.
+  - Spec gaps: Preferences can't be recorded, and Unavailable/N/A have no reason field.
+
+**Action taken:** one combined revision message went to the same Sonnet implementer. Orchestrator decisions:
+- **D1:** approved as additions to P03's Owns:
+  - `runner/store/profile-{types,reducer,questions,markdown}.ts` (the split of `profile.ts`);
+  - the eval-agent registry and fixture files;
+  - new runner tests;
+  - `route-modules.test.ts`, for D2 only.
+- **D2:** `route-modules.test.ts` becomes readdir-based, with registry keys equal to the declared events, so P04, P06, P08 and P10 never edit it.
+- **D3:** this round adds TXT/MD upload, reasons for Unavailable/N/A, and Preferences. PDF/DOCX extraction, URL import and the GitHub token move to a new packet, **P03.1**, which is blocked by P03 and P04 and reuses P04's safe-fetch.
+- **D4:** deferring eve HITL in the route is accepted for F4, because the question persists and the claim stays disputed.
+- **D5:** multi-line text is fixed in the markdown format; `packages/contracts` stays untouched.
+- **D6:** the eve cross-root facts go into `eve-runtime.md` (orchestrator).
+- **D7:** "Acme" in a test is replaced with a policy name.
+
+## 2026-09-22 — P07-B peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 004
+**Source:** peer-review
+**Severity:** medium
+
+**Charter / context:** The Opus reviewer and the UI critic reviewed PR #12 at 2e3b52d: pairing and `job_capture` against the bridge, the outbox, and the CI extension step.
+**Verdict text / failure detail:**
+- Reviewer: VERDICT: REVISE — 6 issues.
+  - What holds:
+    - the manifest permissions are exactly six;
+    - the token lives only in `storage.session`;
+    - the outbox reuses `eventId`, re-arms its alarm, and counts `duplicate: true` as success;
+    - planted regressions fail gates 4 and 9;
+    - the merge is green (e2e 19/19 twice).
+  - Issues:
+    1. `pnpm test` needs port 4310 free: the realbridge suite failed 11/11 while another harness held it.
+    2. An outbox flush race drops a queued capture.
+    3. Every refusal reads "isn't reachable", while other 4xx errors retry forever.
+    4. CI skips the two `dist/` tests.
+    5. Three test files sit outside typecheck and hide a real error.
+    6. There is no fetch timeout, and any 200 empties the outbox.
+- UI critic: VERDICT: REVISE — 10 issues.
+  - A runner that never answers leaves stuck states and a blank options page.
+  - 401 and 403 get a false "isn't reachable" message.
+  - Focus is lost and announcements are missing.
+  - The invalid-code style appears on runner-down and 429 errors, and Retry-After is ignored.
+  - The eyebrow renders at weight 700.
+  - The pairing shows as still paired after a revoke.
+  - There is no "Check again".
+  - A queued capture is never reported.
+  - The not-paired message has no Open settings button.
+  - The label names `npm run setup`, where it should be `npm run pair`.
+  - Axe reported 0 violations in 34 runs.
+
+**Action taken:** one combined, deduplicated revision (B1–B12) went to the same Sonnet implementer. Orchestrator decisions:
+- **E1:** the file bridge is a fallback, per the P07 deliverable. Nothing downloads when the bridge accepts a capture, and "Save as a file" stays available as an explicit action.
+- **E2:** a capture made while unpaired is queued and sent once pairing succeeds.
+- **E3:** the label names `npm run pair`.
+- **E4:** the options page says that quitting Chrome unpairs the browser (spec §7.5).
+- Owner note (P07-C and Settings): every re-pair leaves another device record on the runner.
+
+## 2026-09-22 — Loop paused by the owner [PAUSED]
+
+**Iter:** 005 (in progress)
+**Source:** owner
+**Severity:** info
+
+**Charter / context:** at about 13:05 the owner paused the loop to switch the orchestrator to a different model. The full handoff is in `logs/handoff/2026-09-22-pause.md`.
+
+**What happened at the pause:**
+- The pending wake-up was cancelled.
+- All five subagents were asked to save their work and stop, and all five have stopped:
+  - **P03 (#11):** revision 1 completed at 9584e93.
+  - **P07-B (#12):** the implementer stopped clean at 6da1a83. The reviewer and UI critic stopped round 2 with partial findings, saved in `logs/handoff/P07-B-round-2-review.md`: 5 reviewer outbox and test issues, and 5 UI issues.
+  - **P07-B CI:** red at 6da1a83. The dark-popup screenshot guard in `real-popup.spec.ts:140` fails; it has been red since 339c38d.
+  - **P08-A:** a claim only (6024f0f). Its report holds the design and the eve facts.
+- The exact instructions for each in-flight agent are saved under `logs/handoff/`.
+
+**Process slips (P03 implementer):**
+- It treated the genuine PAUSE message as a prompt injection and finished its revision instead of stopping. P07-A did the same in iter 003.
+- It ran a screenshot seed server on 4310 instead of its assigned 4320, which broke the UI critic's dark run.
+- Its MCP browser screenshots landed in the main checkout: six files, moved to `/tmp/wc-stray-main-checkout/`.
+- Its final report says D7 was not done, but commit e698182 did it.
+
+**Action taken:**
+- `.loop/state.json` is marked `stage_status: paused`, with a pointer to the handoff.
+- `logs/latest.md` is rewritten as the resume handoff.
+- PR #2 is updated. Nothing merged during iter 005.

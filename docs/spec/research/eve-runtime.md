@@ -258,6 +258,17 @@ export default eveChannel({
 11. **Vercel-centric integrations:** Vercel Connect OAuth, File memory (Vercel Blob), GitHub channel, Web Chat installer all assume `eve link`/a Vercel project. ([connections], [memory-file], [github-channel])
 12. **Single durable data dir:** `.eve/.workflow-data` inside the project; deleting the project directory loses sessions. ([self-hosting])
 13. **Responsible-use posture:** "Unless you configure stricter controls, eve agents may operate with permissive settings, including tool execution without human approval where approval is omitted." Job applications are "employment" actions the docs explicitly say should require approval. ([responsible-use])
+14. **Directives compile per app root.** This is not in the docs. It was verified by probe at eve@0.63.0 during the P03 review (2026-09-22; logs/blocks.md, "P03 peer review, round 1").
+    - `"use workflow"` and `"use step"` are compiled and registered only for modules inside the app root being built (`runner/agent` or `runner/eval-agent/agent`).
+    - Within one root, imports work, including an imported `"use workflow"` executor and separate step modules.
+    - Across roots, the directives fail:
+      - Re-exporting a workflow tool from another root fails discovery: "requires a compiled workflow executor".
+      - Importing a `"use step"` function from another root builds, then fails at run time: `Step "step//./…" is not registered`.
+      - A directive-free helper imported from another root and called from a local step works.
+    - Pattern:
+      - Share logic in directive-free modules under `runner/agent/lib/`.
+      - Keep a thin executor and step wrapper in each root.
+      - Never re-export or copy a tool's logic into the eval agent. Evals must exercise the shared helper, not a copy.
 
 **Recommended pin (read 2026-09-20):** `"eve": "0.63.0"` exact (no caret), `"ai"` and `"zod"` at whatever `eve init` writes for 0.63.0, Node `24` in `.nvmrc`/`engines`, and read docs from `node_modules/eve/docs` at that version rather than `main`. Re-evaluate the pin deliberately; do not float `eve@latest` in the template.
 

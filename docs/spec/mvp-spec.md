@@ -85,6 +85,7 @@ applications/<taskId>.json        { jobId, stage, revision, documents[], notes, 
 applications/<taskId>/docs/       resume-v<n>.md/.docx/.pdf, cover-v<n>.*, diff-v<n>.md
 sessions/<sessionId>.json         session manifest (below)
 runs/<date>/<runId>.json          run log records
+runs/budget.json                  daily run limit, per-run item cap, and the pause with its reason; survives restart (P08)
 outbox/, inbox/                   file-bridge fallback: job-capture.json out of the extension, application-session.json into it
 .runner/                          the bridge's own state (P02): devices/ (token hashes, paired origin, expiry), pairing/ and ui-login/ (hashed one-time codes), events/ (the event journal; holds captured job text, so personal), commands/ (the GET /commands queue), model-check.json
 ```
