@@ -183,8 +183,9 @@ Identity comes from the token: events carry no `deviceId`, by design.
   `7KQ2M-X9RTB`. It is 10 characters of Crockford base32 (about 50 bits),
   lasts 10 minutes and works once. Only its hash is stored. `/pair` accepts
   only a `chrome-extension://<32 letters a-p>` origin, which becomes the
-  device's origin. After 10 wrong codes in 10 minutes, `/pair` answers 429.
-  Revoking a device (status page, or `POST /api/devices/<id>/revoke`)
+  device's origin. After 10 wrong codes in 10 minutes from one origin,
+  `/pair` answers that origin 429. The count is per origin, so another
+  extension's wrong codes never lock this one out. Revoking a device (status page, or `POST /api/devices/<id>/revoke`)
   deletes it, and its token fails on the next request.
 - **Replay.** Every event is journaled once per `eventId`
   (`.runner/events/`), using an exclusive create. A replay gets the stored

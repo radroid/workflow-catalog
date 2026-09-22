@@ -57,9 +57,17 @@ export interface ExtensionApiOptions {
   readonly modules: readonly LoadedRouteModule[];
 }
 
-/** Failed pairing attempts in a sliding window, for all origins together. */
+/** Most origins the throttle tracks at once; past it, the oldest is forgotten. */
+const PAIR_THROTTLE_MAX_ORIGINS = 1_000;
+
+/**
+ * Failed pairing attempts in a sliding window, per extension origin, so one
+ * extension's wrong codes never lock another out. An origin at the limit gets
+ * 429 without its code being checked, so each origin holds at most
+ * PAIR_FAILURE_LIMIT timestamps.
+ */
 class PairThrottle {
-  readonly #failures: number[] = [];
+  readonly #failures = new Map<string, number[]>();
   readonly #ctx: RunnerContext;
 
   constructor(ctx: RunnerContext) {
@@ -67,19 +75,30 @@ class PairThrottle {
   }
 
   #prune(now: number): void {
-    while (this.#failures.length > 0 && (this.#failures[0] ?? 0) <= now - PAIR_FAILURE_WINDOW_MS) this.#failures.shift();
+    for (const [origin, times] of this.#failures) {
+      while (times.length > 0 && (times[0] ?? 0) <= now - PAIR_FAILURE_WINDOW_MS) times.shift();
+      if (times.length === 0) this.#failures.delete(origin);
+    }
   }
 
-  /** Seconds to wait, or 0 when attempts are allowed. */
-  retryAfterSeconds(): number {
+  /** Seconds `origin` must wait, or 0 when it may try a code. */
+  retryAfterSeconds(origin: string): number {
     const now = this.#ctx.clock.now().getTime();
     this.#prune(now);
-    if (this.#failures.length < PAIR_FAILURE_LIMIT) return 0;
-    return Math.max(1, Math.ceil(((this.#failures[0] ?? now) + PAIR_FAILURE_WINDOW_MS - now) / 1000));
+    const times = this.#failures.get(origin) ?? [];
+    if (times.length < PAIR_FAILURE_LIMIT) return 0;
+    return Math.max(1, Math.ceil(((times[0] ?? now) + PAIR_FAILURE_WINDOW_MS - now) / 1000));
   }
 
-  fail(): void {
-    this.#failures.push(this.#ctx.clock.now().getTime());
+  fail(origin: string): void {
+    const times = this.#failures.get(origin) ?? [];
+    times.push(this.#ctx.clock.now().getTime());
+    this.#failures.delete(origin);
+    this.#failures.set(origin, times);
+    if (this.#failures.size > PAIR_THROTTLE_MAX_ORIGINS) {
+      const oldest = this.#failures.keys().next().value;
+      if (oldest !== undefined) this.#failures.delete(oldest);
+    }
   }
 }
 
@@ -184,7 +203,7 @@ export function extensionApi(options: ExtensionApiOptions): Hono {
       return errorResponse(403, "origin_not_allowed", "Pairing is only accepted from a Chrome extension (Origin chrome-extension://<id>).");
     }
     const cors = responseCors(origin);
-    const retryAfter = throttle.retryAfterSeconds();
+    const retryAfter = throttle.retryAfterSeconds(origin);
     if (retryAfter > 0) {
       return errorResponse(429, "too_many_attempts", "Too many wrong pairing codes. Wait, then issue a new code with `npm run pair`.", {
         ...cors,
@@ -197,7 +216,7 @@ export function extensionApi(options: ExtensionApiOptions): Hono {
     if (!parsed.success) return validationErrorResponse(parsed.error, cors);
     const redeemed = await ctx.pairing.redeem(parsed.data.code);
     if (redeemed !== "ok") {
-      throttle.fail();
+      throttle.fail(origin);
       return redeemed === "expired"
         ? errorResponse(401, "pairing_code_expired", "This pairing code has expired (codes last 10 minutes). Run `npm run pair` for a new one.", cors)
         : errorResponse(401, "pairing_code_invalid", "This pairing code is not valid or was already used. Run `npm run pair` for a new one.", cors);

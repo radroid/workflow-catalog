@@ -237,6 +237,21 @@ describe("bridge: POST /pair", () => {
     const fresh = await bridge.ctx.pairing.issue();
     expect((await send(fresh.code)).status).toBe(200);
   });
+
+  it("counts wrong codes per origin: another extension's failures do not block a valid code", async () => {
+    const bridge = await makeBridge();
+    const send = (code: string, origin: string) =>
+      bridge.request("/pair", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    for (let round = 0; round < 3; round += 1) {
+      for (let i = 0; i < PAIR_FAILURE_LIMIT; i += 1) expect((await send(i % 2 === 0 ? "x" : "ZZZZZ-ZZZZZ", OTHER_EXTENSION_ORIGIN)).status).toBe(401);
+      const { code } = await bridge.ctx.pairing.issue();
+      // The failing origin is held, without using up the code...
+      expect((await send(code, OTHER_EXTENSION_ORIGIN)).status).toBe(429);
+      // ...and the real extension pairs with it straight away.
+      expect((await send(code, EXTENSION_ORIGIN)).status).toBe(200);
+      bridge.clock.advance(10 * MINUTE_MS);
+    }
+  });
 });
 
 describe("bridge: POST /events", () => {
