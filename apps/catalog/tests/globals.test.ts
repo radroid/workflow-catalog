@@ -53,6 +53,27 @@ describe("catalog theme wiring", () => {
     expect(body).toMatch(/border:\s*1px solid var\(--border\)/);
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-sm\)/);
   });
+
+  it("gives buttons and links a themed :focus-visible ring, not the browser default", () => {
+    const ringRuleMatch = /(?:button|\.button|a):focus-visible[^{]*{([^}]*)}/.exec(globalsCss);
+    expect(ringRuleMatch, "expected a shared :focus-visible rule for buttons/links").not.toBeNull();
+    expect(ringRuleMatch?.[1]).toMatch(/outline:\s*2px solid var\(--ring\)/);
+  });
+
+  it("applies the ghost style to <a class=\"button ghost\"> links, not just <button class=\"ghost\">", () => {
+    const ghostRuleMatch = /button\.ghost,\s*\n?\s*\.button\.ghost\s*{([^}]*)}/.exec(globalsCss);
+    expect(ghostRuleMatch, "expected a combined button.ghost, .button.ghost rule").not.toBeNull();
+    expect(ghostRuleMatch?.[1]).toMatch(/background:\s*transparent/);
+  });
+
+  it("wraps command-block text instead of relying on horizontal scroll", () => {
+    const commandBlockMatch = /pre\.command-block\s*{([^}]*)}/.exec(globalsCss);
+    expect(commandBlockMatch).not.toBeNull();
+    const body = commandBlockMatch?.[1] ?? "";
+    expect(body).toMatch(/white-space:\s*pre-wrap/);
+    expect(body).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(body).not.toMatch(/overflow-x:\s*auto/);
+  });
 });
 
 describe("app icon", () => {

@@ -50,7 +50,19 @@ export default async function InstallPage() {
               <form action={toggleInstallItemAction}>
                 <input type="hidden" name="item" value={item.id} />
                 <input type="hidden" name="checked" value={isChecked ? "false" : "true"} />
+                {/* A visually hidden, item-specific prefix makes each button's
+                    accessible name distinct (a screen reader announces e.g.
+                    "Node 24 present — Mark done, not pressed" instead of three
+                    indistinguishable "Mark done" buttons), while the accessible
+                    name still *contains* the visible text verbatim — satisfying
+                    WCAG 2.5.3 Label in Name, which a first attempt using
+                    aria-label (replacing the text outright, rather than
+                    prefixing it) failed: axe's label-content-name-mismatch
+                    flagged all five buttons once the visible "Mark done" text
+                    no longer appeared anywhere in the accessible name.
+                    aria-pressed still carries the boolean state. */}
                 <button type="submit" className="small" aria-pressed={isChecked}>
+                  <span className="visually-hidden">{item.label} — </span>
                   {isChecked ? "Undo" : "Mark done"}
                 </button>
               </form>

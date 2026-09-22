@@ -5,6 +5,7 @@ import { ADMIN_FLASH_INVITE_COOKIE } from "../../lib/admin-flash";
 import { createInviteAction, dismissInviteFlashAction, ownerSignInAction, ownerSignOutAction } from "../../lib/actions/owner";
 import { getDb } from "../../lib/db";
 import { listInvites, MAX_INVITES } from "../../lib/invites";
+import { adminErrorMessage } from "../../lib/error-messages";
 
 export const metadata = { title: "Admin · workflow catalog" };
 
@@ -20,7 +21,8 @@ async function siteOrigin(): Promise<string> {
 }
 
 export default async function AdminPage({ searchParams }: AdminPageProps) {
-  const { error } = await searchParams;
+  const { error: errorCode } = await searchParams;
+  const error = adminErrorMessage(errorCode);
 
   let configError: string | null = null;
   try {
@@ -54,7 +56,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         <p className="lede">Enter the owner secret to create and manage invite links.</p>
 
         {error ? (
-          <div className="flash error">
+          <div id="admin-error" className="flash error" role="alert" tabIndex={-1} autoFocus>
             <span className="tag">Refused</span>
             {error}
           </div>
@@ -63,7 +65,15 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         <form action={ownerSignInAction} className="card pad">
           <div className="field">
             <label htmlFor="secret">Owner secret</label>
-            <input type="password" id="secret" name="secret" autoComplete="off" required />
+            <input
+              type="password"
+              id="secret"
+              name="secret"
+              autoComplete="off"
+              required
+              aria-invalid={errorCode === "wrong_secret" ? "true" : undefined}
+              aria-describedby={error ? "admin-error" : undefined}
+            />
           </div>
           <button type="submit" className="primary">
             Sign in
@@ -93,7 +103,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
       </div>
 
       {error ? (
-        <div className="flash error">
+        <div className="flash error" role="alert" tabIndex={-1} autoFocus>
           <span className="tag">Refused</span>
           {error}
         </div>
