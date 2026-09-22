@@ -59,7 +59,6 @@ describe("device token storage", () => {
     const token = {
       deviceId: "b6f3a5d2-6c2a-4b8a-8e2e-9a2f6b6b2b10",
       token: "opaque-device-token",
-      deviceName: "Ada's laptop",
       pairedAt: "2026-09-22T00:00:00.000Z",
     };
     await setDeviceToken(token);
@@ -70,7 +69,6 @@ describe("device token storage", () => {
     await setDeviceToken({
       deviceId: "b6f3a5d2-6c2a-4b8a-8e2e-9a2f6b6b2b10",
       token: "opaque-device-token",
-      deviceName: "Ada's laptop",
       pairedAt: "2026-09-22T00:00:00.000Z",
     });
     expect(Object.keys(fakeStorage._sessionData)).toContain("deviceToken");
@@ -81,7 +79,6 @@ describe("device token storage", () => {
     await setDeviceToken({
       deviceId: "b6f3a5d2-6c2a-4b8a-8e2e-9a2f6b6b2b10",
       token: "opaque-device-token",
-      deviceName: "Ada's laptop",
       pairedAt: "2026-09-22T00:00:00.000Z",
     });
     await clearDeviceToken();

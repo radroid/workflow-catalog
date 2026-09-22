@@ -93,6 +93,10 @@ p {
 }
 
 .kv {
+  /* Always a <dl> (options/main.ts, popup/render.ts) -- resets the UA
+   * stylesheet's default `dl { margin: 1em 0 }`, which otherwise added
+   * unwanted vertical space around every key/value block on both pages. */
+  margin: 0;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 4px 10px;
@@ -158,6 +162,16 @@ input[type="text"] {
   width: 100%;
 }
 
+/* Review fold-in: an invalid pairing code (empty, malformed, or refused by
+ * the bridge -- wrong/expired/withdrawn) gets a real border colour change,
+ * not just the field's paired <p role="status"> text -- someone scanning
+ * the form by eye, not reading every status line, should still see which
+ * field is wrong. Applies to any text input options/main.ts marks invalid,
+ * not just the pairing code specifically. */
+input[type="text"][aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
 .pill {
   display: inline-block;
   font-family: var(--font-mono);
@@ -200,6 +214,22 @@ input[type="text"] {
   max-height: 10em;
   overflow-y: auto;
   line-height: 1.5;
+  /* A visible scroll cue (UI critic fold-in, part A): a native scrollbar
+   * alone can be easy to miss -- an overlay scrollbar only appears on
+   * hover on some platforms, and there's nothing here besides it hinting
+   * that the excerpt continues past the fold. A soft inset shadow at the
+   * bottom edge, built from the same border token every card/input already
+   * borders with, reads as "there's more below" in both themes without a
+   * hard-coded colour. It's painted on the box itself, so -- unlike a
+   * background scrolling with the content -- it stays pinned at the edge
+   * regardless of scroll position. `scrollbar-gutter`/`scrollbar-color` are
+   * a Chrome 121+ progressive enhancement (this extension's floor is 120):
+   * unsupported means the property is simply ignored, not an error.
+   */
+  box-shadow: inset 0 -12px 10px -10px var(--border);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 .flash {

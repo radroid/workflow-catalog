@@ -26,11 +26,18 @@ import type { JobCapture } from "@workflow-catalog/contracts";
 const DEVICE_TOKEN_KEY = "deviceToken";
 const LAST_JOB_CAPTURE_KEY = "lastJobCapture";
 
+/**
+ * `PairResponse` (packages/contracts/src/bridge-http.ts) is `{ deviceId,
+ * token }` -- the bridge never issues a device name, so there is nothing to
+ * store here beyond the id itself. The options page shows an abbreviated
+ * `deviceId` for the paired state (P07 packet part B, deliverable 1); a
+ * contracts ask (a real device name in `PairResponse`, e.g. "Chrome on
+ * macOS") is flagged in this packet's report rather than invented
+ * client-side and silently treated as authoritative.
+ */
 export interface StoredDeviceToken {
   deviceId: string;
   token: string;
-  /** Shown in the options page so the person can recognize which browser/device this is — set at pairing time (part B; part A's pairing stub has no real device name yet). */
-  deviceName: string;
   pairedAt: string;
 }
 

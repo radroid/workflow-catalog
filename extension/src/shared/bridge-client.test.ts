@@ -1,47 +1,222 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stubBridgeClient } from "./bridge-client";
+import { BRIDGE_ORIGIN, createBridgeClient, type BridgeClient } from "./bridge-client";
+
+/** A fictional job_capture, contracts-shaped (see fixtures-policy.md). */
+const CAPTURE = {
+  protocol: 1 as const,
+  type: "job_capture" as const,
+  eventId: "b6f3a5d2-6c2a-4b8a-8e2e-9a2f6b6b2b10",
+  url: "https://jobs.example/postings/1",
+  text: "Backend Engineer — Quill, a fictional posting for tests.",
+  extractorVersion: "extractor@0.1.0",
+  contentHash: "a".repeat(64),
+  occurredAt: "2026-09-22T00:00:00.000Z",
+};
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
 
 let originalFetch: typeof fetch;
+let calls: Array<{ url: string; init: RequestInit }>;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  // Any network call at all is a failure of part A's "no bridge calls" rule.
-  globalThis.fetch = (() => {
-    throw new Error("stubBridgeClient must never call fetch in part A");
-  }) as typeof fetch;
+  calls = [];
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe("stubBridgeClient (part A: no network)", () => {
-  it("pair() resolves without calling fetch, with the documented message", async () => {
-    const result = await stubBridgeClient.pair({ code: "123456" });
-    expect(result).toEqual({ ok: false, message: "Pairing connects in the next version." });
+function stubFetch(handler: (url: string, init: RequestInit) => Response): void {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    return handler(url, init ?? {});
+  }) as typeof fetch;
+}
+
+describe("createBridgeClient: never calls fetch before a request is warranted", () => {
+  it("pair() never reads a device token (pairing has none yet)", async () => {
+    let tokenReads = 0;
+    stubFetch(() => jsonResponse(200, { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "tok" }));
+    const client = createBridgeClient({ getToken: () => { tokenReads += 1; return Promise.resolve(null); } });
+    await client.pair({ code: "7KQ2M-X9RTB" });
+    expect(tokenReads).toBe(0);
   });
 
-  it("postEvent() resolves without calling fetch", async () => {
-    const result = await stubBridgeClient.postEvent({
-      protocol: 1,
-      type: "job_capture",
-      eventId: "b6f3a5d2-6c2a-4b8a-8e2e-9a2f6b6b2b10",
-      url: "https://jobs.example/postings/1",
-      text: "text",
-      extractorVersion: "extractor@0.1.0",
-      contentHash: "a".repeat(64),
-      occurredAt: "2026-09-22T00:00:00.000Z",
+  it("postEvent()/getCommands()/getStatus() return not_paired without ever calling fetch when there is no stored token", async () => {
+    stubFetch(() => {
+      throw new Error("must not call fetch without a device token");
     });
-    expect(result.ok).toBe(false);
+    const client = createBridgeClient({ getToken: () => Promise.resolve(null) });
+
+    const eventResult = await client.postEvent(CAPTURE);
+    expect(eventResult).toEqual({ ok: false, error: { code: "not_paired", message: expect.stringContaining("Pair") } });
+
+    const commandsResult = await client.getCommands();
+    expect(commandsResult.ok).toBe(false);
+    if (!commandsResult.ok) expect(commandsResult.error.code).toBe("not_paired");
+
+    const statusResult = await client.getStatus();
+    expect(statusResult.ok).toBe(false);
+    if (!statusResult.ok) expect(statusResult.error.code).toBe("not_paired");
+
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("createBridgeClient: pair()", () => {
+  it("posts the code to /pair against the bridge origin, with no Authorization header, and returns the validated response", async () => {
+    stubFetch((url) => {
+      expect(url).toBe(`${BRIDGE_ORIGIN}/pair`);
+      return jsonResponse(200, { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "opaque-token" });
+    });
+    const client = createBridgeClient();
+    const result = await client.pair({ code: "7KQ2M-X9RTB" });
+    expect(result).toEqual({ ok: true, value: { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "opaque-token" } });
+    expect(calls[0]?.init.method).toBe("POST");
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers.authorization).toBeUndefined();
+    expect(headers["content-type"]).toBe("application/json");
   });
 
-  it("getCommands() resolves without calling fetch", async () => {
-    const result = await stubBridgeClient.getCommands();
+  it("carries the bridge's HTTP status and error code through on a wrong/expired code (not just a message)", async () => {
+    stubFetch(() =>
+      jsonResponse(401, { ok: false, error: { code: "pairing_code_invalid", message: "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run `npm run pair` for a new one." } }),
+    );
+    const client = createBridgeClient();
+    const result = await client.pair({ code: "AAAAA-AAAAA" });
     expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.status).toBe(401);
+    expect(result.error.code).toBe("pairing_code_invalid");
+    expect(result.error.message).toContain("npm run pair");
   });
 
-  it("getStatus() resolves without calling fetch", async () => {
-    const result = await stubBridgeClient.getStatus();
+  it("carries a 429 too_many_attempts through", async () => {
+    stubFetch(() => jsonResponse(429, { ok: false, error: { code: "too_many_attempts", message: "Too many wrong pairing codes. Wait, then issue a new code with `npm run pair`." } }));
+    const client = createBridgeClient();
+    const result = await client.pair({ code: "AAAAA-AAAAA" });
     expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.status).toBe(429);
+    expect(result.error.code).toBe("too_many_attempts");
+  });
+
+  it("classifies a fetch rejection (runner not running) as network_error, with an actionable message", async () => {
+    globalThis.fetch = (() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
+    const client = createBridgeClient();
+    const result = await client.pair({ code: "7KQ2M-X9RTB" });
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "network_error", message: expect.stringContaining("npm run runner") },
+    });
+  });
+
+  it("rejects a response that doesn't match PairResponse's shape instead of returning it as-is", async () => {
+    stubFetch(() => jsonResponse(200, { deviceId: "not-a-uuid" }));
+    const client = createBridgeClient();
+    const result = await client.pair({ code: "7KQ2M-X9RTB" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("invalid_response");
+  });
+});
+
+describe("createBridgeClient: authenticated routes (postEvent, getCommands, getStatus)", () => {
+  function pairedClient(): BridgeClient {
+    return createBridgeClient({ getToken: () => Promise.resolve({ token: "device-token" }) });
+  }
+
+  it("postEvent sends Authorization: Bearer <token> and reports duplicate:false on a fresh save", async () => {
+    stubFetch((url) => {
+      expect(url).toBe(`${BRIDGE_ORIGIN}/events`);
+      return jsonResponse(200, { ok: true, eventId: CAPTURE.eventId, type: "job_capture", duplicate: false, outcome: "journaled" });
+    });
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result).toEqual({ ok: true, value: { duplicate: false } });
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer device-token");
+  });
+
+  it("postEvent reports duplicate:true as success, the same as a fresh save (gate 1: a replay is still 'saved')", async () => {
+    stubFetch(() => jsonResponse(200, { ok: true, eventId: CAPTURE.eventId, type: "job_capture", duplicate: true, outcome: "journaled" }));
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result).toEqual({ ok: true, value: { duplicate: true } });
+  });
+
+  it("postEvent treats 202 (no handler yet -- P04 adds one) as success", async () => {
+    stubFetch(() => jsonResponse(202, { ok: true, eventId: CAPTURE.eventId, type: "job_capture", duplicate: false, outcome: "journaled" }));
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result.ok).toBe(true);
+  });
+
+  it("postEvent carries a 401 token_invalid through (expired/revoked token: re-pair)", async () => {
+    stubFetch(() => jsonResponse(401, { ok: false, error: { code: "token_invalid", message: "This device token is not valid (unknown, revoked or expired). Pair the extension again." } }));
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.status).toBe(401);
+    expect(result.error.code).toBe("token_invalid");
+  });
+
+  it("postEvent carries a 403 origin_not_allowed through (wrong extension or device: re-pair)", async () => {
+    stubFetch(() => jsonResponse(403, { ok: false, error: { code: "origin_not_allowed", message: "This request's Origin is not the extension origin this device paired from." } }));
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.status).toBe(403);
+    expect(result.error.code).toBe("origin_not_allowed");
+  });
+
+  it("postEvent classifies the runner being down as network_error", async () => {
+    globalThis.fetch = (() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
+    const result = await pairedClient().postEvent(CAPTURE);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("network_error");
+    expect(result.error.status).toBeUndefined();
+  });
+
+  it("getStatus sends no query and returns the validated StatusResponse", async () => {
+    stubFetch((url) => {
+      expect(url).toBe(`${BRIDGE_ORIGIN}/status`);
+      return jsonResponse(200, {
+        version: "0.1.0",
+        workspaceId: "ws_123",
+        budget: { dailyRunLimit: 0, runsUsedToday: 0, paused: false },
+        schedules: [],
+      });
+    });
+    const result = await pairedClient().getStatus();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.workspaceId).toBe("ws_123");
+  });
+
+  it("getStatus classifies a 429 through unchanged (wait, then npm run pair)", async () => {
+    stubFetch(() => jsonResponse(429, { ok: false, error: { code: "too_many_attempts", message: "Too many wrong pairing codes." } }));
+    const result = await pairedClient().getStatus();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.status).toBe(429);
+  });
+
+  it("getCommands appends ?since= only when given, and validates the response", async () => {
+    stubFetch((url) => {
+      expect(url).toBe(`${BRIDGE_ORIGIN}/commands`);
+      return jsonResponse(200, { commands: [] });
+    });
+    const withoutSince = await pairedClient().getCommands();
+    expect(withoutSince).toEqual({ ok: true, value: { commands: [] } });
+
+    calls = [];
+    stubFetch((url) => {
+      expect(url).toBe(`${BRIDGE_ORIGIN}/commands?since=2026-09-22T09%3A00%3A00.000Z`);
+      return jsonResponse(200, { commands: [] });
+    });
+    await pairedClient().getCommands("2026-09-22T09:00:00.000Z");
   });
 });

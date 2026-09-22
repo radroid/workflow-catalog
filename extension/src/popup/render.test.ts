@@ -1,12 +1,24 @@
 import "../shared/zod-jitless";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildJobCapture } from "../capture/build-job-capture";
+import { BRIDGE_ORIGIN } from "../shared/bridge-client";
 import { formatBytes, renderFallback, renderLoading, renderPreview } from "./render";
 
+interface FakeChromeHandle {
+  alarms: Map<string, { delayInMinutes?: number }>;
+  sessionData: Record<string, unknown>;
+}
+
 /** Same minimal fake as shared/storage.test.ts -- enough to let the save
- * button's chrome.storage.session write succeed in a test. */
-function installFakeChromeStorage(): void {
+ * button's chrome.storage.session write succeed in a test, plus a minimal
+ * chrome.alarms so a queued-on-failure Save can arm the retry alarm
+ * (shared/outbox.ts) without touching a real one. `seed.deviceToken`, when
+ * given, is what makes bridgeClient.postEvent actually attempt a fetch
+ * instead of short-circuiting on "not_paired". */
+function installFakeChrome(seed: { deviceToken?: unknown } = {}): FakeChromeHandle {
   const sessionData: Record<string, unknown> = {};
+  if (seed.deviceToken) sessionData.deviceToken = seed.deviceToken;
+  const alarms = new Map<string, { delayInMinutes?: number }>();
   globalThis.chrome = {
     storage: {
       session: {
@@ -22,9 +34,19 @@ function installFakeChromeStorage(): void {
         },
       },
     },
+    alarms: {
+      create: async (name: string, info: { delayInMinutes?: number }) => {
+        alarms.set(name, info);
+      },
+      get: async (name: string) => alarms.get(name),
+      clear: async (name: string) => {
+        alarms.delete(name);
+      },
+    },
     // A deliberately partial stub -- see the same cast note in
     // popup/main.test.ts.
   } as unknown as typeof chrome;
+  return { alarms, sessionData };
 }
 
 describe("popup render states (extracted from main.ts so they're unit-testable in isolation)", () => {
@@ -43,7 +65,7 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
     const alert = app.querySelector('[role="alert"]');
     expect(alert?.textContent).toBe("Can't read this page — it has no readable address.");
     const link = app.querySelector("a");
-    expect(link?.getAttribute("href")).toBe("http://127.0.0.1:4310/ui/jobs.html");
+    expect(link?.getAttribute("href")).toBe("http://127.0.0.1:4310/ui/jobs");
     expect(link?.getAttribute("target")).toBe("_blank");
     expect(link?.getAttribute("rel")).toBe("noopener");
   });
@@ -143,12 +165,16 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
   });
 
   describe("Save button (review issue 7: it used to stay stuck on 'Saving…' after success)", () => {
+    let originalFetch: typeof fetch;
+
     beforeEach(() => {
-      installFakeChromeStorage();
+      originalFetch = globalThis.fetch;
+      installFakeChrome();
     });
 
     afterEach(() => {
       document.body.replaceChildren();
+      globalThis.fetch = originalFetch;
     });
 
     it("resets to an enabled, re-focused, success-labelled button after a successful save -- not stuck disabled", async () => {
@@ -205,6 +231,88 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
       expect(button.textContent).toBe("Save this job");
       expect(status?.textContent).toContain("Couldn't save");
       expect(document.activeElement).toBe(button);
+    });
+
+    describe("job_capture against the bridge (P07-B)", () => {
+      it("not paired: still shows 'Saved ✓' (the local file export always happens) but says pairing is needed, and never queues", async () => {
+        globalThis.fetch = (() => {
+          throw new Error("must not call fetch when there is no stored device token");
+        }) as typeof fetch;
+        // No deviceToken seeded -- installFakeChrome() above leaves storage empty.
+
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        expect(built.ok).toBe(true);
+        if (!built.ok) return;
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+
+        button.click();
+        await vi.waitFor(() => expect(button.disabled).toBe(false));
+
+        expect(button.textContent).toBe("Saved ✓");
+        expect(status?.textContent).toContain("Saved job-capture.json");
+        expect(status?.textContent).toContain("Pair the extension");
+      });
+
+      it("paired and reachable: posts job_capture with Authorization, and the status line says it was sent", async () => {
+        installFakeChrome({ deviceToken: { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T00:00:00.000Z" } });
+        const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
+          return new Response(JSON.stringify({ ok: true, eventId: "e", type: "job_capture", duplicate: false, outcome: "journaled" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }) as typeof fetch;
+
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        expect(built.ok).toBe(true);
+        if (!built.ok) return;
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+
+        button.click();
+        await vi.waitFor(() => expect(button.disabled).toBe(false));
+
+        expect(status?.textContent).toContain("sent it to the runner");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.url).toBe(`${BRIDGE_ORIGIN}/events`);
+        expect(calls[0]?.headers.authorization).toBe("Bearer device-token");
+      });
+
+      it("paired but the runner isn't running: queues the capture for the worker's retry alarm and says so (gate 4, capture side)", async () => {
+        const fake = installFakeChrome({ deviceToken: { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T00:00:00.000Z" } });
+        globalThis.fetch = (() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
+
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        expect(built.ok).toBe(true);
+        if (!built.ok) return;
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+
+        button.click();
+        await vi.waitFor(() => expect(button.disabled).toBe(false));
+
+        expect(button.textContent).toBe("Saved ✓");
+        expect(status?.textContent).toContain("Saved job-capture.json");
+        expect(status?.textContent).toContain("isn't reachable right now");
+        expect(fake.sessionData.jobCaptureOutbox).toEqual([
+          expect.objectContaining({ capture: expect.objectContaining({ eventId: built.capture.eventId }) }),
+        ]);
+        expect(fake.alarms.has("job-capture-retry")).toBe(true);
+      });
     });
   });
 });

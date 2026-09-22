@@ -42,7 +42,16 @@ const EVAL_RE = /\beval\b/;
 // `Function(` whether or not `new` precedes it, but not when it's a suffix
 // of a longer identifier (`myFunction(`, `getFunction(`) via the negative
 // lookbehind.
-const NEW_FUNCTION_RE = /(?<![\w$.])(?:new\s+)?Function\s*\(/;
+//
+// The lookbehind used to also exclude a `.` immediately before `Function`,
+// meant to rule out identifier-suffix cases like the ones above -- but `.`
+// isn't a word character, and `myFunction(`/`getFunction(` are already
+// excluded by `\w`/`$` alone. The side effect: `globalThis.Function(` and
+// `self.Function(` -- real, callable references to the actual Function
+// constructor via the global object, not identifier suffixes at all -- were
+// silently skipped too. Dropping `.` from the class catches both while
+// leaving the identifier-suffix exclusion intact (see the unit tests).
+const NEW_FUNCTION_RE = /(?<![\w$])(?:new\s+)?Function\s*\(/;
 const REMOTE_SCRIPT_SRC_RE = /<script\b[^>]*\bsrc\s*=\s*["']https?:\/\//i;
 const REMOTE_DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'`]https?:\/\//;
 

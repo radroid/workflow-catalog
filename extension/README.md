@@ -1,10 +1,10 @@
 # @workflow-catalog/extension
 
-Chrome MV3 extension for the job-assistant workflow. Packet **P07**; this
-covers **part A only** — manifest, options/pairing page, the capture
-extractor, and file export. No bridge calls yet (parts B/C: pairing and
-`job_capture` against the runner bridge, sessions, tab group, side panel,
-the nine gates).
+Chrome MV3 extension for the job-assistant workflow. Packet **P07**. Parts A
+and B are done: manifest, options/pairing page, the capture extractor, file
+export, real pairing and `job_capture` against the runner bridge, and the
+offline outbox. Part C (sessions, tab group, side panel content, the
+remaining gates) is still ahead.
 
 ## What's here
 
@@ -31,15 +31,26 @@ the nine gates).
   `renderFallback`/`renderPreview`) as plain functions so they're unit-
   testable and screenshot-able in isolation from `main.ts`'s
   `chrome.tabs`/`chrome.scripting` orchestration.
-- `src/options/` — pairing UI (code input, `BridgeClient` interface; part
-  A's implementation is a stub that reports "Pairing connects in the next
-  version" and never reaches the network) and the file-bridge fallback
+- `src/options/` — pairing UI (code input against the real `POST /pair`,
+  a short abbreviated device id once paired, Un-pair, and a link to the
+  runner's `/ui/status` page where actual revocation lives), a status
+  section (`GET /status`: connected/version/workspace, or a clear re-pair/
+  wait/offline state per failure), and the file-bridge fallback
   (`SessionManifest` import validation with a read-only summary, JSON
   export). Device token state lives in `chrome.storage.session`, never
   `storage.local`.
+- `src/shared/bridge-client.ts` — `createBridgeClient()`, the real
+  `fetch`-backed `BridgeClient` (pair/postEvent/getCommands/getStatus).
+  Every failure carries the bridge's own HTTP status and error code, not
+  just a message.
+- `src/shared/outbox.ts` — the `job_capture` outbox: when Save can't reach
+  the bridge, the capture is queued in `chrome.storage.session` and retried
+  with backoff via a `chrome.alarms` alarm the service worker owns, so it's
+  delivered exactly once.
 - `src/sidepanel/` — placeholder; content lands in part C.
 - `src/worker/` — service worker; imports the zod-jitless bootstrap first
-  (see below) and does nothing else yet.
+  (see below), then registers the outbox's retry-alarm listener and arms it
+  at startup if anything is already queued.
 - `src/shared/zod-jitless.ts` — sets `z.config({ jitless: true })` as the
   literal first import of every entry point. MV3's default CSP forbids
   `unsafe-eval`; zod v4 otherwise probes for `new Function` support at
@@ -169,19 +180,27 @@ reach at all:
 3. Click **Save this job** → `job-capture.json` downloads.
 4. Switch to a tab you can't capture (`chrome://newtab`, a PDF, a
    `file://` page) and click the icon → fallback message, with a working
-   link to `http://127.0.0.1:4310/ui/jobs.html`.
-5. Open the options page → **Pairing** shows "Not paired yet.", entering
-   any code and clicking **Pair** shows "Pairing connects in the next
-   version" (part A's stub — no network call happens).
-6. In the options page's **File bridge** section, import a
+   link to `http://127.0.0.1:4310/ui/jobs`.
+5. With the runner running (`npm run runner` in `runner/`) and a pairing
+   code from `npm run pair`, open the options page → entering the code and
+   clicking **Pair** shows a short device id and the status section flips
+   to connected, with the runner's version and workspace. **Un-pair**
+   forgets the token, announces it, and the page still links to
+   `http://127.0.0.1:4310/ui/status` for actual revocation.
+6. Stop the runner, reload the options page → the status section shows a
+   clear "can't reach the runner" state, not a stuck spinner or a raw
+   error. Save a job from the popup while it's still stopped → the status
+   line says the runner isn't reachable; restart the runner and the queued
+   capture is delivered on the next retry alarm (or reopen the popup and
+   save again — either way, the same `eventId` reaches the bridge exactly
+   once).
+7. In the options page's **File bridge** section, import a
    `job-capture.json` saved in step 3 → a read-only summary renders.
-7. Toggle the OS between light/dark appearance and reopen the popup and
+8. Toggle the OS between light/dark appearance and reopen the popup and
    options page → both follow it immediately (no stale theme).
 
-## What part B/C still owe
+## What part C still owes
 
-- Part B: real pairing (`PairRequest`/device token exchange) and
-  `job_capture` POSTs against the runner bridge, replacing the stub
-  `BridgeClient` in `src/shared/bridge-client.ts`.
-- Part C: sessions, the tab group behavior, side panel content, and the
-  nine gates named in the P07 packet.
+Sessions, the tab group behavior, side panel content, and the remaining
+gates named in the P07 packet (`GET /commands` polling and its 15-minute
+alarm are part C's "Session" deliverable, not part B's).

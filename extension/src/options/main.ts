@@ -1,10 +1,10 @@
 import "../shared/zod-jitless";
 import { jobCaptureSchema, pairRequestSchema, type SessionManifest } from "@workflow-catalog/contracts";
-import { stubBridgeClient } from "../shared/bridge-client";
+import { bridgeClient, type BridgeError } from "../shared/bridge-client";
 import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
 import { abbreviateUuid, formatTimestamp } from "../shared/format";
-import { clearDeviceToken, getDeviceToken, getLastJobCapture, type StoredDeviceToken } from "../shared/storage";
+import { clearDeviceToken, getDeviceToken, getLastJobCapture, setDeviceToken, type StoredDeviceToken } from "../shared/storage";
 import { applyColorScheme } from "../shared/theme-init";
 import { checkImportFileSize, parseSessionManifestFile } from "../file-bridge/session-import";
 import "./style.css";
@@ -16,29 +16,52 @@ if (!app) {
   throw new Error("options/index.html is missing #app");
 }
 
-let pairingCodeFieldId = 0;
+// Revocation lives on the runner's own status page (P07-B deliverable 1):
+// un-pairing here only forgets the token this browser holds, it does not
+// remove the device record the runner keeps -- that's a separate, explicit
+// action a person takes there.
+const RUNNER_STATUS_URL = "http://127.0.0.1:4310/ui/status";
+
+let fieldId = 0;
 function nextId(prefix: string): string {
-  pairingCodeFieldId += 1;
-  return `${prefix}-${pairingCodeFieldId}`;
+  fieldId += 1;
+  return `${prefix}-${fieldId}`;
 }
 
-function pairingSection(current: StoredDeviceToken | null): HTMLElement {
+function statusPageLink(): HTMLElement {
+  return el("p", { className: "small" }, [
+    "Manage paired devices, including actual revocation, on the runner's ",
+    el("a", { attrs: { href: RUNNER_STATUS_URL, target: "_blank", rel: "noopener" }, text: "status page" }),
+    ".",
+  ]);
+}
+
+/** `flashMessage`, when given, is shown in the status line as soon as the
+ * section renders -- used for "Un-paired." after a successful un-pair,
+ * since that action tears down and rebuilds this whole section (the old
+ * status paragraph, and the message any earlier render put in it, goes
+ * with it). */
+function pairingSection(current: StoredDeviceToken | null, flashMessage?: string): HTMLElement {
   const codeFieldId = nextId("pairing-code");
   const statusId = nextId("pairing-status");
 
   const codeInput = el("input", {
-    attrs: { type: "text", id: codeFieldId, placeholder: "e.g. FERN-4821", "aria-describedby": statusId },
+    attrs: { type: "text", id: codeFieldId, placeholder: "e.g. 7KQ2M-X9RTB", "aria-describedby": statusId },
   }) as HTMLInputElement;
   const codeLabel = el("label", { className: "small", attrs: { for: codeFieldId }, text: "Code from npm run setup" });
   const pairButton = el("button", { className: "primary", attrs: { type: "submit" }, text: "Pair" });
-  const status = el("p", { className: "small", attrs: { id: statusId, role: "status", "aria-live": "polite" } });
+  const status = el("p", {
+    className: "small",
+    attrs: { id: statusId, role: "status", "aria-live": "polite" },
+    text: flashMessage ?? "",
+  });
 
   const paired = current !== null;
 
   const currentState = paired
     ? el("dl", { className: "kv" }, [
         el("dt", { text: "Device" }),
-        el("dd", { text: current.deviceName }),
+        el("dd", { text: abbreviateUuid(current.deviceId), attrs: { title: current.deviceId } }),
         el("dt", { text: "Paired" }),
         el("dd", { text: formatTimestamp(current.pairedAt) }),
       ])
@@ -49,13 +72,14 @@ function pairingSection(current: StoredDeviceToken | null): HTMLElement {
   unpairButton.addEventListener("click", () => {
     void (async () => {
       await clearDeviceToken();
-      const fresh = await buildPairingSection();
+      const fresh = pairingSection(null, "Un-paired. You can pair again below.");
       replaceSection("pairing", fresh);
       // Un-pairing tears down and rebuilds the whole section -- the old,
       // focused Un-pair button no longer exists to keep focus on, so it
       // was silently dropping to <body>. Land on the field the next
       // action (pairing again) actually needs, instead.
       fresh.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
+      await refreshStatusSection();
     })();
   });
 
@@ -69,6 +93,12 @@ function pairingSection(current: StoredDeviceToken | null): HTMLElement {
         status.textContent = "Enter the code shown by npm run setup.";
         return;
       }
+      // Client-side shape check before ever reaching the network (mirrors
+      // pairRequestSchema.max(64) from @workflow-catalog/contracts): a
+      // pasted blob of the wrong shape is refused locally with the same
+      // message as an empty field, instead of spending a real /pair
+      // request (and a slot in its wrong-code budget) on something that
+      // could never be a real pairing code.
       const parsed = pairRequestSchema.safeParse({ code });
       if (!parsed.success) {
         codeInput.setAttribute("aria-invalid", "true");
@@ -77,17 +107,26 @@ function pairingSection(current: StoredDeviceToken | null): HTMLElement {
       }
       codeInput.removeAttribute("aria-invalid");
       pairButton.disabled = true;
-      const result = await stubBridgeClient.pair(parsed.data);
+      status.textContent = "Pairing…";
+      const result = await bridgeClient.pair(parsed.data);
       pairButton.disabled = false;
-      // Part A's stub never succeeds (no network — see bridge-client.ts);
-      // this is still real wiring, not a fake success path.
-      status.textContent = result.ok ? "Paired." : result.message;
+      if (!result.ok) {
+        codeInput.setAttribute("aria-invalid", "true");
+        status.textContent = result.error.message;
+        return;
+      }
+      const token: StoredDeviceToken = { deviceId: result.value.deviceId, token: result.value.token, pairedAt: new Date().toISOString() };
+      await setDeviceToken(token);
+      const fresh = pairingSection(token, "Paired.");
+      replaceSection("pairing", fresh);
+      fresh.querySelector("button")?.focus();
+      await refreshStatusSection();
     })();
   });
 
   return el("section", {}, [
     el("h2", { text: "Pairing" }),
-    el("div", { className: "card pad stack" }, [currentState, codeLabel, form, status, unpairButton]),
+    el("div", { className: "card pad stack" }, [currentState, codeLabel, form, status, unpairButton, statusPageLink()]),
   ]);
 }
 
@@ -95,6 +134,56 @@ async function buildPairingSection(): Promise<HTMLElement> {
   const section = pairingSection(await getDeviceToken());
   section.dataset.section = "pairing";
   return section;
+}
+
+/**
+ * `GET /status` (P07-B deliverable 2): connected/version/workspace when it
+ * succeeds, and one of four clear, recoverable, announced states per the
+ * bridge's own classification of the failure -- never a stuck spinner or a
+ * raw error dump.
+ */
+function statusFailureMessage(error: BridgeError): string {
+  if (error.code === "not_paired") return "Pair a device above to see the runner's status.";
+  if (error.code === "network_error") return error.message;
+  if (error.status === 401) return "Your pairing has expired or was revoked. Pair again above.";
+  if (error.status === 403) return "This device isn't recognized by the runner (wrong extension or device). Pair again above.";
+  if (error.status === 429) return "Too many attempts. Wait, then run `npm run pair` for a new code.";
+  return error.message;
+}
+
+function renderConnectedStatus(status: { version: string; workspaceId: string }): HTMLElement {
+  return el("div", { className: "card pad" }, [
+    el("dl", { className: "kv" }, [
+      el("dt", { text: "Connected" }),
+      el("dd", { text: "Yes" }),
+      el("dt", { text: "Version" }),
+      el("dd", { text: status.version }),
+      el("dt", { text: "Workspace" }),
+      el("dd", { text: status.workspaceId }),
+    ]),
+  ]);
+}
+
+async function buildStatusSection(): Promise<HTMLElement> {
+  const statusId = nextId("bridge-status");
+  const result = await bridgeClient.getStatus();
+  let body: HTMLElement;
+  if (result.ok) {
+    body = renderConnectedStatus(result.value);
+    body.setAttribute("role", "status");
+    body.id = statusId;
+  } else if (result.error.code === "not_paired") {
+    body = el("p", { className: "small", attrs: { role: "status", id: statusId }, text: statusFailureMessage(result.error) });
+  } else {
+    body = el("div", { className: "flash bad", attrs: { role: "alert", id: statusId }, text: statusFailureMessage(result.error) });
+  }
+  const section = el("section", {}, [el("h2", { text: "Status" }), body]);
+  section.dataset.section = "status";
+  return section;
+}
+
+async function refreshStatusSection(): Promise<void> {
+  replaceSection("status", await buildStatusSection());
 }
 
 function renderSessionSummary(manifest: SessionManifest): HTMLElement {
@@ -239,6 +328,7 @@ function replaceSection(id: string, replacement: HTMLElement): void {
 
 async function render(): Promise<void> {
   const pairing = await buildPairingSection();
+  const status = await buildStatusSection();
   const lastCapture = await getLastJobCapture();
   const fileBridge = fileBridgeSection(lastCapture !== null);
 
@@ -246,8 +336,9 @@ async function render(): Promise<void> {
     app!,
     el("main", { className: "wrap" }, [
       el("h1", { text: "Job Assistant" }),
-      el("span", { className: "small", text: "Pairing and the file-bridge fallback." }),
+      el("span", { className: "small", text: "Pairing, runner status, and the file-bridge fallback." }),
       pairing,
+      status,
       fileBridge,
     ]),
   );

@@ -9,15 +9,17 @@
  */
 import type { JobCapture } from "@workflow-catalog/contracts";
 import type { ExtractedStructuredHints } from "../capture/extractor";
+import { bridgeClient } from "../shared/bridge-client";
 import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
+import { enqueueCapture } from "../shared/outbox";
 import { setLastJobCapture } from "../shared/storage";
 
-// One constant, one place to change: P02's router may end up serving this
-// page as /ui/<name> rather than a literal jobs.html file (that's P02's
-// own routing decision, not yet landed as of part A). P07-B syncs this
-// path once P02 lands rather than part A guessing at it now.
-const RUNNER_JOBS_URL = "http://127.0.0.1:4310/ui/jobs.html";
+// P02's local UI serves /ui/<name> (runner/server/local-ui.ts: `<uiDir>/<page>.html`
+// mounted at /ui/<page>, no literal ".html" in the URL) -- P07-B syncs this
+// path now that P02 has landed (part A guessed at a literal jobs.html file,
+// before P02's router existed to check against). P04 adds the page itself.
+const RUNNER_JOBS_URL = "http://127.0.0.1:4310/ui/jobs";
 
 export function renderLoading(app: Element): void {
   mount(
@@ -46,6 +48,36 @@ export function renderFallback(app: Element, reason: string): void {
 export function formatBytes(byteLength: number): string {
   if (byteLength < 1024) return `${byteLength} B`;
   return `${(byteLength / 1024).toFixed(1)} KB`;
+}
+
+/**
+ * Posts `capture` to the bridge as a `job_capture` event and returns the
+ * sentence Save's status line leads with. Always starts "Saved
+ * job-capture.json" -- the local file export above already happened by the
+ * time this runs, whatever the bridge says.
+ *
+ * - Reachable and accepted (including a replay the bridge reports
+ *   `duplicate: true` for -- gate 1: still just "saved", not an error):
+ *   says it was sent.
+ * - Not paired yet: says so, without queuing -- retrying can't help until a
+ *   person pairs the extension, and an ever-growing queue of captures made
+ *   before that would be a silent trap, not a recoverable state.
+ * - Any other failure (network_error -- the runner isn't running -- or an
+ *   HTTP error like an expired token) queues the capture for the worker's
+ *   alarm-driven retry (shared/outbox.ts) and says so, so Save never
+ *   silently loses a capture just because the runner was unreachable for a
+ *   moment.
+ */
+async function sendToBridge(capture: JobCapture): Promise<string> {
+  const result = await bridgeClient.postEvent(capture);
+  if (result.ok) {
+    return "Saved job-capture.json and sent it to the runner.";
+  }
+  if (result.error.code === "not_paired") {
+    return "Saved job-capture.json. Pair the extension in Settings to send it to the runner.";
+  }
+  await enqueueCapture(capture);
+  return "Saved job-capture.json. The runner isn't reachable right now — it'll be sent automatically once it's back.";
 }
 
 export function renderPreview(
@@ -81,8 +113,11 @@ export function renderPreview(
         // popup closing on focus loss breaks the download, hand off to
         // the options page's export view").
         await setLastJobCapture(capture);
+        // The file-export fallback stays (P07-B deliverable 3), unconditional
+        // on whether the bridge post below succeeds -- Save always leaves a
+        // real, importable job-capture.json behind.
         downloadJson("job-capture.json", capture);
-        status.textContent = "Saved job-capture.json. If nothing downloaded, use the options page to export it.";
+        status.textContent = `${await sendToBridge(capture)} If nothing downloaded, use the options page to export it.`;
         saveButton.textContent = "Saved ✓";
       } catch (error) {
         status.textContent = `Couldn't save: ${error instanceof Error ? error.message : String(error)}`;

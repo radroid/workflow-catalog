@@ -125,10 +125,22 @@ describe("scanDistForViolations", () => {
 
   it("does not let the removed probe glue its neighbours together and hide a Function(...) call right after it", () => {
     // Removing the probe with "" would leave `x$Function(e)`, which the
-    // `(?<![\w$.])` lookbehind skips as a longer identifier. The scanner
-    // removes it with a space instead, so the call is still seen.
+    // `(?<![\w$])` lookbehind skips as a longer identifier ($ is a word-ish
+    // character this lookbehind excludes on purpose). The scanner removes
+    // it with a space instead, so the call is still seen.
     write("worker.js", "x$try{return Function(``),!0}catch{return!1}Function(e)");
     expect(scanDistForViolations(dir)).toEqual(["worker.js:1: forbidden Function(...) constructor call in built output"]);
+  });
+
+  it("flags globalThis.Function(...) and self.Function(...) -- a '.' immediately before Function must not hide a real call (carry-forward from the P07-A review)", () => {
+    write("worker.js", "globalThis.Function(x);\nself.Function(y);");
+    const offenses = scanDistForViolations(dir);
+    expect(offenses.filter((o) => o.includes("Function(...)")).length).toBe(2);
+  });
+
+  it("still does not flag an identifier ending in 'Function' accessed as a property (obj.myFunction(, obj.getFunction()", () => {
+    write("worker.js", "obj.myFunction(1); obj.getFunction()(2);");
+    expect(scanDistForViolations(dir)).toEqual([]);
   });
 
   it("flags a remote <script src> in an HTML file", () => {

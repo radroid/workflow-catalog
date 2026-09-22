@@ -164,7 +164,7 @@ test("the popup, opened without a genuine activeTab grant, shows the no-readable
 
   await expect(popup.getByText("Job Assistant")).toBeVisible();
   await expect(popup.getByText("Can't read this page — it has no readable address.")).toBeVisible({ timeout: 10_000 });
-  await expect(popup.getByText("http://127.0.0.1:4310/ui/jobs.html")).toBeVisible();
+  await expect(popup.getByText("http://127.0.0.1:4310/ui/jobs", { exact: true })).toBeVisible();
 
   await assertThemeAndFontsLoaded(popup);
   await errors.assertNone();

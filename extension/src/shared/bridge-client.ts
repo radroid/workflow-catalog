@@ -1,42 +1,195 @@
 /**
  * The bridge surface (mvp-spec §5: `POST /pair`, `GET /commands`,
  * `POST /events`, `GET /status`, all on `127.0.0.1:4310`) behind one
- * interface, so part B can swap in a real `fetch`-backed implementation
- * without changing any caller. Part A ships only `stubBridgeClient`: "a
- * `BridgeClient` interface whose part-A implementation is a stub that
- * returns a clear 'Pairing connects in the next version' result — no
- * network." No method here ever calls `fetch`.
+ * interface. Part A shipped only `stubBridgeClient` (no network, ever).
+ * Part B replaces it with `createBridgeClient()`, a real `fetch`-backed
+ * implementation -- no caller needed to change, since both shapes satisfy
+ * the same `BridgeClient` interface.
+ *
+ * Every method still resolves, never throws: a caller only ever inspects
+ * `.ok`. Chrome sets `Origin` itself on every request this makes (a POST
+ * gets `chrome-extension://<id>`, a GET gets none) -- `Origin` is a
+ * forbidden header name, so this never sets it, per mvp-spec §5 and
+ * runner/README.md's "The bridge".
  */
-import type {
-  CommandsResponse,
-  EventsRequest,
-  PairRequest,
-  PairResponse,
-  StatusResponse,
+import {
+  commandsResponseSchema,
+  pairResponseSchema,
+  statusResponseSchema,
+  type CommandsResponse,
+  type EventsRequest,
+  type PairRequest,
+  type PairResponse,
+  type StatusResponse,
 } from "@workflow-catalog/contracts";
+import { getDeviceToken } from "./storage";
 
-export type BridgeResult<T> = { ok: true; value: T } | { ok: false; message: string };
+/** Loopback only (mvp-spec §5); the manifest's one host permission. */
+export const BRIDGE_ORIGIN = "http://127.0.0.1:4310";
+
+/**
+ * The bridge's own error shape (runner/server/http.ts `ErrorBody`), carried
+ * through instead of collapsed into a string -- P07 packet part B, deliverable
+ * 4: "BridgeClient failures carry the HTTP status and error code, not just a
+ * message." `status` is absent when no HTTP response was ever received
+ * (`network_error`) or no request was attempted at all (`not_paired`).
+ */
+export interface BridgeError {
+  readonly status?: number;
+  readonly code: string;
+  readonly message: string;
+}
+
+export type BridgeResult<T> = { ok: true; value: T } | { ok: false; error: BridgeError };
+
+export interface PostEventResult {
+  /** True when the bridge recognized this eventId as one it already
+   * processed (runner/README.md "Replay") -- still a success: the same
+   * job_capture sent twice must show "saved" once, not an error the second
+   * time. */
+  readonly duplicate: boolean;
+}
 
 export interface BridgeClient {
   pair(request: PairRequest): Promise<BridgeResult<PairResponse>>;
-  postEvent(request: EventsRequest): Promise<BridgeResult<void>>;
+  postEvent(request: EventsRequest): Promise<BridgeResult<PostEventResult>>;
   getCommands(since?: string): Promise<BridgeResult<CommandsResponse>>;
   getStatus(): Promise<BridgeResult<StatusResponse>>;
 }
 
-const NOT_CONNECTED = <T>(message: string): Promise<BridgeResult<T>> =>
-  Promise.resolve({ ok: false, message });
+const NETWORK_ERROR: BridgeError = {
+  code: "network_error",
+  message: "Can't reach the runner. Is it running? Start it with `npm run runner`.",
+};
+
+const NOT_PAIRED: BridgeError = {
+  code: "not_paired",
+  message: "This device isn't paired yet. Pair it above first.",
+};
+
+function invalidResponse(what: string): BridgeError {
+  return { code: "invalid_response", message: `The runner's ${what} response didn't match the expected shape.` };
+}
+
+interface WireErrorBody {
+  readonly error: { readonly code: string; readonly message: string };
+}
+
+/** True for the bridge's own error envelope (runner/server/http.ts
+ * `errorBody`): `{ ok: false, error: { code, message, issues? } }`. Checked
+ * structurally, not by trusting a `Content-Type` header alone. */
+function looksLikeWireErrorBody(value: unknown): value is WireErrorBody {
+  if (typeof value !== "object" || value === null || !("error" in value)) return false;
+  const error = (value as { error?: unknown }).error;
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    typeof (error as { message?: unknown }).message === "string"
+  );
+}
 
 /**
- * Part A's `BridgeClient`. Every method resolves immediately, with no
- * network access of any kind — matches the packet's own acceptance
- * criteria for part A ("NO bridge calls") and this repo's manifest, which
- * grants `host_permissions` for `127.0.0.1:4310` but nothing here uses it
- * yet.
+ * Sends one request and classifies the outcome instead of ever throwing.
+ * `fetch` rejecting (no HTTP response at all -- DNS/connection refused,
+ * which is what "the runner isn't running" looks like from a page's own
+ * fetch) becomes `network_error`. An HTTP error response's own `{ code,
+ * message }` is carried through verbatim: the bridge already writes a
+ * clear, specific message for every 4xx it sends (401 `token_invalid`, 403
+ * `origin_not_allowed`, 429 `too_many_attempts`, ...), so this never
+ * invents its own wording for those.
  */
-export const stubBridgeClient: BridgeClient = {
-  pair: () => NOT_CONNECTED("Pairing connects in the next version."),
-  postEvent: () => NOT_CONNECTED("The bridge connects in the next version. Use file export for now."),
-  getCommands: () => NOT_CONNECTED("The bridge connects in the next version."),
-  getStatus: () => NOT_CONNECTED("The bridge connects in the next version."),
-};
+async function request(baseUrl: string, path: string, init: RequestInit): Promise<BridgeResult<unknown>> {
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, init);
+  } catch {
+    return { ok: false, error: NETWORK_ERROR };
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    body = undefined;
+  }
+
+  if (response.ok) {
+    return { ok: true, value: body };
+  }
+  if (looksLikeWireErrorBody(body)) {
+    return { ok: false, error: { status: response.status, code: body.error.code, message: body.error.message } };
+  }
+  return {
+    ok: false,
+    error: { status: response.status, code: "unknown_error", message: `The runner answered with an unexpected error (HTTP ${response.status}).` },
+  };
+}
+
+export interface CreateBridgeClientOptions {
+  readonly baseUrl?: string;
+  /** Overridable for tests only; defaults to shared/storage.ts's getDeviceToken. */
+  readonly getToken?: () => Promise<{ token: string } | null>;
+}
+
+/** The real, `fetch`-backed `BridgeClient`. */
+export function createBridgeClient(options: CreateBridgeClientOptions = {}): BridgeClient {
+  const baseUrl = options.baseUrl ?? BRIDGE_ORIGIN;
+  const getToken = options.getToken ?? getDeviceToken;
+
+  async function authedRequest(path: string, init: RequestInit = {}): Promise<BridgeResult<unknown>> {
+    const stored = await getToken();
+    if (!stored) return { ok: false, error: NOT_PAIRED };
+    return request(baseUrl, path, {
+      ...init,
+      headers: { ...(init.headers ?? {}), authorization: `Bearer ${stored.token}` },
+    });
+  }
+
+  return {
+    async pair(pairRequest) {
+      const result = await request(baseUrl, "/pair", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(pairRequest),
+      });
+      if (!result.ok) return result;
+      const parsed = pairResponseSchema.safeParse(result.value);
+      if (!parsed.success) return { ok: false, error: invalidResponse("pairing") };
+      return { ok: true, value: parsed.data };
+    },
+
+    async postEvent(event) {
+      const result = await authedRequest("/events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(event),
+      });
+      if (!result.ok) return result;
+      const value = result.value as { duplicate?: unknown } | undefined;
+      return { ok: true, value: { duplicate: value?.duplicate === true } };
+    },
+
+    async getCommands(since) {
+      const query = since ? `?since=${encodeURIComponent(since)}` : "";
+      const result = await authedRequest(`/commands${query}`, { method: "GET" });
+      if (!result.ok) return result;
+      const parsed = commandsResponseSchema.safeParse(result.value);
+      if (!parsed.success) return { ok: false, error: invalidResponse("commands") };
+      return { ok: true, value: parsed.data };
+    },
+
+    async getStatus() {
+      const result = await authedRequest("/status", { method: "GET" });
+      if (!result.ok) return result;
+      const parsed = statusResponseSchema.safeParse(result.value);
+      if (!parsed.success) return { ok: false, error: invalidResponse("status") };
+      return { ok: true, value: parsed.data };
+    },
+  };
+}
+
+/** The one instance every page uses; a fresh device token is read from
+ * storage on every call, so pairing/un-pairing elsewhere is picked up
+ * immediately without recreating this. */
+export const bridgeClient: BridgeClient = createBridgeClient();
