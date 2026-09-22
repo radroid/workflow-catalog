@@ -148,8 +148,10 @@ export const respond: FixtureHandler = (request: MockModelRequest, prompt: strin
   if (prompt.startsWith(ONBOARDING_FIXTURE_PROMPTS.askFollowUp)) {
     const claimId = prompt.slice(ONBOARDING_FIXTURE_PROMPTS.askFollowUp.length).trim();
     if (!done) return toolCallResponse("ask_follow_up", { claimId, question: FIXTURE_FOLLOW_UP_QUESTION });
+    // The tool's output is echoed so the eval can check what the model was
+    // told (D10: a free-text answer leaves the claim "open").
     const last = request.toolResults.at(-1);
-    return `asked: ${JSON.stringify({ name: last?.name, isError: last?.isError })}`;
+    return `asked: ${JSON.stringify({ name: last?.name, isError: last?.isError, output: last?.output })}`;
   }
 
   return undefined;

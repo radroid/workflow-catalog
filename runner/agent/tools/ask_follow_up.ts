@@ -1,59 +1,43 @@
 import { defineWorkflowTool } from "eve/tools";
-import { hasEvidenceFromAnswer } from "../lib/ask-follow-up-logic.ts";
-import { askFollowUpInputSchema, askFollowUpOutputSchema, askFollowUpToolDescription } from "../lib/ask-follow-up-schema.ts";
+import { followUpRequest, type FollowUpAnswer } from "../lib/ask-follow-up-logic.ts";
+import { askFollowUpInputSchema, askFollowUpOutputSchema, askFollowUpToolDescription, type AskFollowUpOutput } from "../lib/ask-follow-up-schema.ts";
+import { checkFollowUpClaimIsOpen, openFollowUpQuestion, recordFollowUpAnswer } from "../lib/ask-follow-up-steps.ts";
 import { openStore } from "../lib/onboarding-store.ts";
 
 /**
- * The real tool module eve discovers under `agent/tools/`.
+ * The tool module eve discovers under `agent/tools/`.
  *
  * `packages/job-assistant/skills/follow-up-questions/SKILL.md`'s tool: pose
  * the drafted question for one candidate claim and durably wait for the
- * person's own answer (eve HITL — `ctx.ask`, docs/tools/human-in-the-loop.md).
- * Thin and typed: input is a claim id and the question text, never raw
- * source content. The turn parks (`session.waiting`) until the person
- * responds, for as long as it takes; nothing here guesses. The answer is
- * recorded as `{kind: "statement"}` evidence, never as an external fact
- * (mvp-spec §5), and the superseded passage evidence is kept in
- * `revisions[]` (`profile-reducer.ts`'s `answerQuestion` action).
+ * person's answer (eve HITL, `ctx.ask`, docs/tools/human-in-the-loop.md).
+ * Input is a claim id and the question, never source content. The turn parks
+ * (`session.waiting`) until the person answers, for as long as it takes.
  *
- * The schemas live in `../lib/ask-follow-up-schema.ts` and the
- * evidence-from-answer logic in `../lib/ask-follow-up-logic.ts` (P03
- * revision 1, R6), both freely shared with `eval-agent/agent/tools/ask_follow_up.ts`
- * (that file's header comment says why: they carry no workflow/step
- * directive). This file's own `"use workflow"` executor and `"use step"`
- * helpers stay inline and are necessarily duplicated once per eve app
- * root — see `agent/tools/extract_claims.ts`'s header comment for why
- * (confirmed empirically against eve's own compiled source; see the P03
- * report).
+ * Only an explicit option decides the claim (D10): Confirm records the
+ * person's words as `{kind: "statement"}` evidence and keeps the superseded
+ * passage in `revisions[]`; Exclude excludes it; a reply that chooses neither
+ * is kept as a note on the question and the claim stays open.
+ *
+ * The step bodies live in `../lib/ask-follow-up-steps.ts` and the request and
+ * answer rules in `../lib/ask-follow-up-logic.ts`, shared with
+ * `eval-agent/agent/tools/ask_follow_up.ts`. This file keeps only the
+ * executor and one-line step wrappers, because directives compile per app
+ * root (docs/spec/research/eve-runtime.md §8 item 14).
  */
 
-/** "use step": confirms the claim exists and still needs a decision, before anyone is asked anything. */
 async function checkClaimIsOpen(claimId: string): Promise<void> {
   "use step";
-  const store = await openStore();
-  const profile = await store.read();
-  const claim = profile.claims.find((c) => c.id === claimId);
-  if (!claim) throw new Error(`No claim ${claimId} in the career profile.`);
-  if (claim.status !== "candidate" && claim.status !== "disputed") {
-    throw new Error(`Claim ${claimId} already has a decision (${claim.status}); there is nothing to ask.`);
-  }
+  return checkFollowUpClaimIsOpen(await openStore(), claimId);
 }
 
-/** "use step": marks the claim disputed with this question, so it is visibly "needs a decision" while the person is asked. */
 async function openQuestion(claimId: string, question: string): Promise<void> {
   "use step";
-  const store = await openStore();
-  const result = await store.decideClaim(claimId, "disputed", question);
-  if (!result.ok) throw new Error(result.message);
+  return openFollowUpQuestion(await openStore(), claimId, question);
 }
 
-/** "use step": records the person's answer once it arrives. */
-async function recordAnswer(claimId: string, hasEvidence: boolean, statement: string | undefined): Promise<string> {
+async function recordAnswer(claimId: string, answer: FollowUpAnswer): Promise<AskFollowUpOutput> {
   "use step";
-  const store = await openStore();
-  const result = await store.answerQuestion(claimId, hasEvidence, statement);
-  if (!result.ok) throw new Error(result.message);
-  return result.message;
+  return recordFollowUpAnswer(await openStore(), claimId, answer);
 }
 
 export default defineWorkflowTool({
@@ -64,20 +48,7 @@ export default defineWorkflowTool({
     "use workflow";
     await checkClaimIsOpen(claimId);
     await openQuestion(claimId, question);
-
-    const answer = await ctx.ask({
-      prompt: question,
-      display: "confirmation",
-      options: [
-        { id: "confirmed", label: "Confirm — I stand by this", style: "primary" },
-        { id: "excluded", label: "Exclude — I can't support this" },
-      ],
-      allowFreeform: true,
-    });
-
-    const hasEvidence = hasEvidenceFromAnswer(answer); // R6 (P03 revision 1) — see ask-follow-up-logic.ts
-    const status: "confirmed" | "excluded" = hasEvidence ? "confirmed" : "excluded";
-    const message = await recordAnswer(claimId, hasEvidence, answer.text);
-    return { claimId, status, message };
+    const answer = await ctx.ask(followUpRequest(question));
+    return recordAnswer(claimId, answer);
   },
 });

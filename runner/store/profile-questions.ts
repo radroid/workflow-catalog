@@ -41,6 +41,41 @@ export function needsQuestion(claim: { readonly kind: ClaimKind; readonly text: 
   return ALWAYS_ASK_KINDS.includes(claim.kind) || usesAlwaysAskWord(claim.text);
 }
 
+/** A number in claim text: "30%", "1.2k", "40", "3x". Numbers are how a metric, a date, or a scope ("used by 40 teams") usually enters a claim. */
+const NUMBER = /\d+(?:[.,]\d+)*\s*(?:%|percent\b|x\b|×|k\b|m\b|bn\b)?/gi;
+
+/**
+ * The always-ask items a claim's text carries: each always-ask word it uses
+ * (whole word, any case) and each number in it. D15 (P03 revision 2) compares
+ * these before and after an edit.
+ */
+export function alwaysAskTriggers(text: string): Set<string> {
+  const triggers = new Set<string>();
+  for (const word of ALWAYS_ASK_WORDS) {
+    if (new RegExp(`\\b${escapeRegExp(word)}\\b`, "i").test(text)) triggers.add(`word:${word}`);
+  }
+  for (const match of text.matchAll(NUMBER)) triggers.add(`number:${match[0].toLowerCase().replace(/\s+/g, "")}`);
+  return triggers;
+}
+
+/**
+ * D15: whether editing a claim's text from `before` to `after` adds an item
+ * follow-up-questions/SKILL.md always asks about, so the edited claim needs a
+ * question again before it can stay confirmed.
+ *
+ * - A metric, title, or date claim is itself the always-ask item: any change
+ *   to its text changes what the person confirmed.
+ * - Any other claim needs one when the edit brings in an always-ask word or a
+ *   number the old text did not have ("…team" → "…team used by 40 people").
+ */
+export function editAddsAlwaysAskItem(kind: ClaimKind, before: string, after: string): boolean {
+  if (before === after) return false;
+  if (ALWAYS_ASK_KINDS.includes(kind)) return true;
+  const had = alwaysAskTriggers(before);
+  for (const trigger of alwaysAskTriggers(after)) if (!had.has(trigger)) return true;
+  return false;
+}
+
 /**
  * A neutral, non-presupposing question for a claim that `needsQuestion`.
  * Follows follow-up-questions/SKILL.md's per-kind guidance. This is a

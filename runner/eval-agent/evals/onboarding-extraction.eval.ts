@@ -5,6 +5,7 @@ import path from "node:path";
 import { defineEval } from "eve/evals";
 import { equals, includes } from "eve/evals/expect";
 import { ManualClock } from "../../lib/clock.ts";
+import { questionNotes } from "../../store/profile-reducer.ts";
 import { ProfileStore } from "../../store/profile.ts";
 import { Workspace } from "../../store/workspace.ts";
 import {
@@ -75,7 +76,7 @@ await store.accountSource("resume", "provided");
 
 export default defineEval({
   description:
-    "extract_claims persists candidate claims verified against the real resume.md fixture, including the metric left candidate with a question; a hostile 'resume' still yields only claims, with no other tool called; a fabricated (non-verbatim) evidence quote is rejected, not trusted (P03 revision 1, R5); ask_follow_up parks on a real HITL input request and both an explicit 'confirmed' answer and a freeform-only answer confirm the claim with statement evidence (P03 revision 1, R6).",
+    "extract_claims persists candidate claims verified against the real resume.md fixture, including the metric left candidate with a question; a hostile 'resume' still yields only claims, with no other tool called; a fabricated (non-verbatim) evidence quote is rejected, not trusted (P03 revision 1, R5); ask_follow_up parks on a real HITL input request, the Confirm option confirms with statement evidence, the Exclude option excludes, and a free-text-only reply leaves the claim open with the reply kept as a note (P03 revision 2, D10).",
   async test(t) {
     // Fixture parity: the eval agent's hardcoded claim data (bundling-safety
     // reasons, see fixtures/onboarding.ts) must stay real substrings of the
@@ -84,7 +85,7 @@ export default defineEval({
       t.check(RESUME_TEXT.includes(claim.evidenceQuote), equals(true)).label(`resume.md contains: "${claim.evidenceQuote.slice(0, 40)}..."`);
     }
 
-    await store.saveSourceContent("resume", "resume.md", RESUME_TEXT);
+    await store.saveUpload("resume", "resume.md", RESUME_TEXT);
     {
       const turn = await t.send(ONBOARDING_FIXTURE_PROMPTS.extractResume);
       t.succeeded();
@@ -100,7 +101,7 @@ export default defineEval({
       t.check(Boolean(metric?.question), equals(true)).label("the metric carries a question");
     }
 
-    await store.saveSourceContent("resume", "hostile-resume.md", HOSTILE_RESUME_TEXT);
+    await store.saveUpload("resume", "hostile-resume.md", HOSTILE_RESUME_TEXT);
     {
       const before = await store.read();
       const turn = await t.send(ONBOARDING_FIXTURE_PROMPTS.extractHostileResume);
@@ -174,27 +175,50 @@ export default defineEval({
       t.check(claim?.evidence.kind, equals("statement")).label("the evidence is the person's own statement, not the superseded passage");
     }
 
-    // R6's exact bug: with `allowFreeform: true`, a text-only answer (no
-    // option picked) used to map to "no evidence" and silently exclude the
-    // claim. A non-blank freeform answer must confirm it instead.
+    // D10 (P03 revision 2): only an explicit option changes a claim. eve
+    // turns a reply that matches no option into free text, so each of the
+    // round-2 reviewer's probe answers arrives as `{text}` alone. Revision 1
+    // confirmed the metric on all three; each must now leave the claim
+    // disputed with its question open, keep the reply as a note, and tell the
+    // model the claim stays open.
     {
       const seeded = await store.extractClaims("resume", [
-        { text: "Founded a small internal tools team.", kind: "fact", evidenceRef: "resume.md#follow-up-freeform", evidenceQuote: "Founded a small internal tools team" },
+        { text: "Cut the nightly reconciliation job's runtime by 70%.", kind: "metric", evidenceRef: "resume.md#follow-up-free-text", evidenceQuote: "Cut the nightly reconciliation job's runtime" },
       ]);
-      const claimId = seeded.profile.claims.find((claim) => claim.evidence.ref === "resume.md#follow-up-freeform")!.id;
+      const claimId = seeded.profile.claims.find((claim) => claim.evidence.ref === "resume.md#follow-up-free-text")!.id;
+      const probes = ["No, I can't back that number up.", "exclude", "what do you mean?"];
 
+      for (const probe of probes) {
+        const turn = await t.send(askFollowUpPrompt(claimId));
+        t.check(turn.status, equals("waiting")).label(`"${probe}": the turn parks on the question first`);
+        const request = turn.session.requireInputRequest({ toolName: "ask_follow_up" });
+        const answered = await turn.session.respond([{ requestId: request.requestId, text: probe }]);
+        answered.succeeded();
+        t.check(answered.message ?? "", includes('"status":"open"')).label(`"${probe}": the tool tells the model the claim stays open`);
+        t.check(answered.message ?? "", includes('"isError":false')).label(`"${probe}": the tool result is not an error`);
+
+        const claim = (await store.read()).claims.find((c) => c.id === claimId);
+        t.check(claim?.status, equals("disputed")).label(`"${probe}": the claim is neither confirmed nor excluded`);
+        t.check(claim?.question, equals(FIXTURE_FOLLOW_UP_QUESTION)).label(`"${probe}": its question stays open`);
+        t.check(claim?.evidence.kind, equals("passage")).label(`"${probe}": no statement evidence was invented from the reply`);
+      }
+
+      const notes = questionNotes(await store.read())[claimId]?.map((note) => note.text);
+      t.check(JSON.stringify(notes), equals(JSON.stringify(probes))).label("each reply is kept, in order, as the person's note on the question");
+    }
+
+    // The Exclude option still excludes.
+    {
+      const seeded = await store.extractClaims("resume", [
+        { text: "The only engineer on call for the ledger service.", kind: "fact", evidenceRef: "resume.md#follow-up-exclude", evidenceQuote: "The only engineer on call" },
+      ]);
+      const claimId = seeded.profile.claims.find((claim) => claim.evidence.ref === "resume.md#follow-up-exclude")!.id;
       const turn = await t.send(askFollowUpPrompt(claimId));
-      t.check(turn.status, equals("waiting")).label("the turn parks (session.waiting) instead of failing or guessing");
       const request = turn.session.requireInputRequest({ toolName: "ask_follow_up" });
-      const freeformStatement = "I ran this migration myself, verified against our deploy dashboard.";
-      const answered = await turn.session.respond([{ requestId: request.requestId, text: freeformStatement }]);
+      const answered = await turn.session.respond([{ requestId: request.requestId, optionId: "excluded" }]);
       answered.succeeded();
-
-      const after = await store.read();
-      const claim = after.claims.find((c) => c.id === claimId);
-      t.check(claim?.status, equals("confirmed")).label("R6: a freeform-only answer confirms — it must never silently exclude the claim");
-      t.check(claim?.evidence.kind, equals("statement")).label("the freeform text is recorded as statement evidence");
-      t.check(claim?.evidence.quote, equals(freeformStatement)).label("the person's own words are the evidence quote, not a placeholder");
+      t.check(answered.message ?? "", includes('"status":"excluded"')).label("choosing Exclude reports the claim excluded");
+      t.check((await store.read()).claims.find((c) => c.id === claimId)?.status, equals("excluded")).label("choosing Exclude excludes the claim");
     }
   },
 });

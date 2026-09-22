@@ -218,7 +218,7 @@ describe("profile-reducer: 6 - Editing an approved fact", () => {
     expect(profile.revisions[0]!.status).toBe("proposed");
 
     const revisionId = profile.revisions[0]!.id;
-    const accept = reduce(profile, { type: "acceptRevision", revisionId, now: LATER });
+    const accept = reduce(profile, { type: "acceptRevision", revisionId, now: LATER, newId });
     expect(accept.ok).toBe(true);
     profile = accept.profile;
     expect(profile.claims[0]!.text).toBe("Worked on the core payments team.");
@@ -322,7 +322,7 @@ describe("profile-reducer: R1 — approval version numbers are never reused", ()
     expect(profile.approval).toBeNull();
 
     // Accepting A's now-stale revision must refuse, not silently re-approve at v1.
-    const accept = reduce(profile, { type: "acceptRevision", revisionId: revisionAId, now: LATER });
+    const accept = reduce(profile, { type: "acceptRevision", revisionId: revisionAId, now: LATER, newId });
     expect(accept.ok).toBe(false);
     expect(accept.profile.approval).toBeNull();
     expect(accept.profile).toBe(profile); // refused: state unchanged
@@ -402,7 +402,7 @@ describe("profile-reducer: R2 — any claim change but exclusion withdraws appro
     const revision = profile.revisions.find((r) => r.status === "proposed");
     expect(revision).toBeDefined();
 
-    const accept = reduce(profile, { type: "acceptRevision", revisionId: revision!.id, now: LATER });
+    const accept = reduce(profile, { type: "acceptRevision", revisionId: revision!.id, now: LATER, newId });
     expect(accept.ok).toBe(true);
     profile = accept.profile;
     expect(profile.boundaries[0]!.text).toBe("Do not invent metrics, credentials, responsibilities, or scope.");

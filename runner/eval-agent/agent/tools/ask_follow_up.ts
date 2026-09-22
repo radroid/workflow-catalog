@@ -1,43 +1,32 @@
 import { defineWorkflowTool } from "eve/tools";
-import { hasEvidenceFromAnswer } from "../../../agent/lib/ask-follow-up-logic.ts";
-import { askFollowUpInputSchema, askFollowUpOutputSchema, askFollowUpToolDescription } from "../../../agent/lib/ask-follow-up-schema.ts";
+import { followUpRequest, type FollowUpAnswer } from "../../../agent/lib/ask-follow-up-logic.ts";
+import { askFollowUpInputSchema, askFollowUpOutputSchema, askFollowUpToolDescription, type AskFollowUpOutput } from "../../../agent/lib/ask-follow-up-schema.ts";
+import { checkFollowUpClaimIsOpen, openFollowUpQuestion, recordFollowUpAnswer } from "../../../agent/lib/ask-follow-up-steps.ts";
 import { openStore } from "../../../agent/lib/onboarding-store.ts";
 
-// The real behaviour, not a copy: schemas, the `openStore` helper, and the
-// evidence-from-answer logic (`hasEvidenceFromAnswer`, P03 revision 1, R6)
-// are imported from the shared runner/agent/lib module. See
-// extract_claims.ts (this directory) and agent/tools/ask_follow_up.ts for
-// why this tool's "use workflow" executor and "use step" helpers stay
-// inline and duplicated once per eve app root. The evals below still check
-// this tool's real approval-free HITL parking behaviour, unchanged.
+// The eval agent's own thin wrapper around the shared ask_follow_up logic.
+// Directives compile per app root (docs/spec/research/eve-runtime.md §8 item
+// 14), so this root needs its own "use workflow" executor and "use step"
+// wrappers; each wrapper is one line that opens the store and calls the
+// directive-free helper in runner/agent/lib/ask-follow-up-steps.ts, the same
+// call runner/agent/tools/ask_follow_up.ts makes. The logic itself is never
+// copied here, so the evals exercise the helpers production runs, and
+// test/ask-follow-up-tools.test.ts checks this file and the production one
+// behave the same.
 
-/** "use step": confirms the claim exists and still needs a decision, before anyone is asked anything. */
 async function checkClaimIsOpen(claimId: string): Promise<void> {
   "use step";
-  const store = await openStore();
-  const profile = await store.read();
-  const claim = profile.claims.find((c) => c.id === claimId);
-  if (!claim) throw new Error(`No claim ${claimId} in the career profile.`);
-  if (claim.status !== "candidate" && claim.status !== "disputed") {
-    throw new Error(`Claim ${claimId} already has a decision (${claim.status}); there is nothing to ask.`);
-  }
+  return checkFollowUpClaimIsOpen(await openStore(), claimId);
 }
 
-/** "use step": marks the claim disputed with this question, so it is visibly "needs a decision" while the person is asked. */
 async function openQuestion(claimId: string, question: string): Promise<void> {
   "use step";
-  const store = await openStore();
-  const result = await store.decideClaim(claimId, "disputed", question);
-  if (!result.ok) throw new Error(result.message);
+  return openFollowUpQuestion(await openStore(), claimId, question);
 }
 
-/** "use step": records the person's answer once it arrives. */
-async function recordAnswer(claimId: string, hasEvidence: boolean, statement: string | undefined): Promise<string> {
+async function recordAnswer(claimId: string, answer: FollowUpAnswer): Promise<AskFollowUpOutput> {
   "use step";
-  const store = await openStore();
-  const result = await store.answerQuestion(claimId, hasEvidence, statement);
-  if (!result.ok) throw new Error(result.message);
-  return result.message;
+  return recordFollowUpAnswer(await openStore(), claimId, answer);
 }
 
 export default defineWorkflowTool({
@@ -48,20 +37,7 @@ export default defineWorkflowTool({
     "use workflow";
     await checkClaimIsOpen(claimId);
     await openQuestion(claimId, question);
-
-    const answer = await ctx.ask({
-      prompt: question,
-      display: "confirmation",
-      options: [
-        { id: "confirmed", label: "Confirm — I stand by this", style: "primary" },
-        { id: "excluded", label: "Exclude — I can't support this" },
-      ],
-      allowFreeform: true,
-    });
-
-    const hasEvidence = hasEvidenceFromAnswer(answer); // R6 (P03 revision 1) — see ask-follow-up-logic.ts
-    const status: "confirmed" | "excluded" = hasEvidence ? "confirmed" : "excluded";
-    const message = await recordAnswer(claimId, hasEvidence, answer.text);
-    return { claimId, status, message };
+    const answer = await ctx.ask(followUpRequest(question));
+    return recordAnswer(claimId, answer);
   },
 });

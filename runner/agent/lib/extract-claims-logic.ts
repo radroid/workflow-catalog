@@ -2,31 +2,24 @@ import type { ProfileStore } from "../../store/profile.ts";
 import type { ExtractClaimsInput, ExtractClaimsOutput } from "./extract-claims-schema.ts";
 
 /**
- * The real verify-then-persist behaviour behind `extract_claims`: checks
- * every evidence quote the model drafted against the workspace's actual
- * source text for that category (claim-extraction/SKILL.md: "every claim
- * must have a real evidence.quote drawn from the actual source"), drops
- * anything that does not match verbatim, then persists whatever survived
- * through the store (idempotent per `(source, evidence)` — `profile-reducer.ts`'s
- * `extractClaims` action already de-duplicates; this function does not
- * re-implement that).
+ * The verify-then-persist behaviour behind `extract_claims`: checks every
+ * evidence quote the model drafted against the workspace's actual source text
+ * for that category (claim-extraction/SKILL.md: "every claim must have a real
+ * evidence.quote drawn from the actual source"), drops anything that does not
+ * match verbatim, then persists what survived through the store (idempotent
+ * per `(source, evidence)`: `profile-reducer.ts`'s `extractClaims` action
+ * de-duplicates).
  *
- * Directive-free (no `"use step"`/`"use workflow"` anywhere in this file),
- * so — unlike a function carrying one of those — it is freely importable
- * from both `agent/tools/extract_claims.ts` and
- * `eval-agent/agent/tools/extract_claims.ts`, and directly unit-testable
- * with a real `ProfileStore` over a temp workspace: no eve runtime, no
- * `RUNNER_WORKSPACE`, no directive-bundling behaviour to route around
- * (`test/extract-claims-logic.test.ts`).
+ * Directive-free, so both tool roots (`agent/tools/extract_claims.ts` and
+ * `eval-agent/agent/tools/extract_claims.ts`) call it from a one-line
+ * `"use step"` wrapper, and `test/extract-claims-logic.test.ts` tests it
+ * against a real store. Directives compile per app root
+ * (docs/spec/research/eve-runtime.md §8 item 14), which is why the logic
+ * lives here and not in either tool file.
  *
- * P03 revision 1, R5: before this file existed, this exact logic was
- * duplicated verbatim between the two tool files' `"use step"` functions,
- * even though `eval-agent/agent/tools/extract_claims.ts`'s header comment
- * claimed "the real behaviour, not a copy" — true of the schemas and
- * `openStore` (both already directive-free and already shared), never true
- * of this verification logic until now. Each tool file now keeps only a
- * thin `"use step"` wrapper — a literal, in-file function eve's bundler can
- * discover and register — that does nothing but open a store and call this.
+ * `persisted` (P03 revision 2, D14) is true only when the store accepted the
+ * write, so the extraction route records the source's content hash only after
+ * a call in that turn actually persisted.
  */
 export async function verifyAndPersistExtractedClaims(input: ExtractClaimsInput, store: ProfileStore): Promise<ExtractClaimsOutput> {
   const sourceText = await store.sourceText(input.sourceCategory);
@@ -37,11 +30,17 @@ export async function verifyAndPersistExtractedClaims(input: ExtractClaimsInput,
     else rejected.push(claim.evidenceQuote);
   }
   if (verified.length === 0) {
-    return { added: 0, rejected, message: rejected.length > 0 ? "No claim's evidence quote was found in the source text; nothing was added." : "No claims supplied." };
+    return {
+      sourceCategory: input.sourceCategory,
+      persisted: false,
+      added: 0,
+      rejected,
+      message: rejected.length > 0 ? "No claim's evidence quote was found in the source text; nothing was added." : "No claims supplied.",
+    };
   }
   const result = await store.extractClaims(
     input.sourceCategory,
     verified.map((claim) => ({ text: claim.text, kind: claim.kind, evidenceRef: claim.evidenceRef, evidenceQuote: claim.evidenceQuote })),
   );
-  return { added: result.added, rejected, message: result.message };
+  return { sourceCategory: input.sourceCategory, persisted: result.ok, added: result.added, rejected, message: result.message };
 }

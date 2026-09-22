@@ -1,58 +1,67 @@
-import type { Claim, OnboardingProfile, ProfileStatement } from "./profile-types.ts";
+import {
+  cleanText,
+  currentWithdrawal,
+  isNoDetailStatement,
+  pendingRevisions,
+  questionNotes,
+  quoteClaim,
+  statementLabel,
+  type WithdrawalView,
+} from "./profile-reducer.ts";
+import type { Claim, OnboardingProfile, ProfileStatement, StatementKind } from "./profile-types.ts";
 
 /**
- * `career-profile.md`: rendered from the JSON profile, and parsed back so an
+ * `career-profile.md`: rendered from the JSON profile, and read back so an
  * edit to the Markdown round-trips into it (mvp-spec §3 F5). Mirrors
- * `packages/job-assistant/templates/career-profile.md.hbs`'s exact section
- * headings and the `` `[id]` `` marker convention documented there, hand-
- * written rather than run through Handlebars — `packages/job-assistant/test/templates.test.ts`
- * already notes "no Handlebars dependency added to actually render these"
- * (the P01 packet decision); this module is P03's renderer for the same
- * template contract, kept in the runner where the person's workspace lives.
+ * `packages/job-assistant/templates/career-profile.md.hbs`'s section headings
+ * and the `` `[id]` `` marker convention documented there, hand-written
+ * rather than run through Handlebars (the P01 packet decision: no Handlebars
+ * dependency).
  *
- * The round trip only ever recovers *text* edits (F5's accept test: "render
- * → edit one claim's text → parse → render equals expected"), including
- * multi-line text: a bullet's second and later lines are indented two
- * spaces with no leading `-`, and the `` `[id]` `` marker always ends the
- * last physical line of the bullet, so a claim/statement whose text itself
- * contains a newline still round-trips (an earlier single-line-only regex
- * lost everything before the last `\n` — see the P03 revision-1 report). A
- * line's `` `[id]` `` marker is section-agnostic: `parseProfileMarkdownEdits`
- * reads every marked bullet in the document into one id→text map, and
- * `applyMarkdownEdits` updates whichever claim, boundary, preference, or
- * presentation statement in the profile carries that id, with no awareness
- * of approval state — it is the low-level rendering/parsing primitive
- * (this module owns no persistence and calls the reducer for nothing).
- * `store/profile.ts`'s `ProfileStore.applyMarkdownEdit`/`reconcileMarkdownFile`
- * (singular "Edit") are the layer that actually understands approval: they
- * use `parseProfileMarkdownEdits` to find what changed, but route a
- * confirmed claim or a boundary/preference/presentation statement through
- * the reducer's `editClaimText`/`editStatementText` actions instead of this
- * file's `applyMarkdownEdits`, so editing an approved profile's fact
- * proposes a revision rather than overwriting it outright (F5, "after
- * approval, edits become revisions with an explicit accept"). Structural
- * edits (adding/removing a bullet, moving something between sections) are
- * not round-tripped either way — the local UI is the supported way to
- * change status, approve, or answer a question.
+ * Only the text of a marked bullet is editable. A bullet's second and later
+ * lines are indented two spaces with no leading `-`, and the marker always
+ * ends the bullet's last line, so multi-line text round-trips (D5). Nested
+ * lines (evidence, a question, the person's notes) and their own continuation
+ * lines are indented further and are never read back.
+ *
+ * Two readers:
+ *
+ * - `parseProfileMarkdownEdits`/`applyMarkdownEdits`: the lenient, low-level
+ *   id→text primitives (no approval, no strictness), kept for the F5
+ *   round-trip property tests.
+ * - `readMarkdownEdits(profile, markdown)`: the strict reader the store uses
+ *   before every write (D9, P03 revision 2). It accepts a document only when
+ *   everything except the text of marked bullets is exactly what this module
+ *   renders for `profile`, so an edit it cannot apply (a removed or damaged
+ *   marker, a new or moved bullet, a changed evidence line) is reported
+ *   instead of being dropped silently.
  */
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/** "22 September 2026 at 14:05 UTC": deterministic, whatever the machine's locale or ICU version. */
+export function formatUtc(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()} at ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`;
+}
 
 interface RenderItem {
   readonly id: string;
   readonly text: string;
-  /** Only `needsDecisionClaims` items carry one; rendered as a nested line, never editable via round-trip. */
-  readonly question?: string;
-  /** Only `confirmedClaims` items carry one (P03 revision 1, C10 — the UI critic's "career-profile.md has no evidence lines"): a human-readable rendering of `Claim.evidence`, nested the same way `question` is, and for the same reason never editable via round-trip. */
-  readonly evidence?: string;
+  /** Lines nested under the bullet: `**Evidence:**`, `**Question:**`, `**Your note:**`. Never read back. */
+  readonly nested?: readonly string[];
 }
 
-/** `Claim.evidence` (`{kind: "passage" | "statement", ref, quote}`) rendered for a person to read, matching `docs/spec/visuals/index.html`'s `profileMarkdown()` convention ("Evidence: …" nested under each confirmed claim). A `statement` is the person's own words (recorded once a follow-up question is answered, R6) — worth saying explicitly, since it is not the same kind of evidence as a verbatim source passage. */
-function evidenceLine(claim: Claim): string {
-  return claim.evidence.kind === "statement" ? `your own statement — "${claim.evidence.quote}"` : `"${claim.evidence.quote}"`;
+/** `Claim.evidence` for a person to read: a source passage, the person's own statement, or a confirmation without detail. */
+export function evidenceText(claim: Claim): string {
+  if (isNoDetailStatement(claim.evidence)) return "you confirmed it without adding detail.";
+  if (claim.evidence.kind === "statement") return `your own statement: "${claim.evidence.quote}"`;
+  return `"${claim.evidence.quote}" (${claim.evidence.ref})`;
 }
 
 export interface ProfileMarkdownView {
-  readonly profileVersion: number | null;
-  readonly approvedAt: string | null;
   readonly confirmedClaims: readonly RenderItem[];
   readonly presentation: readonly RenderItem[];
   readonly needsDecisionClaims: readonly RenderItem[];
@@ -62,21 +71,24 @@ export interface ProfileMarkdownView {
 }
 
 export function toMarkdownView(profile: OnboardingProfile): ProfileMarkdownView {
+  const notes = questionNotes(profile);
   return {
-    profileVersion: profile.approval?.version ?? null,
-    approvedAt: profile.approval?.at ?? null,
-    confirmedClaims: profile.claims.filter((c) => c.status === "confirmed").map((c) => ({ id: c.id, text: c.text, evidence: evidenceLine(c) })),
+    confirmedClaims: profile.claims.filter((c) => c.status === "confirmed").map((c) => ({ id: c.id, text: c.text, nested: [`**Evidence:** ${evidenceText(c)}`] })),
     presentation: profile.presentation,
     needsDecisionClaims: profile.claims
       .filter((c) => c.status === "candidate" || c.status === "disputed")
-      .map((c) => ({ id: c.id, text: c.text, question: c.question })),
+      .map((c) => ({
+        id: c.id,
+        text: c.text,
+        nested: [...(c.question ? [`**Question:** ${c.question}`] : []), ...(notes[c.id] ?? []).map((note) => `**Your note:** ${note.text}`)],
+      })),
     excludedClaims: profile.claims.filter((c) => c.status === "excluded").map((c) => ({ id: c.id, text: c.text })),
     boundaries: profile.boundaries,
     preferences: profile.preferences,
   };
 }
 
-/** A bullet whose text may itself contain `\n`: the first line carries the leading `- `, every later line is indented two spaces with no `-`, and the `` `[id]` `` marker always ends the last physical line — never the first, when there is more than one. */
+/** A bullet whose text may contain `\n`: the first line carries `- `, later lines are indented two spaces, and the `` `[id]` `` marker ends the last line. */
 function bulletLine(id: string, text: string): string {
   const lines = text.split("\n");
   const rendered = lines.map((line, index) => (index === 0 ? `- ${line}` : `  ${line}`));
@@ -85,55 +97,96 @@ function bulletLine(id: string, text: string): string {
   return rendered.join("\n");
 }
 
-function bulletList(items: readonly RenderItem[], empty: string, extra?: (item: RenderItem) => string): string {
+/** A nested, never-read-back line under a bullet. VN8: its own later lines are indented four spaces, so a multi-line quote or question stays visibly inside its bullet. */
+function nestedLine(text: string): string {
+  return text
+    .split("\n")
+    .map((line, index) => (index === 0 ? `  - ${line}` : `    ${line}`))
+    .join("\n");
+}
+
+function bulletList(items: readonly RenderItem[], empty: string): string {
   if (items.length === 0) return `_${empty}_`;
-  return items.map((item) => bulletLine(item.id, item.text) + (extra ? extra(item) : "")).join("\n");
+  return items.map((item) => [bulletLine(item.id, item.text), ...(item.nested ?? []).map(nestedLine)].join("\n")).join("\n");
+}
+
+function withdrawalCause(withdrawal: WithdrawalView): string {
+  const cause = withdrawal.cause;
+  if (!cause) return "";
+  if (cause.kind === "statement") return ` because the ${statementLabel(cause.statementKind)} ${quoteClaim(cause.statementText)} was added`;
+  const change = { disputed: "got an open question", confirmed: "was confirmed", answered: "was answered", reopened: "changed and needs your answer" }[cause.change];
+  return ` because the claim ${quoteClaim(cause.claimText)} ${change}`;
+}
+
+function statusLine(profile: OnboardingProfile): string {
+  if (profile.approval) return `Approved as version ${profile.approval.version} on ${formatUtc(profile.approval.at)}.`;
+  const withdrawal = currentWithdrawal(profile);
+  if (withdrawal) {
+    return `Not approved. Approval of version ${withdrawal.version} was withdrawn on ${formatUtc(withdrawal.at)}${withdrawalCause(withdrawal)}. Answer any open question, then approve again.`;
+  }
+  return "Not yet approved. Generation stays locked until every source is accounted for, no claim is left needing a decision, and you approve this profile.";
+}
+
+function revisionTarget(target: "claim" | StatementKind): string {
+  return target === "claim" ? "claim" : statementLabel(target);
+}
+
+function proposedRevisionsSection(profile: OnboardingProfile): string[] {
+  const pending = pendingRevisions(profile);
+  if (pending.length === 0 || !profile.approval) return [];
+  return [
+    "## Proposed revisions",
+    "",
+    `Version ${profile.approval.version} stays in force until you accept or reject each of these on the Profile page.`,
+    "",
+    ...pending.map((revision) =>
+      [`- To the ${revisionTarget(revision.target)} ${quoteClaim(revision.before)}, proposed ${formatUtc(revision.proposedAt)}:`, nestedLine(revision.after)].join("\n"),
+    ),
+    "",
+  ];
 }
 
 export function renderProfileMarkdown(profile: OnboardingProfile): string {
   const view = toMarkdownView(profile);
-  const status = view.profileVersion
-    ? `Approved as version ${view.profileVersion} on ${view.approvedAt}.`
-    : "Not yet approved — generation stays locked until every source is accounted for, no claim is left needing a decision, and you approve this profile.";
-
-  return (
-    [
-      "# Career profile",
-      "",
-      status,
-      "",
-      "## Confirmed claims",
-      "",
-      bulletList(view.confirmedClaims, "None yet.", (item) => (item.evidence ? `\n  - **Evidence:** ${item.evidence}` : "")),
-      "",
-      "## Presentation that can change",
-      "",
-      "Wording rules for how confirmed claims get presented — reorder, re-emphasise, rewrite a bullet's phrasing. Never a new fact and never a status change to any claim.",
-      "",
-      bulletList(view.presentation, "None recorded yet."),
-      "",
-      "## Needs a decision",
-      "",
-      bulletList(view.needsDecisionClaims, "Nothing waiting on you.", (item) => (item.question ? `\n  - **Question:** ${item.question}` : "")),
-      "",
-      "## Excluded",
-      "",
-      "Kept here, visibly, so you can see what was left out and why — never used in a generated document.",
-      "",
-      bulletList(view.excludedClaims, "None excluded."),
-      "",
-      "## Boundaries",
-      "",
-      "Rules generation must never cross — an invented metric, a changed date, a changed title, a changed credential.",
-      "",
-      bulletList(view.boundaries, "None recorded yet."),
-      "",
-      "## Preferences",
-      "",
-      bulletList(view.preferences, "None recorded yet."),
-      "",
-    ].join("\n")
-  );
+  return [
+    "# Career profile",
+    "",
+    statusLine(profile),
+    "",
+    "Edit the words of any line that ends in an id marker (the bracketed code in backticks), and keep the marker as it is. The runner saves your edit before its next change to your profile. Once the profile is approved, an edit becomes a proposed revision that you accept on the Profile page. Everything else in this file is rewritten from your profile.",
+    "",
+    "## Confirmed claims",
+    "",
+    bulletList(view.confirmedClaims, "None yet."),
+    "",
+    "## Presentation that can change",
+    "",
+    "Wording rules for how confirmed claims get presented: reorder, re-emphasise, rewrite a bullet's phrasing. Never a new fact and never a status change to any claim.",
+    "",
+    bulletList(view.presentation, "None recorded yet."),
+    "",
+    "## Needs a decision",
+    "",
+    bulletList(view.needsDecisionClaims, "Nothing waiting on you."),
+    "",
+    "## Excluded",
+    "",
+    "Kept here, visibly, so you can see what was left out. Never used in a generated document.",
+    "",
+    bulletList(view.excludedClaims, "None excluded."),
+    "",
+    "## Boundaries",
+    "",
+    "Rules generation must never cross: an invented metric, a changed date, a changed title, a changed credential.",
+    "",
+    bulletList(view.boundaries, "None recorded yet."),
+    "",
+    "## Preferences",
+    "",
+    bulletList(view.preferences, "None recorded yet."),
+    "",
+    ...proposedRevisionsSection(profile),
+  ].join("\n");
 }
 
 const BULLET_START = /^-\s(.+)$/;
@@ -141,67 +194,25 @@ const CONTINUATION = /^ {2}(.+)$/;
 const ID_MARKER = /\s`\[([^\]\s`]+)\]`\s*$/;
 
 /**
- * Every `` `[id]` ``-marked bullet's id → its current text (D5: multi-line,
- * joined back with `\n`), read from a `career-profile.md` document.
- *
- * A bullet block starts at a `- ` line. If that first line itself ends with
- * the id marker, the bullet is one line and the scan stops there (this is
- * also why a nested, unmarked line like "Needs a decision"'s `` - **Question:**
- * `` never gets folded into the preceding claim's text: the claim's own
- * line already carried the marker, so its block ends before that nested
- * line is ever reached). Otherwise, every following two-space-indented,
- * non-empty line is a continuation of the same bullet's text, up to and
- * including whichever one finally carries the marker; a continuation block
- * that never reaches a marker (blank line, dedent, or end of file first)
- * is dropped rather than guessed at.
+ * Every `` `[id]` ``-marked bullet's id → its text (D5: multi-line, joined
+ * back with `\n`), leniently: a bullet whose block never reaches a marker is
+ * skipped, and nothing else in the document is checked. See
+ * `readMarkdownEdits` for the strict reader the store uses.
  */
 export function parseProfileMarkdownEdits(markdown: string): Map<string, string> {
   const edits = new Map<string, string>();
-  const lines = markdown.split("\n");
-  let i = 0;
-  while (i < lines.length) {
-    const start = lines[i]!.match(BULLET_START);
-    if (!start) {
-      i++;
-      continue;
-    }
-    const collected = [start[1]!];
-    let id: string | undefined;
-    const firstMarker = collected[0]!.match(ID_MARKER);
-    if (firstMarker) {
-      collected[0] = collected[0]!.slice(0, firstMarker.index);
-      id = firstMarker[1];
-      i++;
-    } else {
-      let j = i + 1;
-      for (; j < lines.length; j++) {
-        const cont = lines[j]!.match(CONTINUATION);
-        if (!cont) break;
-        const marker = cont[1]!.match(ID_MARKER);
-        if (marker) {
-          collected.push(cont[1]!.slice(0, marker.index));
-          id = marker[1];
-          j++;
-          break;
-        }
-        collected.push(cont[1]!);
-      }
-      i = j;
-    }
-    if (id) {
-      const text = collected.join("\n");
-      if (text) edits.set(id, text);
-    }
+  for (const block of scan(markdown.split("\n")).blocks) {
+    if (block.text) edits.set(block.id, block.text);
   }
   return edits;
 }
 
-/** Applies id-matched text edits to a list of boundary/preference/presentation statements, with no awareness of approval — used by `applyMarkdownEdits` below. `store/profile.ts`'s `ProfileStore` never calls this: it routes every statement edit through the reducer's `editStatementText` action instead (approval-aware), even though that action's own not-yet-approved branch ends up doing exactly the same map-by-id update this function does. */
+/** Applies id-matched text edits to a list of statements, with no awareness of approval. */
 export function updateStatements(items: readonly ProfileStatement[], edits: ReadonlyMap<string, string>): ProfileStatement[] {
   return items.map((item) => (edits.has(item.id) ? { ...item, text: edits.get(item.id)! } : item));
 }
 
-/** Applies every `` `[id]` ``-marked text edit in `markdown` back onto `profile`. IDs the document does not carry a marker for are left unchanged; an id in the document that matches no claim, boundary, preference, or presentation statement is ignored (a person cannot invent a new claim by editing the file). */
+/** Applies every marked text edit in `markdown` to `profile`, leniently and with no awareness of approval. An id that matches nothing is ignored. */
 export function applyMarkdownEdits(profile: OnboardingProfile, markdown: string): OnboardingProfile {
   const edits = parseProfileMarkdownEdits(markdown);
   if (edits.size === 0) return profile;
@@ -212,4 +223,174 @@ export function applyMarkdownEdits(profile: OnboardingProfile, markdown: string)
     preferences: updateStatements(profile.preferences, edits),
     presentation: updateStatements(profile.presentation, edits),
   };
+}
+
+interface Block {
+  readonly id: string;
+  readonly text: string;
+  /** 1-based line of the bullet's first line. */
+  readonly line: number;
+}
+
+interface SkeletonLine {
+  readonly text: string;
+  readonly line: number;
+  /** Set when this skeleton line stands for a marked bullet. */
+  readonly id?: string;
+}
+
+interface Scan {
+  readonly blocks: readonly Block[];
+  /** The document with each marked bullet's text replaced by its id, blank lines left out. */
+  readonly skeleton: readonly SkeletonLine[];
+}
+
+/**
+ * Splits a document into marked bullets and everything else. A bullet block
+ * starts at a `- ` line; if that line ends with a marker the block is one
+ * line, otherwise every following two-space-indented line belongs to it up to
+ * the one that carries the marker. A block that never reaches a marker is not
+ * a marked bullet: its first line stays in the skeleton as written.
+ */
+function scan(lines: readonly string[]): Scan {
+  const blocks: Block[] = [];
+  const skeleton: SkeletonLine[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const start = BULLET_START.exec(line);
+    if (!start) {
+      if (line.trim() !== "") skeleton.push({ text: line, line: i + 1 });
+      i++;
+      continue;
+    }
+    const collected = [start[1]!];
+    let id: string | undefined;
+    let next = i + 1;
+    const firstMarker = ID_MARKER.exec(collected[0]!);
+    if (firstMarker) {
+      collected[0] = collected[0]!.slice(0, firstMarker.index);
+      id = firstMarker[1];
+    } else {
+      for (; next < lines.length; next++) {
+        const cont = CONTINUATION.exec(lines[next]!);
+        if (!cont) break;
+        const marker = ID_MARKER.exec(cont[1]!);
+        if (marker) {
+          collected.push(cont[1]!.slice(0, marker.index));
+          id = marker[1];
+          next++;
+          break;
+        }
+        collected.push(cont[1]!);
+      }
+    }
+    if (id) {
+      blocks.push({ id, text: collected.join("\n"), line: i + 1 });
+      skeleton.push({ text: `- [${id}]`, line: i + 1, id });
+      i = next;
+    } else {
+      skeleton.push({ text: line, line: i + 1 });
+      i++;
+    }
+  }
+  return { blocks, skeleton };
+}
+
+/** Line endings normalised and trailing spaces dropped, so an editor's own habits never read as an edit. */
+function normaliseLines(markdown: string): string[] {
+  return markdown
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/, ""));
+}
+
+export type MarkdownRead = { readonly ok: true; readonly edits: ReadonlyMap<string, string> } | { readonly ok: false; readonly problem: string };
+
+function editableItems(profile: OnboardingProfile): Map<string, { readonly label: string; readonly text: string }> {
+  const items = new Map<string, { label: string; text: string }>();
+  for (const claim of profile.claims) items.set(claim.id, { label: `the claim ${quoteClaim(claim.text)}`, text: claim.text });
+  for (const [kind, list] of [
+    ["boundary", profile.boundaries],
+    ["preference", profile.preferences],
+    ["presentation", profile.presentation],
+  ] as const) {
+    for (const statement of list) items.set(statement.id, { label: `the ${statementLabel(kind)} ${quoteClaim(statement.text)}`, text: statement.text });
+  }
+  return items;
+}
+
+function clip(text: string, max = 80): string {
+  const oneLine = text.trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
+/**
+ * D9 (P03 revision 2): the strict reader. Returns each marked bullet's text
+ * (every id in `profile`, exactly once), or the first problem that makes the
+ * document unreadable:
+ *
+ * - a marker that matches nothing in the profile, or appears twice;
+ * - a claim or statement whose marker is gone (its line was deleted, or the
+ *   marker was changed);
+ * - a marked line left empty;
+ * - any other difference from what `renderProfileMarkdown(profile)` would
+ *   write: a new bullet, a moved bullet, a changed heading, evidence line,
+ *   question or note. Blank lines, line endings and trailing spaces are
+ *   ignored.
+ *
+ * The problem is one plain sentence naming the line and what to do.
+ */
+export function readMarkdownEdits(profile: OnboardingProfile, markdown: string): MarkdownRead {
+  const disk = scan(normaliseLines(markdown));
+  const expected = scan(normaliseLines(renderProfileMarkdown(profile)));
+  const items = editableItems(profile);
+
+  const seen = new Map<string, number>();
+  for (const block of disk.blocks) {
+    const item = items.get(block.id);
+    if (!item) {
+      return { ok: false, problem: `Line ${block.line} ends in the marker [${block.id}], which matches nothing in your profile. New items can't be added by editing the file; add them on the Onboarding page.` };
+    }
+    const earlier = seen.get(block.id);
+    if (earlier !== undefined) {
+      return { ok: false, problem: `The marker for ${item.label} appears twice, on lines ${earlier} and ${block.line}. Keep one of them.` };
+    }
+    seen.set(block.id, block.line);
+    if (!cleanText(block.text)) {
+      return { ok: false, problem: `The line for ${item.label} (line ${block.line}) is empty. A line can't be removed by editing the file; exclude a claim on the Onboarding page instead.` };
+    }
+  }
+  for (const [id, item] of items) {
+    if (!seen.has(id)) {
+      return {
+        ok: false,
+        problem: `The line for ${item.label} is missing, or its marker was changed. A line can't be removed by editing the file. Put the line back with its marker as it was.`,
+      };
+    }
+  }
+
+  const length = Math.max(disk.skeleton.length, expected.skeleton.length);
+  for (let k = 0; k < length; k++) {
+    const got = disk.skeleton[k];
+    const want = expected.skeleton[k];
+    if (got?.text === want?.text) continue;
+    if (got?.id !== undefined && expected.skeleton.some((entry) => entry.id === got.id)) {
+      const item = items.get(got.id)!;
+      return {
+        ok: false,
+        problem: `The line for ${item.label} (line ${got.line}) was moved. Moving a line doesn't change a claim; confirm, exclude or answer it on the Onboarding page, and put the line back where it was.`,
+      };
+    }
+    if (got && BULLET_START.test(got.text)) {
+      return { ok: false, problem: `Line ${got.line}, "${clip(got.text.slice(2))}", has no marker. New items can't be added by editing the file; add them on the Onboarding page.` };
+    }
+    if (got && want) {
+      return { ok: false, problem: `Line ${got.line} was changed, but only the words before a marker can be edited. It should read: "${clip(want.text)}".` };
+    }
+    if (got) return { ok: false, problem: `Line ${got.line}, "${clip(got.text)}", was added. Only the words before a marker can be edited.` };
+    return { ok: false, problem: `The line "${clip(want!.text)}" was removed. Only the words before a marker can be edited.` };
+  }
+
+  return { ok: true, edits: new Map(disk.blocks.map((block) => [block.id, cleanText(block.text)])) };
 }

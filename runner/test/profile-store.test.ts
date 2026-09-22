@@ -46,7 +46,7 @@ describe("ProfileStore.applyMarkdownEdit", () => {
     await store.decideClaim(claim.id, "confirmed");
 
     const markdown = (await store.renderMarkdown()).replace(claim.text, "Worked on the core payments team.");
-    const after = await store.applyMarkdownEdit(markdown);
+    const { profile: after } = await store.applyMarkdownEdit(markdown);
 
     expect(after.claims.find((c) => c.id === claim.id)?.text).toBe("Worked on the core payments team.");
     expect(after.revisions).toHaveLength(0);
@@ -64,7 +64,7 @@ describe("ProfileStore.applyMarkdownEdit", () => {
     expect(approved.profile.approval?.version).toBe(1);
 
     const markdown = (await store.renderMarkdown()).replace(claim.text, "Worked on the core payments team.");
-    const after = await store.applyMarkdownEdit(markdown);
+    const { profile: after } = await store.applyMarkdownEdit(markdown);
 
     // The approved text is untouched...
     expect(after.claims.find((c) => c.id === claim.id)?.text).toBe("Worked on the payments team.");
@@ -99,7 +99,7 @@ describe("ProfileStore.applyMarkdownEdit", () => {
     expect(candidate).toBeDefined();
 
     const markdown = (await store.renderMarkdown()).replace(candidate!.text, "Owned the entire on-call rotation.");
-    const after = await store.applyMarkdownEdit(markdown);
+    const { profile: after } = await store.applyMarkdownEdit(markdown);
 
     expect(after.claims.find((c) => c.id === candidate!.id)?.text).toBe("Owned the entire on-call rotation.");
     expect(after.revisions).toHaveLength(0);
@@ -111,7 +111,7 @@ describe("ProfileStore.applyMarkdownEdit", () => {
 
     const boundary = (await store.read()).boundaries[0]!;
     const markdown = (await store.renderMarkdown()).replace(boundary.text, "Do not invent metrics, credentials, responsibilities, or scope.");
-    const after = await store.applyMarkdownEdit(markdown);
+    const { profile: after } = await store.applyMarkdownEdit(markdown);
 
     expect(after.boundaries.find((b) => b.id === boundary.id)?.text).toBe("Do not invent metrics, credentials, responsibilities, or scope.");
     expect(after.revisions).toHaveLength(0);
@@ -129,7 +129,7 @@ describe("ProfileStore.applyMarkdownEdit", () => {
 
     const boundary = (await store.read()).boundaries[0]!;
     const markdown = (await store.renderMarkdown()).replace(boundary.text, "Do not invent metrics, credentials, responsibilities, or scope.");
-    const after = await store.applyMarkdownEdit(markdown);
+    const { profile: after } = await store.applyMarkdownEdit(markdown);
 
     // The approved text is untouched...
     expect(after.boundaries.find((b) => b.id === boundary.id)?.text).toBe(boundary.text);

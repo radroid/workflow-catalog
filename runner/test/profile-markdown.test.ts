@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createInitialProfile } from "../store/profile-types.ts";
 import { reduce } from "../store/profile-reducer.ts";
-import { applyMarkdownEdits, parseProfileMarkdownEdits, renderProfileMarkdown } from "../store/profile-markdown.ts";
+import { applyMarkdownEdits, parseProfileMarkdownEdits, readMarkdownEdits, renderProfileMarkdown } from "../store/profile-markdown.ts";
 
 /**
  * `career-profile.md`'s round trip (mvp-spec §3 F5's accept test: "render →
@@ -168,6 +168,11 @@ describe("profile-markdown", () => {
         const roundTripped = applyMarkdownEdits(profile, rendered);
         expect(roundTripped).toEqual(profile);
         expect(renderProfileMarkdown(roundTripped)).toBe(rendered);
+
+        // D9 (revision 2): the strict reader the store uses reads the same text back, and nothing else.
+        const strict = readMarkdownEdits(profile, rendered);
+        expect(strict.ok, strict.ok ? "" : strict.problem).toBe(true);
+        if (strict.ok) expect(strict.edits.get(claimId)).toBe(text);
       });
     }
 

@@ -2,20 +2,12 @@ import { sourceCategorySchema, claimKindSchema } from "@workflow-catalog/contrac
 import { z } from "zod";
 
 /**
- * `extract_claims`'s input/output shape and description, split out from
- * `agent/tools/extract_claims.ts` (P03 revision-1 report nit: this comment
- * previously named a `extract-claims-workflow.ts` that never existed) on
- * purpose: this file contains no `"use step"`/`"use workflow"` directive
- * anywhere, so eve's bundler takes the fast, directive-free path for it
- * (`mayContainWorkflowDirective`, in
- * `node_modules/eve/dist/src/internal/workflow-bundle/authored-workflow-directives.js`)
- * regardless of which of the two app roots (`agent/` or `eval-agent/agent/`)
- * imports it. Empirically, keeping these consts in the SAME file as the
- * `"use step"` function made them intermittently unresolvable
- * ("MISSING_EXPORT") to whichever tool module imported them by the longer,
- * cross-app-root relative path — see the P03 report. The verify-then-persist
- * logic itself is shared the same way, via `extract-claims-logic.ts`
- * (P03 revision 1, R5).
+ * `extract_claims`'s input/output shape and description. Directive-free, so
+ * both tool roots (`agent/` and `eval-agent/agent/`) import it: directives
+ * compile per app root, and only directive-free modules can be shared across
+ * roots (docs/spec/research/eve-runtime.md §8 item 14). The
+ * verify-then-persist logic is shared the same way, via
+ * `extract-claims-logic.ts`.
  */
 
 const MAX_CLAIMS_PER_CALL = 40;
@@ -43,6 +35,9 @@ export type ExtractClaimsInput = z.infer<typeof extractClaimsInputSchema>;
 
 export const extractClaimsOutputSchema = z
   .object({
+    sourceCategory: sourceCategorySchema,
+    /** D14 (P03 revision 2): the store accepted the write. The extraction route records a content hash only after a call that persisted. */
+    persisted: z.boolean(),
     added: z.number().int().nonnegative(),
     rejected: z.array(z.string()),
     message: z.string(),
