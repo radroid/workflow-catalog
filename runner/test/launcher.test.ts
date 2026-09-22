@@ -143,6 +143,30 @@ describe("launcher: nothing is left running when startup fails", () => {
     expect(h.signals.listenerCount("SIGHUP")).toBe(0);
   });
 
+  it("sends eve SIGTERM at once when a signal arrives while a health check hangs", async () => {
+    // The CLI's health check can take up to 5 s to give up; stopping eve must not wait for it.
+    let answer: (ready: boolean) => void = () => undefined;
+    let healthChecks = 0;
+    const h = await harness({
+      eveReady: () =>
+        new Promise<boolean>((resolve) => {
+          healthChecks += 1;
+          answer = resolve;
+        }),
+    });
+    const launching = launchRunner(h.deps);
+    const eve = await h.spawnedOnce;
+    await vi.waitFor(() => expect(healthChecks).toBe(1));
+    h.signals.send("SIGTERM");
+    expect(eve.received).toEqual(["SIGTERM"]);
+    await vi.waitFor(() => expect(h.events).toEqual(["eve exited"]));
+    // eve has stopped while the health check still hangs; when it returns, the launcher gives up.
+    answer(false);
+    await expect(launching).resolves.toEqual({ state: "stopped" });
+    expect(eve.received).toEqual(["SIGTERM"]);
+    expect(healthChecks).toBe(1);
+  });
+
   it("removes its signal handlers when eve cannot be spawned at all", async () => {
     const h = await harness({
       spawnEve: () => {
