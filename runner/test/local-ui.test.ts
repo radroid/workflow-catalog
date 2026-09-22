@@ -43,6 +43,12 @@ describe("local UI: sign-in", () => {
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
     expect(head.headers.get("set-cookie")).toBeNull();
+    // HEAD's answer carries the same security headers as every other page answer.
+    expect(head.headers.get("content-security-policy")).toBe(PAGE_CSP);
+    expect(head.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+    expect(head.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(head.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(head.headers.get("x-frame-options")).toBe("DENY");
     // The nonce still works: HEAD did not spend it.
     const get = await bridge.request(pathname);
     expect(get.status).toBe(303);

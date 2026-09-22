@@ -222,9 +222,11 @@ export function localUi(options: LocalUiOptions): Hono {
     // sends HEAD (sometimes GET) before the person opens the link, which
     // would spend it first. There is no way to check a nonce without
     // consuming it (store/one-time-codes.ts), so HEAD skips the check
-    // entirely, the same way HEAD /commands skips the lease.
+    // entirely, the same way HEAD /commands skips the lease. Answered
+    // through htmlResponse, not a hand-built Response, so it carries the
+    // same CSP and Cross-Origin-Resource-Policy as every other page answer.
     if (c.req.method === "HEAD") {
-      return new Response(null, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+      return htmlResponse(200, "");
     }
     const nonce = new URL(c.req.url).searchParams.get("nonce") ?? "";
     const result = nonce ? await ctx.uiLogin.redeem(nonce) : "invalid";
