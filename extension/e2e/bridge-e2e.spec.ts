@@ -59,7 +59,6 @@ import {
   type RealPopupHarness,
 } from "./real-popup-cdp";
 import {
-  BRIDGE_PORT,
   cleanScratchWorkspaces,
   pairFictionalDevice,
   startBridgeHarness,
@@ -290,7 +289,7 @@ test("status (gate 9): a clear state when the runner isn't running", async () =>
   // Restart so afterEach's close() (already-closed is a needless risk) and
   // this file's other tests see a bridge in the state startBridgeHarness
   // always hands back.
-  bridge.bridge = await listen(bridge.app, BRIDGE_PORT);
+  bridge.bridge = await listen(bridge.app, bridge.port);
 
   await page.close();
 });
@@ -444,7 +443,7 @@ test("job_capture (gate 4): Save queues when the runner is unreachable, and the 
   // The runner is back: restart the SAME app/ctx (same workspace, same
   // paired device) on the SAME port, so the queued capture's token is
   // still valid when the alarm retries it.
-  bridge.bridge = await listen(bridge.app, BRIDGE_PORT);
+  bridge.bridge = await listen(bridge.app, bridge.port);
 
   // chrome.alarms wakes the (possibly-idled) service worker back up when
   // it fires -- no page needs to stay open for that. Poll the bridge's own

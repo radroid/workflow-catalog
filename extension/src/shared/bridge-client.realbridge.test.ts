@@ -2,16 +2,25 @@
 /**
  * P07-B acceptance gates, driven against the REAL P02 bridge -- not a fake.
  * Starts the actual `createBridgeApp` (runner/server/app.ts) listening on
- * `127.0.0.1:4310` against a fresh temp workspace per test, and drives it
- * with the extension's own real `createBridgeClient()`, the same code the
- * popup/options pages use. `afterEach` always closes the server.
+ * an ephemeral 127.0.0.1 port (P07-B revision 1, B1 -- see
+ * `findEphemeralPort`'s own doc comment: this file never drives a real
+ * browser, so it has no reason to claim the one port 4310 the real
+ * extension needs, and doing so anyway was a real, observed failure when
+ * something else already held it) against a fresh temp workspace per
+ * test, and drives it with the extension's own real `createBridgeClient()`,
+ * the same code the popup/options pages use. `afterEach` always closes the
+ * server -- guarded (B1) against a `beforeEach` that itself failed to
+ * start one, which used to throw its own, more confusing TypeError on top
+ * of whatever made `startBridgeHarness` fail.
  *
  * The harness itself (`startBridgeHarness`, the HOME/keychain isolation it
  * documents, `withChromeOrigin`, `pairFictionalDevice`,
  * `fictionalJobCapture`) lives in `../../e2e/real-bridge-harness.ts`,
  * shared with `e2e/bridge-e2e.spec.ts` (Playwright, drives the real
- * options/popup pages against the same kind of bridge) so that isolation
- * is audited in one place, not two copies that could quietly drift apart.
+ * options/popup pages against the same kind of bridge, which -- unlike
+ * this file -- does need the one fixed port the real, built extension is
+ * hard-coded to) so that isolation is audited in one place, not two copies
+ * that could quietly drift apart.
  */
 import { DEVICE_TOKEN_TTL_MS } from "@workflow-catalog/runner/store/devices.ts";
 import { MINUTE_MS } from "@workflow-catalog/runner/lib/clock.ts";
@@ -20,6 +29,7 @@ import {
   cleanScratchWorkspaces,
   clientForOrigin,
   fictionalJobCapture,
+  findEphemeralPort,
   pairFictionalDevice as pairFictionalDeviceAt,
   startBridgeHarness,
   withChromeOrigin,
@@ -31,14 +41,26 @@ import {
 const EXTENSION_ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
 const OTHER_EXTENSION_ORIGIN = "chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba";
 
+// Declared non-optional: every it() body below runs only once beforeEach
+// has *successfully* assigned this (a throwing beforeEach skips the test
+// body entirely, per Vitest's own hook semantics), so every other use
+// site in this file stays exactly as simple as it already was. afterEach
+// is the one genuine exception -- see its own guard below.
 let harness: BridgeHarness;
 
 beforeEach(async () => {
-  harness = await startBridgeHarness();
+  harness = await startBridgeHarness({ port: await findEphemeralPort() });
 });
 
 afterEach(async () => {
-  await harness.bridge.close();
+  // Guarded (P07-B revision 1, B1): if beforeEach itself failed to start a
+  // bridge, `harness` was never assigned for this test -- afterEach still
+  // runs regardless (Vitest's own semantics), and used to hit its own,
+  // more confusing TypeError on top of whatever made startBridgeHarness
+  // fail. The cast makes that real possibility explicit here without
+  // weakening `harness`'s declared type for every other, always-safe use
+  // site above.
+  await (harness as BridgeHarness | undefined)?.bridge.close();
   await cleanScratchWorkspaces();
 });
 

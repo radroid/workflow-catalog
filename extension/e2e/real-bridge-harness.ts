@@ -27,6 +27,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { JobCapture } from "@workflow-catalog/contracts";
@@ -39,13 +40,48 @@ import { createBridgeClient, type BridgeClient } from "../src/shared/bridge-clie
 /** The one port the manifest's host permission allows, and the one
  * `BRIDGE_ORIGIN` in `shared/bridge-client.ts` is hard-coded to -- the
  * extension's own singleton `bridgeClient` can only ever reach a bridge
- * listening here. */
+ * listening here, so `e2e/bridge-e2e.spec.ts` (which drives the real
+ * extension pages) must keep asking for exactly this port. */
 export const BRIDGE_PORT = 4310;
+
+/**
+ * A free TCP port on 127.0.0.1, discovered by briefly binding a throwaway
+ * server to port 0 (the OS assigns one) and reading it back. P07-B
+ * revision 1, B1: `src/shared/bridge-client.realbridge.test.ts` never
+ * drives a real browser and has no reason to claim 4310 specifically --
+ * doing so anyway was a real, observed failure (11/11 of that file's tests
+ * failing twice, plus an afterEach TypeError) when something else already
+ * held it, e.g. an owner's own `npm run runner` during the smoke test.
+ * `runner/server/app.ts`'s own `listen()` accepts an explicit port but
+ * builds its returned `url` from the port it was *asked* for, not the one
+ * actually bound (so asking it for port 0 directly would report
+ * "http://127.0.0.1:0", not the real port) -- out of this packet's
+ * allowlist to fix there, so the discovery happens here instead, and the
+ * one real port number this resolves to is then passed to both
+ * `createBridgeApp` and `listen` explicitly, which is all either needs.
+ */
+export function findEphemeralPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close();
+        reject(new Error("findEphemeralPort: could not read back a bound port"));
+        return;
+      }
+      const { port } = address;
+      probe.close((closeError) => (closeError ? reject(closeError) : resolve(port)));
+    });
+  });
+}
 
 export interface BridgeHarness {
   readonly ctx: RunnerContext;
   readonly clock: ManualClock;
   readonly app: ReturnType<typeof createBridgeApp>;
+  readonly port: number;
   /** Mutable: closed and re-`listen()`-ed in place by the offline/reconnect
    * gate-4 scenario, reusing the same `app`/`ctx` so the device stays
    * paired and the journal persists across the restart. */
@@ -54,7 +90,15 @@ export interface BridgeHarness {
 
 const workspaceDirs: string[] = [];
 
-export async function startBridgeHarness(): Promise<BridgeHarness> {
+export interface StartBridgeHarnessOptions {
+  /** Defaults to BRIDGE_PORT (4310) -- pass `await findEphemeralPort()`
+   * for a vitest-only harness that never needs to be the one real
+   * extension's fixed bridge origin (P07-B revision 1, B1). */
+  readonly port?: number;
+}
+
+export async function startBridgeHarness(options: StartBridgeHarnessOptions = {}): Promise<BridgeHarness> {
+  const port = options.port ?? BRIDGE_PORT;
   const root = await mkdtemp(path.join(os.tmpdir(), "wc-p07b-bridge-"));
   workspaceDirs.push(root);
   const clock = new ManualClock();
@@ -64,9 +108,9 @@ export async function startBridgeHarness(): Promise<BridgeHarness> {
   // "The bridge": "journals a job_capture with no handler as no_handler"),
   // which is exactly the real, shipped P02 behaviour this repo is at right
   // now -- not a stand-in for a handler this harness doesn't have.
-  const app = createBridgeApp({ ctx, modules: [], uiToken: undefined, port: BRIDGE_PORT });
-  const bridge = await listen(app, BRIDGE_PORT);
-  return { ctx, clock, app, bridge };
+  const app = createBridgeApp({ ctx, modules: [], uiToken: undefined, port });
+  const bridge = await listen(app, port);
+  return { ctx, clock, app, port, bridge };
 }
 
 /** Deletes every scratch workspace `startBridgeHarness` has created so far
