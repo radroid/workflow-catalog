@@ -28,16 +28,29 @@
 // process from its own cached tab state, so it is unaffected by this
 // tab's renderer being busy. chrome.scripting.executeScript()'s injected
 // function, however, has to run ON this renderer's JS thread -- while
-// it's blocked here, the injection is queued, not dropped. Calling this
-// function (without awaiting it) immediately before the popup is opened
-// guarantees: the popup's chrome.tabs.query() resolves against the OLD
-// URL (this tab is busy, hasn't pushState'd yet), and the extractor's
-// location.href read -- which can only happen once this busy-wait
-// finishes and yields the thread -- sees the NEW URL, because the
-// pushState below is this function's last synchronous act before it
-// returns. 700ms is a large, deliberate safety margin over the actual
-// tabs.query-to-injection gap (typically single-digit milliseconds), not
-// a tuned-to-just-barely-pass value.
+// it's blocked here, the injection is queued, not dropped. IF this
+// function's own dispatch reaches this tab's renderer before the
+// popup-open chain's injection does, calling it (without awaiting it)
+// immediately before the popup is opened produces: the popup's
+// chrome.tabs.query() resolving against the OLD URL (this tab is busy,
+// hasn't pushState'd yet), and the extractor's location.href read --
+// which can only happen once this busy-wait finishes and yields the
+// thread -- seeing the NEW URL, because the pushState below is this
+// function's last synchronous act before it returns. 700ms is a large,
+// deliberate safety margin over the actual tabs.query-to-injection gap
+// (typically single-digit milliseconds), not a tuned-to-just-barely-pass
+// value.
+//
+// That "if" is not this fixture's to guarantee, though: the caller
+// dispatches this call and triggers the popup open over two independent
+// CDP paths that only converge at this tab's own task queue, and nothing
+// here can order them against each other -- under real machine load
+// (parallel Playwright workers contending for CPU) either dispatch can be
+// delayed enough to invert them, so the popup occasionally reads the OLD
+// url both times and shows "preview" instead of "fallback". The caller
+// (real-popup.spec.ts's SPA-mismatch test) retries its arrange phase when
+// that happens rather than this fixture pretending to guarantee an
+// ordering it cannot enforce alone.
 window.__simulateRouteChangeTo = function (path) {
   var until = Date.now() + 700;
   while (Date.now() < until) {

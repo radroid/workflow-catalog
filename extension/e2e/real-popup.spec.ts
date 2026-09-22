@@ -263,29 +263,87 @@ function expectTheme(state: ThemeState, theme: Theme, where: string): void {
   );
 }
 
+/** True once the page's own live media query agrees with `theme` --
+ * independent of `data-theme`/background (those are downstream of this and
+ * checked separately by `expectTheme`). */
+function matchesColorSchemeExpr(theme: Theme): string {
+  return `matchMedia("(prefers-color-scheme: dark)").matches === ${theme === "dark" ? "true" : "false"}`;
+}
+
 /**
- * Switches `target` to `theme`, runs `action`, and accepts the run only if
- * the page showed `theme` both before and after it. The real popup can drop
- * a freshly set prefers-color-scheme override: early in a new popup's life
- * (observed within ~1.3 s of it opening), a resize ~150-550 ms after the
- * override is set flips the page's own
- * `matchMedia("(prefers-color-scheme: dark)")` back to false. That is how a
- * normal run wrote a light P07A-popup-dark.png, and how the dark axe audit
- * could run against the light page (its first attempt failed the "after"
- * check in 3 of 4 instrumented runs). Re-applying the override afterwards
- * holds, so a failed check re-applies it and retries, bounded; anything this
- * can't prove fails the test.
+ * Sets `target` to `theme` and, if the page's own `matchMedia` doesn't
+ * agree yet, retries *only that* -- re-applying the override and waiting --
+ * bounded at 10s. The real popup can drop a freshly set
+ * `prefers-color-scheme` override: early in a new popup's life (observed
+ * within ~1.3s of it opening), a resize ~150-550ms after the override is
+ * set flips `matchMedia("(prefers-color-scheme: dark)")` back to false.
+ * That is how a normal run once wrote a light P07A-popup-dark.png, and how
+ * the dark axe audit could run against the light page. Retrying is
+ * deliberately scoped to this one specific, understood browser quirk
+ * (matchMedia disagreeing with what was just requested) -- P07-B carry-
+ * forward: any other failure (a real markup/CSS regression, a missing
+ * theme.css token) must fail the test at once, not be silently retried
+ * away by a broad catch-and-retry.
  */
-async function inTheme<T>(target: ThemeTarget, theme: Theme, action: () => Promise<T>): Promise<T> {
-  let result: T | undefined;
-  await expect(async () => {
+async function ensureColorScheme(target: ThemeTarget, theme: Theme): Promise<void> {
+  await target.setColorScheme(theme);
+  if (await target.evaluate<boolean>(matchesColorSchemeExpr(theme))) return;
+  const deadline = Date.now() + 10_000;
+  let delayMs = 250;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
     await target.setColorScheme(theme);
-    expectTheme(await target.evaluate<ThemeState>(themeStateAfterTwoFrames(theme)), theme, `${target.label} ${theme}, before`);
-    const value = await action();
-    expectTheme(await target.evaluate<ThemeState>(themeStateAfterTwoFrames(theme)), theme, `${target.label} ${theme}, after`);
-    result = value;
-  }).toPass({ intervals: [250, 500, 1000], timeout: 10_000 });
-  return result as T;
+    if (await target.evaluate<boolean>(matchesColorSchemeExpr(theme))) return;
+    delayMs = Math.min(delayMs * 2, 1000);
+  }
+  throw new Error(`${target.label}: matchMedia never agreed with "${theme}" after retrying the colour-scheme override for 10s`);
+}
+
+/** `ensureColorScheme`, then the full `expectTheme` check -- called both
+ * before and after `action` in `inTheme`. If matchMedia has drifted again
+ * by the time this runs (the same drop can recur mid-action, e.g. from a
+ * resize the action itself triggers), only that gets a bounded retry via
+ * `ensureColorScheme`; every other field `expectTheme` checks fails the
+ * test immediately, with no retry -- with one narrow exception, handled
+ * below: `data-theme` specifically can lag matchMedia rather than simply
+ * disagree with it, which needs a different repair.
+ *
+ * `data-theme` is set by the popup's own "change" listener on the
+ * `prefers-color-scheme` MediaQueryList, not read fresh each time -- so if
+ * the same spurious resize-triggered drop `ensureColorScheme` documents
+ * flips matchMedia away and back to `theme` again before this function's
+ * first matchMedia check runs, that check sees matchMedia already agreeing
+ * (nothing to retry) while `data-theme` is left showing the stale value
+ * from mid-flip, because the listener never got a *third* "change" event
+ * telling it to correct back. Re-applying the same override at that point
+ * is a no-op (matchMedia hasn't actually changed from this function's point
+ * of view, so no event fires) -- forcing a real opposite-then-back
+ * transition is what makes the listener run again. Bounded at 3 attempts;
+ * a `data-theme` mismatch that survives all of them falls through to
+ * `expectTheme`, which fails the test with no further retry. */
+async function verifyTheme(target: ThemeTarget, theme: Theme, where: string): Promise<void> {
+  if (!(await target.evaluate<boolean>(matchesColorSchemeExpr(theme)))) {
+    await ensureColorScheme(target, theme);
+  }
+  const opposite: Theme = theme === "dark" ? "light" : "dark";
+  let state = await target.evaluate<ThemeState>(themeStateAfterTwoFrames(theme));
+  for (let attempt = 0; state.dataTheme !== theme && attempt < 3; attempt += 1) {
+    await target.setColorScheme(opposite);
+    await ensureColorScheme(target, theme);
+    state = await target.evaluate<ThemeState>(themeStateAfterTwoFrames(theme));
+  }
+  expectTheme(state, theme, where);
+}
+
+/** Switches `target` to `theme`, runs `action`, and checks the page showed
+ * `theme` both before and after it -- see `ensureColorScheme`/`verifyTheme`
+ * for exactly what does and does not get retried. */
+async function inTheme<T>(target: ThemeTarget, theme: Theme, action: () => Promise<T>): Promise<T> {
+  await ensureColorScheme(target, theme);
+  await verifyTheme(target, theme, `${target.label} ${theme}, before`);
+  const result = await action();
+  await verifyTheme(target, theme, `${target.label} ${theme}, after`);
+  return result;
 }
 
 /** Mean of the R, G, B bytes of a PNG's top-left pixel, which is page
@@ -316,17 +374,170 @@ function topLeftBrightness(png: Buffer): number {
   return (pixels.readUInt8(1) + pixels.readUInt8(2) + pixels.readUInt8(3)) / 3;
 }
 
+/**
+ * Full per-scanline PNG defiltering (all five filter types, previous row
+ * treated as zero for row 0) for the first `rowCount` rows -- unlike
+ * `topLeftBrightness`'s row-0-first-pixel shortcut, this reconstructs real
+ * pixel values at arbitrary x within those rows, which the corner check
+ * below needs. Only 8-bit RGB/RGBA (the format every capture here uses,
+ * same precondition topLeftBrightness already asserts).
+ */
+function decodeTopRows(png: Buffer, rowCount: number): { width: number; bpp: number; rows: Buffer[] } {
+  const idat: Buffer[] = [];
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  for (let offset = 8; offset < png.length; ) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString("ascii", offset + 4, offset + 8);
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data.readUInt8(8);
+      colorType = data.readUInt8(9);
+    } else if (type === "IDAT") {
+      idat.push(data);
+    }
+    offset += 12 + length;
+  }
+  if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) {
+    throw new Error(`unexpected PNG format (bit depth ${bitDepth}, colour type ${colorType})`);
+  }
+  const bpp = colorType === 6 ? 4 : 3;
+  const stride = width * bpp;
+  const raw = inflateSync(Buffer.concat(idat));
+  const rows: Buffer[] = [];
+  let previous = Buffer.alloc(stride, 0);
+  let position = 0;
+  for (let y = 0; y < Math.min(rowCount, height); y += 1) {
+    const filterType = raw.readUInt8(position);
+    const filtered = raw.subarray(position + 1, position + 1 + stride);
+    const current = Buffer.alloc(stride);
+    for (let i = 0; i < stride; i += 1) {
+      const a = i >= bpp ? (current[i - bpp] ?? 0) : 0; // left
+      const b = previous[i] ?? 0; // up
+      const c = i >= bpp ? (previous[i - bpp] ?? 0) : 0; // upper-left
+      let value: number;
+      switch (filterType) {
+        case 0:
+          value = filtered[i] ?? 0;
+          break;
+        case 1:
+          value = (filtered[i] ?? 0) + a;
+          break;
+        case 2:
+          value = (filtered[i] ?? 0) + b;
+          break;
+        case 3:
+          value = (filtered[i] ?? 0) + Math.floor((a + b) / 2);
+          break;
+        case 4: {
+          const p = a + b - c;
+          const pa = Math.abs(p - a);
+          const pb = Math.abs(p - b);
+          const pc = Math.abs(p - c);
+          const predictor = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+          value = (filtered[i] ?? 0) + predictor;
+          break;
+        }
+        default:
+          throw new Error(`unsupported PNG filter type ${filterType}`);
+      }
+      current[i] = value & 0xff;
+    }
+    rows.push(current);
+    previous = current;
+    position += 1 + stride;
+  }
+  return { width, bpp, rows };
+}
+
+/**
+ * P07-B carry-forward: "Assert that the screenshot's top-right corner has
+ * no DevTools size label." Chrome's device-emulation viewport-size label
+ * (e.g. "380px x 418px"), when present, paints over the page there --
+ * AFTER_RESIZE_QUIET is what keeps it out of a normal capture (see the
+ * module comment); this is the regression guard that it actually stayed
+ * out, not the mechanism that removes it.
+ *
+ * Every pixel in a small band along the top-right edge must match the
+ * image's OWN top-left pixel almost exactly: a real screenshot is a
+ * lossless PNG straight from Chrome's own compositor, the page background
+ * is one flat colour with nothing painted near either corner, and the
+ * top-left pixel is already proven to show the right theme
+ * (topLeftBrightness, checked just before this runs). Comparing corner to
+ * corner within the same image, instead of re-deriving an "expected"
+ * colour from `getComputedStyle` CSS text, sidesteps that text not always
+ * being `rgb(...)` -- Chrome can serialize a computed background declared
+ * via `oklch()` (this repo's theme.css) back out as `oklch(...)` too, which
+ * a plain rgb()-pattern parse would reject.
+ */
+function assertNoDevToolsLabelTopRight(png: Buffer, fileName: string): void {
+  const bandHeight = 24;
+  const bandWidth = 160;
+  const tolerance = 12;
+  const { width, bpp, rows } = decodeTopRows(png, bandHeight);
+  const reference = rows[0];
+  if (!reference) throw new Error(`${fileName}: could not decode row 0 to sample a reference colour`);
+  const [refR, refG, refB] = [reference[0] ?? 0, reference[1] ?? 0, reference[2] ?? 0];
+  const startX = Math.max(0, width - bandWidth);
+
+  for (let y = 0; y < rows.length; y += 1) {
+    const row = rows[y];
+    if (!row) continue;
+    for (let x = startX; x < width; x += 1) {
+      const offset = x * bpp;
+      const r = row[offset] ?? 0;
+      const g = row[offset + 1] ?? 0;
+      const b = row[offset + 2] ?? 0;
+      if (Math.abs(r - refR) > tolerance || Math.abs(g - refG) > tolerance || Math.abs(b - refB) > tolerance) {
+        throw new Error(
+          `${fileName}: pixel (${x}, ${y}) in the top-right corner is rgb(${r}, ${g}, ${b}), not the page's own background rgb(${refR}, ${refG}, ${refB}) (sampled from the image's own top-left corner) -- looks like a DevTools viewport-size label`,
+        );
+      }
+    }
+  }
+}
+
 /** Captures `target` in `theme` and writes the PNG (see screenshotPath)
  * only once the capture itself is proven to show that theme: its top-left
  * pixel, page background, is light (mean RGB >= 128) for light and dark
- * for dark. A wrong image is never written. */
+ * for dark, and its top-right corner shows no DevTools viewport-size
+ * label. A wrong image is never written.
+ *
+ * AFTER_RESIZE_QUIET (inside target.capture()) is what is supposed to keep
+ * the label out in the first place, but its own doc comment says it was
+ * only checked "on the first popup of fresh browsers" -- under repeated
+ * runs the label has also been observed painted at capture time even after
+ * that wait (P07-B). assertNoDevToolsLabelTopRight is the regression guard
+ * for that, not a second removal mechanism, so retake the screenshot (a
+ * fresh AFTER_RESIZE_QUIET wait, then a fresh screenshot) a few times
+ * before actually failing -- the same "retry the arrange, not the
+ * assertion" shape as ensureColorScheme and the SPA-mismatch test below.
+ * A brightness mismatch is a different, non-timing failure and is never
+ * retried. */
 async function captureInTheme(target: ThemeTarget, theme: Theme, fileName: string): Promise<void> {
   const png = await inTheme(target, theme, async () => {
     await target.evaluate("document.fonts.ready.then(() => true)");
-    const capture = await target.capture();
-    const brightness = topLeftBrightness(capture);
-    expect(brightness >= 128 ? "light" : "dark", `${fileName}: captured background, mean RGB ${brightness}`).toBe(theme);
-    return capture;
+
+    const maxAttempts = 4;
+    let capture: Buffer | undefined;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      capture = await target.capture();
+      const brightness = topLeftBrightness(capture);
+      expect(brightness >= 128 ? "light" : "dark", `${fileName}: captured background, mean RGB ${brightness}`).toBe(theme);
+      try {
+        assertNoDevToolsLabelTopRight(capture, fileName);
+        return capture;
+      } catch (error) {
+        if (attempt === maxAttempts - 1) throw error;
+      }
+    }
+    // unreachable (the loop always returns or throws on its last attempt),
+    // but keeps TypeScript happy about capture's definite assignment.
+    return capture as Buffer;
   });
   writeFileSync(screenshotPath(fileName), png);
 }
@@ -504,24 +715,54 @@ test("captures a posting through the DOM-heuristics path (no JSON-LD) end to end
 });
 
 test("refuses to save when the tab navigates between reading its URL and reading its text (SPA route change, review issue 2)", async () => {
-  const page = await harness.context.newPage();
-  await page.goto(`${fixtureServer.origin}/posting-spa-mismatch.html`);
+  // Fire-and-not-await: see posting-spa-mismatch.html's own comment for the
+  // busy-wait that arms this race. That busy-wait only produces "fallback"
+  // if it starts running on the tab's renderer before
+  // Extensions.triggerAction's browser-mediated chain (open popup -> popup's
+  // chrome.tabs.query -> chrome.scripting.executeScript into this same tab)
+  // reaches that renderer. The two are independent CDP dispatch paths that
+  // only converge at the renderer's task queue -- nothing on this side
+  // guarantees which one Chrome enqueues first, and under real
+  // worker-parallel CPU contention (this file's own tests are serial, but
+  // e.g. e2e/extension.spec.ts's slow service-worker-start test can be
+  // running concurrently in another worker) either dispatch can be delayed
+  // enough to invert them. When that happens the extraction runs first,
+  // reads the OLD url both times, and the popup shows "preview" instead of
+  // "fallback" -- the race was never armed, not a real extension bug.
+  // Retry the arrange phase (fresh page, fresh dispatch, fresh popup) when
+  // that happens, the same way ensureColorScheme above retries matchMedia's
+  // own real-world nondeterminism -- the assertions below stay exact.
+  const maxAttempts = 5;
+  let page: Page | undefined;
+  let popup: RawCdpSession | undefined;
+  let routeChange: Promise<void> | undefined;
+  let state: "preview" | "fallback" | undefined;
 
-  const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    page = await harness.context.newPage();
+    await page.goto(`${fixtureServer.origin}/posting-spa-mismatch.html`);
+    const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
 
-  // Fire-and-not-await: see posting-spa-mismatch.html's own comment for
-  // why a fixed, generous busy-wait on the TAB's renderer thread --
-  // started just before the popup opens, not raced against it -- forces
-  // this deterministically instead of hoping a real timing race lands
-  // right.
-  const routeChange = page.evaluate(() => {
-    (window as unknown as { __simulateRouteChangeTo: (path: string) => void }).__simulateRouteChangeTo("/jobs-b");
-  });
+    routeChange = page.evaluate(() => {
+      (window as unknown as { __simulateRouteChangeTo: (path: string) => void }).__simulateRouteChangeTo("/jobs-b");
+    });
 
-  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
-  const state = await waitForPopupState(popup);
+    popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+    state = await waitForPopupState(popup);
+    if (state === "fallback") break;
 
-  expect(state).toBe("fallback");
+    // Lost the race: let the busy-wait/pushState finish so it doesn't leak
+    // into the next attempt, then discard this popup and page.
+    await routeChange;
+    await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+    await popup.detach();
+    await page.close();
+  }
+  if (!page || !popup || !routeChange) {
+    throw new Error("unreachable: the loop above always assigns these before exiting");
+  }
+
+  expect(state, `never observed "fallback" after ${maxAttempts} attempts`).toBe("fallback");
   const fallbackText = await popup.evaluate<string>(`document.querySelector('[role="alert"]').textContent`);
   expect(fallbackText).toBe("This page changed while it was being read — reopen the extension to try again.");
 
@@ -557,9 +798,15 @@ test("options page: 0 axe violations unpaired, light and dark; screenshots captu
   await assertNoAxeViolations((expression) => page.evaluate(expression), "options (light, unpaired)");
   await captureInTheme(optionsTheme, "light", "P07A-options-light.png");
 
-  await page.emulateMedia({ colorScheme: "dark" });
-  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
-  await assertNoAxeViolations((expression) => page.evaluate(expression), "options (dark, unpaired)");
+  // P07-B carry-forward: the dark axe audit goes through the same guarded
+  // inTheme the popup's own dark axe audit already uses (revision 2's item
+  // 2) -- a bare page.emulateMedia + expect.poll here could run axe against
+  // a page that had already dropped back to light (the same matchMedia
+  // drop that motivated inTheme in the first place), silently auditing the
+  // wrong theme.
+  await inTheme(optionsTheme, "dark", () =>
+    assertNoAxeViolations((expression) => page.evaluate(expression), "options (dark, unpaired)"),
+  );
   await captureInTheme(optionsTheme, "dark", "P07A-options-dark.png");
 
   await cdp.detach();
