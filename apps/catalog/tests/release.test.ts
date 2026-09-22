@@ -124,11 +124,22 @@ describe("fetchPackageRelease — error", () => {
   // up on it. This test fails against the pre-fix code (confirmed:
   // temporarily reverted the `reader.cancel()` call locally, reran, watched
   // `cancelCalled` stay false).
-  it("cancels the body reader once the cap trips, instead of only releasing its lock", async () => {
+  //
+  // P09.1 revision round (reviewer R1): cancel() alone turned out not to be
+  // enough in production — when this fetch was routed through Next's Data
+  // Cache, Next's patched fetch had already teed the response, and
+  // cancelling only *our* copy of the body left an internal second copy
+  // (feeding the cache) still reading regardless, measured at ~835 KB and
+  // ~5 s. Aborting the fetch's own AbortSignal is what actually stops the
+  // underlying request; this test now also captures the signal the mocked
+  // fetch was called with and asserts it's aborted once the cap trips.
+  it("cancels the body reader AND aborts the fetch's own signal once the cap trips", async () => {
     let cancelCalled = false;
+    let capturedSignal: AbortSignal | undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedSignal = init?.signal ?? undefined;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             // One chunk, comfortably over the 4096-byte cap, so the cap
@@ -148,6 +159,30 @@ describe("fetchPackageRelease — error", () => {
 
     expect(result.kind).toBe("error");
     expect(cancelCalled).toBe(true);
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  // P09.1 revision round (reviewer R1): this fetch must never enter Next's
+  // Data Cache — the *parsed* result is what getCachedPackageRelease caches
+  // instead (see release-cache.test.ts). `cache: "no-store"` is the
+  // documented way to opt a single fetch() call out of it; a `next: {...}`
+  // option is the (now removed) alternative that put it there in the first
+  // place, so this also asserts that option is gone, not just that
+  // no-store is present.
+  it("never passes fetch a `next` caching option, and always passes cache: \"no-store\"", async () => {
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedInit = init;
+        return new Response(`${CHECKSUM_HEX}  ${TARBALL_NAME}\n`, { status: 200 });
+      }),
+    );
+
+    await fetchPackageRelease(VERSION);
+
+    expect(capturedInit?.cache).toBe("no-store");
+    expect(capturedInit).not.toHaveProperty("next");
   });
 });
 
