@@ -47,10 +47,17 @@ function runCheckFixtures(cwd) {
 test("flags a disallowed URL and email hiding behind a non-ASCII fixtures path", () => {
   const dir = makeTempRepo();
   try {
+    // Built from parts, not a literal contiguous "local@domain" substring:
+    // this test file is itself scanned by `pnpm check:fixtures` in CI, and
+    // an inline disallowed email address here would trip the very scanner
+    // this test exercises against the throwaway fixture below.
+    const disallowedEmail = ["someone.else", "gmail.com"].join("@");
+    const disallowedUrl = "https://www.linkedin.com/jobs/view/2";
+
     stageFile(
       dir,
       "packages/x/fixtures/résumé.md",
-      "See https://www.linkedin.com/jobs/view/2 and reach someone.else@gmail.com\n",
+      `See ${disallowedUrl} and reach ${disallowedEmail}\n`,
     );
 
     const result = runCheckFixtures(dir);
