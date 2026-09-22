@@ -176,7 +176,7 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     await captureInTheme(popupTheme, "light", "P07A-popup-light.png", screenshotPath);
   });
 
-  await test.step("Save: leaves 'Saved ✓' (not stuck on 'Saving…'), keeps focus, and produces a real download", async () => {
+  await test.step("Save: leaves 'Saved ✓' (not stuck on 'Saving…'), keeps focus, queues (not paired), and -- via the explicit 'Save as a file' action that outcome offers -- still produces a real download", async () => {
     await focusSaveButton(popup);
     await pressEnter(popup);
 
@@ -196,8 +196,24 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     );
     expect(focusStaysOnButton, "review issue 5/7: focus must not drop to <body> after a successful Save").toBe(true);
 
+    // P07-B revision 1, E1/E2: this popup never pairs (P07-A's own scope,
+    // before pairing existed) -- Save now queues instead of downloading
+    // automatically, and offers "Save as a file" as an explicit secondary
+    // action instead of downloading on every Save. This step's real point
+    // is proving the download mechanism itself (a genuine CDP download
+    // event, never mocked) still works end to end, so it's driven through
+    // that button below instead of Save itself.
     const statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    expect(statusText).toContain("Saved job-capture.json");
+    expect(statusText).toBe("Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.");
+
+    // One real Tab press from the still-focused Save button (DOM order:
+    // Save, Save as a file, Open settings -- popup/render.ts's own `row`).
+    await popup.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    const onFileButton = await popup.evaluate<boolean>(
+      `document.activeElement instanceof HTMLElement && document.activeElement.textContent === "Save as a file"`,
+    );
+    expect(onFileButton, "one Tab from Save should reach the visible 'Save as a file' button").toBe(true);
+    await pressEnter(popup);
 
     const downloaded = await waitForDownload(downloadDir, "job-capture.json");
     const capture = JSON.parse(downloaded) as JobCapture;
@@ -252,6 +268,17 @@ test("shows the hostile posting's injected instruction as plain visible text, an
       await sleep(100);
     }
     expect(buttonText).toBe("Saved ✓");
+
+    // P07-B revision 1, E1/E2: not paired -> queued, not an automatic
+    // download; "Save as a file" (one Tab from the still-focused Save
+    // button, same as the json-ld test above) drives the same real
+    // download this step has always proven.
+    await popup.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    const onFileButton = await popup.evaluate<boolean>(
+      `document.activeElement instanceof HTMLElement && document.activeElement.textContent === "Save as a file"`,
+    );
+    expect(onFileButton, "one Tab from Save should reach the visible 'Save as a file' button").toBe(true);
+    await pressEnter(popup);
 
     const downloaded = await waitForDownload(downloadDir, "job-capture.json");
     const capture = JSON.parse(downloaded) as JobCapture;
