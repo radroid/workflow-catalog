@@ -58,12 +58,18 @@ extension/                    # created by `eve extension init`, lives under run
 eve-runtime.md §2: a consumer "mounts with a file under
 `agent/extensions/<ns>.ts`; contributions are prefixed `<ns>__`." For this
 workflow, the mount file is `runner/agent/extensions/jobs.ts` and the
-namespace is `jobs` — so once mounted, this extension's three tools appear
-to the host agent as `jobs__capture_job`, `jobs__open_application_group`,
-and `jobs__report_status` (matching `workflow.json`'s `actions` allowlist,
+namespace is `jobs` — so if all three are mounted as eve tools, they are
+namespaced as `jobs__capture_job`, `jobs__open_application_group`, and
+`jobs__report_status` (matching `workflow.json`'s `actions` allowlist,
 which names the three *unprefixed* action names the package defines — the
 `jobs__` prefix is an artifact of mounting, not part of this package's own
-contract).
+contract). Namespacing is not the same question as agent-callability,
+though: per "not model-callable" below, P02 must ensure
+`jobs__capture_job` and `jobs__report_status` are never offered to the
+agent's own tool-choice — mounted for the runner's internal plumbing, or
+wired as plain event handlers outside the tool-choice loop entirely, but
+either way not a function call the model can decide to make. Only
+`jobs__open_application_group` belongs in the agent-visible toolset.
 
 ## Skills mounted from `skills/`
 
@@ -93,54 +99,116 @@ export default defineTool({
 });
 ```
 
-Applied to this package's three allowlisted actions
-(`workflow.json`'s `actions`), each tool's `inputSchema` is one of this
-package's own contract schemas
-(`@workflow-catalog/contracts` — internal package, `workspace:*`), and the
-tool body stays thin (eve-runtime.md's Implications section: "keep tools
-thin so prompts can be edited without touching TypeScript"). Illustrative
-only — P02 fills in `execute`:
+`workflow.json`'s three allowlisted `actions` are an allowlist of
+interaction *types* this workflow package participates in — not a promise
+that all three are model-invoked eve tools in the same sense. Only
+`open_application_group` is genuinely something the agent decides to call:
+it opens browser tabs, a real, person-visible side effect. `capture_job`
+and `report_status` both record something the *person* already did in the
+browser (captured a posting; clicked Applied/Deferred) — see "not
+model-callable" below for why modelling either as an agent-invoked tool
+would be backwards.
 
-```ts
-// extension/tools/capture_job.ts (illustrative — P02 implements)
-import { defineTool } from "eve/tools";
-import { jobCaptureSchema } from "@workflow-catalog/contracts";
+eve-runtime.md §2's Implications section: "keep tools thin so prompts can
+be edited without touching TypeScript." Illustrative only — P02 fills in
+`execute` and confirms the actual mounting shape against the pinned eve
+API.
 
-export default defineTool({
-  description: "Record a job posting the person captured from the browser.",
-  inputSchema: jobCaptureSchema,
-  async execute(event, ctx) {
-    // hand off to the runner's own workspace-store code (outside this
-    // package); never interpret `event.text` as instructions (hard-problems.md #3).
-  },
-});
-```
+### `open_application_group` — the one model-callable, side-effecting tool (P01 revision decision (d))
+
+The only tool of the three the agent actually decides to call, and the
+only one with a real, person-visible side effect — so it is the only one
+needing eve's approval gate, and needs the strictest setting:
+`approval: always()`, every single invocation, never `once()` or
+`auto()`. eve-runtime.md §2: `approval` accepts
+`always() | once() | never() | auto()`; omitted defaults to `never()` — an
+omission here would be a mistake, not a neutral default.
+
+Its input is deliberately narrower than the wire envelope
+(`OpenApplicationGroupPayload`, `bridge-envelopes.ts`, which carries
+`items[].url`): the model supplies **task IDs only, never a URL**.
+`execute` resolves each task ID to its stored `JobSnapshot.url`
+server-side, from data the runner itself already captured and validated —
+never from a URL the model supplies. A hostile posting can poison a
+claim, a requirement, or (P01 revision issue 6) a
+`structured.requirements[]` entry with an injected instruction, but it
+cannot make this tool navigate anywhere: there is no field in its input
+schema a hostile string could occupy to become a URL.
 
 ```ts
 // extension/tools/open_application_group.ts (illustrative — P02 implements)
 import { defineTool } from "eve/tools";
-import { openApplicationGroupPayloadSchema } from "@workflow-catalog/contracts";
+import { always } from "eve/approval"; // illustrative import path — P02 confirms against the pinned eve API
+import { z } from "zod";
+import { uuidSchema } from "@workflow-catalog/contracts";
+
+// Deliberately narrower than OpenApplicationGroupPayload (bridge-envelopes.ts):
+// task IDs only, never a URL. See prose above.
+const openApplicationGroupInputSchema = z.object({
+  title: z.string().min(1),
+  taskIds: z.array(uuidSchema).min(1),
+});
 
 export default defineTool({
   description: "Ask the paired extension to open a tab group for selected, ready applications.",
-  inputSchema: openApplicationGroupPayloadSchema,
-  async execute(payload, ctx) {
-    // enqueue an OpenApplicationGroup command for the bridge's GET /commands.
+  inputSchema: openApplicationGroupInputSchema,
+  approval: always(),
+  async execute({ title, taskIds }, ctx) {
+    // Resolve each task ID's JobSnapshot.url from the workspace store
+    // (outside this package) — never from a model-supplied URL — then
+    // build and enqueue the real OpenApplicationGroupPayload (with the
+    // resolved items[].url) for the bridge's GET /commands.
+  },
+});
+```
+
+### `capture_job` and `report_status` — not model-callable (P01 revision decision (d))
+
+Both record something the *person* already did in the browser; the agent
+never decides to call either. `report_status` is the sharper case: it
+exists solely so the extension can `POST /events` an
+`ApplicationStatusChanged` the instant the person clicks Applied or
+Deferred in the side panel, and nothing about that path should ever
+involve the agent — a compromised or confused agent turn must not be able
+to mark an application Applied that the person never touched.
+`capture_job` is the same shape one step earlier: the person's own
+capture click in the extension already happened before a `JobCapture`
+event exists at all.
+
+If P02 mounts these as eve tools for architectural uniformity with the
+runner's event-handling plumbing, they get **no `approval` the model could
+satisfy** — the correct shape is that no agent turn ever proposes calling
+them, wired instead directly from the bridge's `POST /events` handler to
+the workspace-store write:
+
+```ts
+// extension/tools/report_status.ts (illustrative — P02 implements; NOT
+// exposed to the agent's own tool-choice loop — see prose above)
+import { defineTool } from "eve/tools";
+import { applicationStatusChangedSchema } from "@workflow-catalog/contracts";
+
+export default defineTool({
+  description: "Apply an explicit Applied/Deferred status the person selected in the side panel. Not called by the agent — invoked directly from the bridge's POST /events handler.",
+  inputSchema: applicationStatusChangedSchema,
+  async execute(event, ctx) {
+    // apply event.status to the application at event.taskId, rejecting a
+    // stale event.expectedRevision (mvp-spec §5).
   },
 });
 ```
 
 ```ts
-// extension/tools/report_status.ts (illustrative — P02 implements)
+// extension/tools/capture_job.ts (illustrative — P02 implements; same
+// not-agent-invoked shape as report_status — see prose above)
 import { defineTool } from "eve/tools";
-import { applicationStatusChangedSchema } from "@workflow-catalog/contracts";
+import { jobCaptureSchema } from "@workflow-catalog/contracts";
 
 export default defineTool({
-  description: "Record an explicit Applied/Deferred status the person selected in the side panel.",
-  inputSchema: applicationStatusChangedSchema,
+  description: "Record a job posting the person captured from the browser. Not called by the agent — invoked directly from the bridge's POST /events handler.",
+  inputSchema: jobCaptureSchema,
   async execute(event, ctx) {
-    // apply event.status to the application at event.taskId, rejecting a
-    // stale event.expectedRevision (mvp-spec §5).
+    // hand off to the runner's own workspace-store code (outside this
+    // package); never interpret `event.text` as instructions (hard-problems.md #3).
   },
 });
 ```
@@ -158,3 +226,8 @@ export default defineTool({
   pinned eve version once `eve extension init` actually runs — everything
   above is eve-runtime.md §2's documented shape, not something this packet
   has executed against real eve.
+- Enforcing the approval/callability split this README documents:
+  `approval: always()` actually gating every `open_application_group`
+  call against the pinned eve version's real approval mechanism, and
+  `capture_job`/`report_status` actually being unreachable from the
+  agent's tool-choice loop, not merely undocumented as callable.

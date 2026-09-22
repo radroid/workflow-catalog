@@ -3,24 +3,26 @@
   into the file the person owns and edits (mvp-spec §3 F5). Section order
   and headings below are exact, per the P01 packet spec.
 
-  Render context (a view-model derived from CareerProfile, not the raw
-  schema shape — the renderer, not this template, partitions `claims[]` by
-  status; see the P01 report for why "Presentation that can change" isn't a
-  literal ClaimStatus value):
+  Render context (mostly a view-model derived from CareerProfile — the
+  renderer, not this template, partitions `claims[]` by status.
+  `presentation`/`boundaries`/`preferences` are direct passthroughs of the
+  identically-shaped `ProfileStatement[]` schema fields, no partitioning
+  needed):
     {
       profileVersion: number | null,   // approval.version, or null if never approved
       approvedAt: string | null,       // approval.at (ISO-8601), or null
       confirmedClaims:      [{ id, text, kind, source }],
-      presentationClaims:   [{ id, text, kind, source }], // confirmed claims whose wording is still adjustable
+      presentation:         [{ id, text }], // CareerProfile.presentation — profile-level wording rules ("Emphasise backend work for infrastructure roles"), never a claim or a claim status (P01 revision decision (a))
       needsDecisionClaims:  [{ id, text, kind, question }], // status: candidate | disputed, with an open question
       excludedClaims:       [{ id, text, kind }],
       boundaries:  [{ id, text }],
       preferences: [{ id, text }],
     }
 
-  Every claim/boundary/preference line carries its `id` in brackets so
-  editing this Markdown and re-parsing it round-trips into career-profile.json
-  (F5 accept: "round-trip property test") — P03 owns the parser.
+  Every claim/boundary/preference/presentation line carries its `id` in
+  brackets so editing this Markdown and re-parsing it round-trips into
+  career-profile.json (F5 accept: "round-trip property test") — P03 owns
+  the parser.
 --}}
 # Career profile
 
@@ -40,12 +42,12 @@ _None yet._
 
 ## Presentation that can change
 
-Confirmed, but how it's worded is still open — edit the wording here; the underlying claim doesn't change.
+Wording rules for how confirmed claims get presented — reorder, re-emphasise, rewrite a bullet's phrasing. Never a new fact and never a status change to any claim.
 
-{{#each presentationClaims}}
+{{#each presentation}}
 - {{this.text}} `[{{this.id}}]`
 {{else}}
-_None._
+_None recorded yet._
 {{/each}}
 
 ## Needs a decision

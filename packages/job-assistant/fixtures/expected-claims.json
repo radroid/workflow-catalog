@@ -84,7 +84,9 @@
       "kind": "passage",
       "ref": "resume.md#senior-platform-engineer-northwind-labs",
       "quote": "Senior Platform Engineer — Northwind Labs (2022–Present)"
-    }
+    },
+    "question": "Can you confirm the exact start date (or month/year) at Northwind Labs?",
+    "answeredAt": "2026-09-19T10:05:00.000Z"
   },
   {
     "id": "4e30f4f7-3196-4ad1-ae82-e08066897b29",
@@ -96,6 +98,8 @@
       "kind": "passage",
       "ref": "resume.md#senior-platform-engineer-northwind-labs",
       "quote": "Senior Platform Engineer — Northwind Labs (2022–Present)"
-    }
+    },
+    "question": "Can you confirm 'Senior Platform Engineer' and 'Northwind Labs' are exactly how you'd want this title and employer to appear?",
+    "answeredAt": "2026-09-19T10:06:00.000Z"
   }
 ]

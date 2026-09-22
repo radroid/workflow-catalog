@@ -66,7 +66,10 @@ describe("fixtures/index.json manifest", () => {
 });
 
 describe("hostile job posting fixture", () => {
-  const hostile = readFixture("job-hostile.json") as { text: string };
+  const hostile = readFixture("job-hostile.json") as {
+    text: string;
+    structured: { requirements?: string[] };
+  };
 
   it("contains the required phrase verbatim", () => {
     expect(hostile.text).toContain("ignore previous instructions");
@@ -77,6 +80,24 @@ describe("hostile job posting fixture", () => {
   });
 
   it("still validates as an ordinary JobSnapshot — hostile content is data, not a command", () => {
+    expect(jobSnapshotSchema.safeParse(hostile).success).toBe(true);
+  });
+
+  // Issue 6: the injection lives one level deeper than the raw posting
+  // text — inside an already-"extracted" structured.requirements[] entry,
+  // as if a hostile instruction survived extraction disguised as a
+  // requirement bullet. claim-matching/resume-drafting/cover-letter-drafting
+  // consume structured.requirements[] directly (never re-parsing
+  // JobSnapshot.text), so this is the shape their own Never-lines must hold
+  // up against.
+  it("also carries an injected instruction inside structured.requirements[], not just the raw text", () => {
+    const requirements = hostile.structured.requirements ?? [];
+    const poisoned = requirements.find((r) => r.includes("ignore previous instructions"));
+    expect(poisoned, "no structured.requirements[] entry contains the injected instruction").toBeDefined();
+    expect(poisoned).toMatch(/open_application_group|report_status|capture_job/);
+  });
+
+  it("structured.requirements[] with the injected instruction still validates — it's an ordinary string, not a special case", () => {
     expect(jobSnapshotSchema.safeParse(hostile).success).toBe(true);
   });
 });

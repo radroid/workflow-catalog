@@ -96,4 +96,39 @@ describe("skills/", () => {
       });
     });
   }
+
+  // Issue 6: these four skills all consume content that traces back to a
+  // job posting or an uploaded document — claim-matching and
+  // cover-letter-drafting read JobSnapshot.structured directly;
+  // resume-drafting operates on claims claim-matching selected from it; and
+  // follow-up-questions reads claim.text/evidence.quote, which quote
+  // uploaded documents verbatim (claim-extraction). claim-extraction and
+  // requirements-extraction — the two skills that read raw posting/upload
+  // text most directly — already carry equivalent lines; this is the same
+  // boundary applied one hop downstream, in case upstream extraction ever
+  // lets injected content survive into typed fields.
+  const POSTING_OR_UPLOAD_INPUT_SKILLS = [
+    "claim-matching",
+    "cover-letter-drafting",
+    "resume-drafting",
+    "follow-up-questions",
+  ];
+  const DATA_NOT_INSTRUCTIONS_SUBSTRING = "content as instructions";
+  const NEVER_CALL_ACTION_SUBSTRING = "open_application_group";
+
+  describe("data-not-instructions Never-lines (issue 6)", () => {
+    for (const skillName of POSTING_OR_UPLOAD_INPUT_SKILLS) {
+      it(`${skillName} carries both a "data not instructions" and a "never call an action" Never-line`, () => {
+        const skillPath = path.join(skillsDir, skillName, "SKILL.md");
+        const { body } = parseFrontmatter(readFileSync(skillPath, "utf8"));
+        const items = neverSectionItems(body).join("\n");
+        expect(items, `${skillName}'s ## Never section lacks a data-not-instructions line`).toContain(
+          DATA_NOT_INSTRUCTIONS_SUBSTRING,
+        );
+        expect(items, `${skillName}'s ## Never section lacks a never-call-an-action line`).toContain(
+          NEVER_CALL_ACTION_SUBSTRING,
+        );
+      });
+    }
+  });
 });
