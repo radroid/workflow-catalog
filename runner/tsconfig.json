@@ -11,7 +11,14 @@
     // namespaces or parameter properties, and type-only imports say `type`.
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    // Typecheck the eve adapter from its source, so typecheck never depends
+    // on a build. The package's exports point at dist/, which only
+    // `eve extension build` writes (npm run runner and the eval run it before
+    // eve builds), and a fresh clone has no dist/ yet.
+    "paths": {
+      "@workflow-catalog/job-assistant-eve": ["../packages/job-assistant/adapters/eve/extension/extension.ts"]
+    }
   },
   "include": ["agent", "cli", "evals", "eval-agent", "lib", "server", "store", "test"]
 }
