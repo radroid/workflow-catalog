@@ -127,6 +127,78 @@ section + section {
   margin-top: 12px;
 }
 
+/* An intro paragraph inside a .card (e.g. the template page's Sources /
+   Connections / Browser permissions cards) explaining the content right
+   below it — .lede's page-level 28px bottom margin (sized for a top-of-page
+   intro) reads as an oversized gap in a compact card; this tightens it
+   without touching .lede everywhere else it's used. */
+.card .lede {
+  margin-bottom: 14px;
+}
+
+/* Key/value rows (docs/spec/visuals/index.html's prototype pattern):
+   template page's Sources and Connections cards. A flat sequence of
+   children auto-flows into a repeating [1fr key][auto value] grid, so
+   pairs of children become rows — no wrapper element needed per row. Prose
+   -length key text (e.g. a source's full label) wraps normally within its
+   1fr column instead of being forced into pill styling, which is the
+   P09-B revision-round bug this replaces (long text in an all-caps mono
+   nowrap .pill wrapped mid-word at 390px). */
+.kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  align-items: baseline;
+  font-size: 13.5px;
+}
+
+.kv .k {
+  color: var(--muted-foreground);
+}
+
+/* Browser permissions: name + meaning, semantically a definition list
+   (screen readers announce the dt/dd relationship specifically), not the
+   <ol> of unrelated steps it used to be reused from. dt at least as bold as
+   dd, per the P09-B revision round's UI critique. */
+.perm-list {
+  margin: 0;
+}
+
+.perm-list dt {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  margin: 16px 0 4px;
+}
+
+.perm-list dt:first-child {
+  margin-top: 0;
+}
+
+.perm-list dd {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+/* The changelog's per-version notes: a plain <ul> with no class rendered
+   with the browser's own default list margin/padding/marker spacing
+   instead of this theme's spacing scale — flagged in the P09-B revision
+   round. */
+.changelog-notes {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.changelog-notes li {
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 13.5px;
+}
+
+.changelog-notes li:last-child {
+  margin-bottom: 0;
+}
+
 .stack {
   display: flex;
   flex-direction: column;
@@ -145,6 +217,18 @@ section + section {
 
 .row.between {
   justify-content: space-between;
+}
+
+/* A row of pills (template page: required sources, connections) or buttons
+   (download + checksum link) that must never force horizontal scroll at
+   narrow viewports — same reasoning as pre.command-block's white-space:
+   pre-wrap fix in part A, applied to a flex row instead of text.
+   Named ".multiline", not ".wrap": ".wrap" already exists (the 720px
+   page-wrapper, "padding: 64px 28px") and CSS class selectors match by
+   whole token, not by which rule a human meant — "row wrap" as a
+   className would ALSO match .wrap and silently inherit its padding. */
+.row.multiline {
+  flex-wrap: wrap;
 }
 
 button,
@@ -190,13 +274,24 @@ button:disabled {
   box-shadow: none;
 }
 
-button.primary {
+/* .button.primary too, not just button.primary — the template page's
+   download link is an <a className="button primary"> (a real download needs
+   a real href, which only <a> can carry), styled by the shared `.button`
+   rule above but never matched by a selector requiring a literal <button>.
+   Same bug and same fix as .button.ghost right below: unfixed, the link
+   fell back to plain `.button`'s var(--card)/var(--foreground) pairing
+   instead of the primary treatment, flagged in the P09-B revision round as
+   unreadable (effectively white-on-white in light mode) once a release
+   exists to link to. */
+button.primary,
+.button.primary {
   background: var(--primary);
   color: var(--primary-foreground);
   border-color: var(--primary);
 }
 
-button.primary:hover {
+button.primary:hover,
+.button.primary:hover {
   opacity: 0.92;
 }
 
@@ -264,6 +359,22 @@ input[type="password"]:focus {
   white-space: nowrap;
 }
 
+/* Every existing .pill use (version numbers, admin's used/unused status) is
+   a couple of short words — nowrap is correct there, it's what keeps e.g.
+   "UNUSED" from ever breaking mid-word. The template page's source and
+   connection pills carry much longer explanatory phrases (see
+   lib/template-labels.ts); at 390px a long one has no room to stay on one
+   line, and since a single flex item can't wrap onto a new row by itself,
+   nowrap forced the whole page wider than the viewport — scrollWidth
+   (597px) exceeded clientWidth (390px), the exact "scrollable region" axe
+   flags as serious that part A's command-block fix was about. Scoped to
+   .row.multiline (only where long-phrase pills live) rather than changing
+   .pill itself. */
+.row.multiline .pill {
+  white-space: normal;
+  text-align: left;
+}
+
 .pill.ok {
   background: var(--foreground);
   color: var(--background);
@@ -291,6 +402,20 @@ input[type="password"]:focus {
 
 .flash.error {
   border-left-color: var(--destructive);
+}
+
+/* The "Refused" flash boxes are tabIndex={-1} and focused programmatically
+   (see components/error-alert.tsx) right after a sign-in / accept-invite
+   refusal, so a keyboard/screen-reader user lands on the message
+   immediately. Without this rule the browser's own default focus
+   indicator shows instead (e.g. Chrome's blue ring), which doesn't match
+   either theme — same fix as the shared button/.button/a:focus-visible
+   rule earlier in this file, but plain :focus (matching the input rule
+   also earlier in this file): this box is focused programmatically, not by
+   a mouse click that :focus-visible would want to suppress the ring for. */
+.flash.error:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .flash .tag {
@@ -335,6 +460,18 @@ input[type="password"]:focus {
 }
 
 .check-mark.done {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+/* The checklist toggle's visible+accessible text is the constant word
+   "Done" in both states (see app/(gated)/install/page.tsx) — aria-pressed
+   carries the state for assistive tech, and this is the sighted-user
+   equivalent: a pressed item's button fills solid, same treatment as
+   .check-mark.done above, instead of relying on the (now-identical) text
+   alone to communicate which state a button is in. */
+.check-row button[aria-pressed="true"] {
   background: var(--foreground);
   color: var(--background);
   border-color: var(--foreground);
@@ -459,6 +596,14 @@ tr:last-child td {
 }
 
 .top-nav a:hover {
+  color: var(--foreground);
+}
+
+/* aria-current="page" (see components/gated-nav.tsx) is primarily an
+   assistive-tech signal, but a link that's the current page should look
+   different too — matches the hover color rather than inventing a third
+   treatment. */
+.top-nav a[aria-current="page"] {
   color: var(--foreground);
 }
 

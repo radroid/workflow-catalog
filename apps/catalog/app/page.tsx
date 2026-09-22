@@ -21,7 +21,10 @@ export default async function HomePage() {
           <p>
             Signed in as <strong>{session.displayName}</strong>.
           </p>
-          <div className="row">
+          <div className="row multiline">
+            <Link href="/templates/job-assistant" className="button">
+              Template
+            </Link>
             <Link href="/install" className="button">
               Install guide
             </Link>
