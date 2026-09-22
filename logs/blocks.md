@@ -822,3 +822,46 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - All four agents resumed with SendMessage, keeping their context. Each message carried that agent's code word.
 - P08-A was told to push at its next green step.
 - Lesson carried from iter 004: four agents at once reached the session limit within about 20 minutes, so the budget of seven is a ceiling, not a target.
+
+## 2026-09-22 — P03 peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** high
+
+**Charter / context:** a fresh Opus reviewer and a fresh Opus UI critic reviewed PR #11 at 9584e93 (revision 1), with `logs/handoff/P03-revision-1.md` as the checklist.
+**Verdict text / failure detail:** the full findings are in `logs/handoff/P03-round-2-review.md`.
+- **Reviewer: VERDICT: REVISE — 6 issues.**
+  - What holds:
+    - the chain is green at the head (runner 279/279, eval 62 gates) and on the merge onto a9abb70;
+    - 38 of 49 mutations were killed.
+  - Issues:
+    1. R10 is reconciled on only three routes and is untested; hand edits are lost silently.
+    2. The new saved-text feature posts the prompt rendering back, which corrupts the source and defeats R7.
+    3. `ask_follow_up` confirms on any free text, even "no".
+    4. The store loses concurrent writes: 1 of 7 recorded.
+    5. The `ask_follow_up` eval copy is still a copy.
+    6. The report is still uncorrected.
+- **UI critic: VERDICT: REVISE — 9 issues.**
+  1. Focus is lost after claim and revision actions.
+  2. UUIDs and raw keys appear in announcements.
+  3. Each outcome is announced two or three times, and feedback is off-screen.
+  4. Readiness is wrong with zero claims, ambiguous to screen readers, and left stale after a withdrawal.
+  5. The new "excluded" badge fails contrast (3.85:1 light, 3.04:1 dark).
+  6. Drafts vanish on re-render.
+  7. The reason for Unavailable and N/A is lost when typed after the choice.
+  8. The withdrawal isn't explained, and Accept is a dead end.
+  9. 9 of 48 screenshots exist.
+  - Verified: C4, C5, C7, C8, C9, C10, Preferences.
+
+**Action taken:** revision 1 was the one revision round, so a fresh **Opus escalation implementer** took the combined list. Orchestrator decisions, in full in the handoff file:
+- **D8:** every profile write goes through one shared helper, with an in-process chain and a cross-process lock file `.runner/profile.lock` (bounded wait, then 503; stale after 30 s).
+- **D9:** reconcile before every mutation. Unparseable hand edits refuse writes and offer an explicit discard.
+- **D10:** only an explicit option changes a claim. Free text stays open, as a note.
+- **D11:** when approval is withdrawn, pending revisions are applied to the draft instead of dropped. This reaches the walkthrough's end state without losing the person's edit. Accept is never offered while unapproved.
+- **D12:** one live region, the sticky "Last action" line.
+- **D13:** raw paste-file text, and stable upload names (415 for other types).
+- **D14:** the hash is recorded only after a persisted extraction.
+- **D15:** an edit that adds an always-ask item re-opens the question.
+- **D16:** all 48 screenshots.
+- Contracts follow-up (for a later contracts packet): withdrawals are stored as `accepted` revisions, because the revision status list is closed.
