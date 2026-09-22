@@ -1,7 +1,7 @@
 # P03 · Onboarding and the career profile
 
 Status: claimed
-Assignee: iter-004 implementer (Sonnet)
+Assignee: iter-005 escalation implementer (Opus), revision 2; previously the iter-004 implementer (Sonnet)
 Blocked by: P02
 Owns: runner/agent/skills/ (onboarding set), runner/agent/tools/ (extract_claims, ask_follow_up), runner/store/profile.ts, runner/server/routes/onboarding.ts, runner/ui/onboarding.html, runner/ui/profile.html, packages/job-assistant/fixtures/onboarding/
 Spec: F4, F5, hard-problems #1 and #2, visuals/index.html (the walkthrough is the behaviour spec)
