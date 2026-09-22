@@ -929,3 +929,20 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - P08-A fixes it in its revision (G1).
 - The P03 escalation implementer was told to apply the pattern to the extraction route and to test it.
 - **Follow-up:** `checkModel` (P02's file) needs the same fix. It is queued as a runner follow-up for after P03 and P08-A merge, and must reuse P08-A's `runTurn` rather than a third copy.
+
+## 2026-09-22 — P07-B escalation used Edit after a refused heredoc [DRIFT]
+
+**Iter:** 005
+**Source:** peer-review (self-disclosed by the implementer)
+**Severity:** low
+
+**Charter / context:** the harness refused the P07-B escalation implementer's heredoc append to `extension/src/shared/bridge-client.test.ts` as too complex. The implementer made the same append with the Edit tool and disclosed it in its report.
+**Verdict text / failure detail:** this was not a guardrail bypass.
+- The refusal came from the harness's command-complexity rule, not from a deny rule or a permission check, and Edit is the tool meant for file edits.
+- The rule "never reroute after a refusal" is aimed at deny-rule and permission refusals: `rm -rf`, force-push, secrets, the worktree isolation guard.
+
+**Action taken:** prompts from now on say:
+- If a command is refused as too complex, split it, or use the dedicated tool (Edit or Write) for file changes.
+- If a command is refused by a deny rule or a permission check, stop and report. Never route around it.
+
+The P07-B escalation reached d0e2b2c, with CI green on every pushed head. Round 3 (Opus reviewer and UI critic) was dispatched at 16:05.
