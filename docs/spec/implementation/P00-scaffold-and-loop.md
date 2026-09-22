@@ -28,6 +28,90 @@ Any feature. Any eve code.
 
 ## Report
 
+### 2026-09-22 — Revision 1 (iter-001 implementer, Sonnet)
+
+Review verdict was REVISE (2 medium issues). Fixed both plus four small
+follow-ups, on `packet/P00` in the same worktree; new head
+`22601c7f2f0433bf338a68178e06fa796969d044`.
+
+**What changed.**
+- `scripts/check-fixtures.mjs`: switched `git ls-files` → `git ls-files -z`
+  (NUL-separated, unescaped paths) so non-ASCII/space/quote-containing
+  tracked paths are read from their real filesystem path instead of git's
+  quoted-and-octal-escaped display form. Replaced the blanket
+  `catch { return; }` around `readFileSync` with one that only skips
+  `ENOENT`/`EISDIR` (genuinely nothing to scan) and reports anything else
+  as an offense — the old blanket catch is exactly how a real violation
+  behind a non-ASCII name went undetected. Reworded the
+  `noreply@anthropic.com` comment: that exception is a scanner-level
+  allowance, not something `fixtures-policy.md` grants.
+- Added `scripts/check-fixtures.test.mjs` (`node --test`): builds a
+  throwaway git repo under `os.tmpdir()`, stages `fixtures/résumé.md`
+  containing a LinkedIn URL and a Gmail address, spawns the real CLI
+  against it, and asserts exit 1 (plus a clean-tree case asserting exit 0).
+  Wired into the root `test` script:
+  `pnpm -r test && node --test scripts/*.test.mjs` (the `node --test
+  scripts/` form from the review comment doesn't work on Node 24.18.0 here
+  — a bare directory argument is resolved as a single module via
+  `Module._resolveFilename` rather than searched recursively, so it throws
+  `MODULE_NOT_FOUND`; a glob does what was intended and is picked up by
+  `pnpm`'s shell invocation). Also found and fixed a self-inflicted repeat
+  of the same bug class: the test's own disallowed-email string was a
+  literal in the source, which `check:fixtures` then flagged when scanning
+  the test file itself; it's now assembled from parts at runtime.
+- `.npmrc` didn't apply to pnpm 11.17.0 (`pnpm config get engine-strict` /
+  `save-exact` returned `undefined`). Removed it (`git rm`) and moved both
+  settings into `pnpm-workspace.yaml` as `engineStrict: true` /
+  `saveExact: true`, which pnpm does read.
+- Pinned `typescript-eslint@8.70.0` (published 2026-09-07, already supports
+  TS 6.0) instead of `8.70.1` (published 2026-09-21) and deleted the
+  `minimumReleaseAgeExclude` block pnpm had auto-written for the eleven
+  `8.70.1` sub-packages — 8.70.0 is well outside the release-age window on
+  its own, so the exclude (a standing bypass of that supply-chain check) is
+  no longer needed.
+- Added top-level `permissions: contents: read` to
+  `.github/workflows/ci.yml`.
+- Updated the PR body: screenshot link now points at the commit that
+  carries the PNG (`22601c7f...`) instead of the `packet/P00` branch ref
+  (which disappears on squash-merge), and added a "Revision 1" section
+  listing all of the above.
+
+**Tests run (real output).** Ran the full acceptance sequence twice more —
+once mid-fix, once as a final pass — each on a genuinely fresh
+`git clone --branch packet/P00` into a new `/tmp` directory:
+`pnpm install --frozen-lockfile` (lockfile passes supply-chain policy with
+no exclude entries needed), `pnpm -r typecheck`, `pnpm -r test`
+(`apps/catalog` 3/3, `packages/contracts` 3/3), `pnpm -r lint`,
+`pnpm typecheck && pnpm test` (the registered smoke test — `pnpm test` now
+also runs `node --test scripts/*.test.mjs`: 2/2 pass, including the
+non-ASCII repro asserting real exit 1), `pnpm --filter contracts build`,
+`pnpm --filter catalog build`, `pnpm check:fixtures` (0 offenses) — every
+command exit 0 on every run. Manually reproduced the reviewer's exact
+repro (staged `packages/x/fixtures/résumé.md` with a LinkedIn URL and a
+Gmail-domain address — see `check-fixtures.test.mjs` for the exact fixture)
+against both the old script
+(silently exits 0 — confirmed the bug) and the fixed script (exits 1,
+correctly names `résumé.md` in the offense output). CI on GitHub Actions:
+green on both the mid-revision and final pushes (run
+35688153516, all 9 steps green, `contents: read` in effect).
+
+**Assumptions/deviations from the review comment.** `node --test scripts/`
+(bare directory) does not recursively discover test files on Node
+24.18.0 as installed here — verified directly, it fails with
+`MODULE_NOT_FOUND`. Used `node --test scripts/*.test.mjs` instead (shell-
+expanded by pnpm's script invocation), which is what the review's "(e.g.
+...)" was gesturing at rather than a hard requirement on exact syntax.
+
+**The one thing to sharpen next time.** Any regression test whose fixture
+data is a *literal* disallowed string (an email, a non-`*.example` URL)
+needs to either live somewhere `check:fixtures` doesn't scan or have that
+literal assembled at runtime — the scanner does not know the difference
+between "a test asserting a violation is caught" and "a violation." This
+bit both the original hostile-fixture policy design and this revision's
+own regression test; worth a line in `fixtures-policy.md` or
+`docs/spec/implementation/README.md` so the next packet doesn't rediscover
+it a third time.
+
 ### 2026-09-21 — iter-001 implementer (Sonnet)
 
 **What was done.** Full pnpm workspace scaffold: root `package.json`
