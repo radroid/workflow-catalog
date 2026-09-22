@@ -322,15 +322,33 @@ change ships with a fixture that proves it (`eval-agent/`).
 | P03 | `server/routes/onboarding.ts`, `store/profile.ts`, `ui/onboarding.html`, `ui/profile.html`, `agent/tools/extract_claims.ts`, `agent/tools/ask_follow_up.ts`, onboarding skills |
 | P04 | `server/routes/captures.ts` (the `job_capture` handler), `store/jobs.ts`, `agent/tools/import_job_url.ts`, `ui/jobs.html` |
 | P05 | `agent/tools/prepare_application.ts`, `store/applications.ts`, `validate/`, `export/`, `ui/application.html`, preparation skills |
-| P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. It queues commands with `ctx.commands.enqueue()` and retires them with `acknowledge()`. |
+| P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
 | P08 | `agent/schedules/`, `store/runs.ts`, `scheduler/`, `ui/runs.html`, the schedules and budget sections of `ui/settings.html`, and `server/routes/runs.ts` for `status()` (budget, schedules) and `start()` (catch-up). |
 | P10 | `upgrade/`, the upgrade section of `ui/settings.html`, and an optional `server/routes/upgrade.ts`. |
 
-`GET /commands` is already complete over `store/commands.ts`: it is
-device-scoped, it skips expired commands, a lease lasts 5 minutes, and an
-unacknowledged command is delivered again after its lease. P06 only has to
-fill the queue and acknowledge commands.
+**Commands.** `GET /commands` is already complete over
+`store/commands.ts`. P06 only has to fill the queue and acknowledge
+commands.
+
+- It is device-scoped, and never delivers an expired command.
+- A delivery leases the command for 5 minutes. A command still
+  unacknowledged when its lease lapses is delivered again, whatever `since`
+  says, so a service worker that dies holding a command cannot strand it.
+- `since` only narrows commands never delivered: they must be created at or
+  after it. Omitting `since` is always safe, because the lease already keeps
+  one command from being handed out twice at once.
+
+`open_application_group` runs inside eve's process (`eve start`), not the
+bridge's, so there is no `ctx` and no `ctx.commands` there. The tool
+enqueues through the workspace files, with the same store:
+`new CommandQueue(await Workspace.open(process.env.RUNNER_WORKSPACE), systemClock).enqueue(command)`.
+eve's process has `RUNNER_WORKSPACE`, because the launcher passes the
+settings in its environment. This is safe across processes:
+
+- An enqueue only creates a new file, exclusively (`link(2)`), which appears
+  whole.
+- Only the bridge leases and acknowledges, serialised in its one process.
 
 ## Privacy
 

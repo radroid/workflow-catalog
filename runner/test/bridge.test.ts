@@ -456,6 +456,38 @@ describe("bridge: GET /commands", () => {
     expect(commandsResponseSchema.parse(await (await bridge.request("/commands", { headers: authed(mine.token) })).json()).commands).toEqual([]);
   });
 
+  it("re-delivers a command whose lease lapsed unacknowledged, whatever since says", async () => {
+    const bridge = await makeBridge();
+    const { deviceId, token } = await pairDevice(bridge);
+    const ours = command(deviceId);
+    await bridge.ctx.commands.enqueue(ours); // created 09:00
+    const poll = async (since: string) =>
+      commandsResponseSchema
+        .parse(await (await bridge.request(`/commands?since=${encodeURIComponent(since)}`, { headers: authed(token) })).json())
+        .commands.map((c) => c.commandId);
+    bridge.clock.advance(1 * MINUTE_MS); // 09:01
+    expect(await poll("2026-09-22T09:00:00.000Z")).toEqual([ours.commandId]);
+    // The worker dies before acknowledging. The lease lapses at 09:06.
+    bridge.clock.advance(15 * MINUTE_MS); // 09:16, polling with its last poll time
+    expect(await poll("2026-09-22T09:01:00.000Z")).toEqual([ours.commandId]);
+    expect((await bridge.ctx.commands.get(ours.commandId))?.deliveries).toBe(2);
+  });
+
+  it("applies since only to commands never delivered", async () => {
+    const bridge = await makeBridge();
+    const { deviceId, token } = await pairDevice(bridge);
+    const early = command(deviceId);
+    await bridge.ctx.commands.enqueue(early); // created 09:00
+    bridge.clock.advance(2 * MINUTE_MS);
+    const late = command(deviceId);
+    await bridge.ctx.commands.enqueue(late); // created 09:02
+    const since = encodeURIComponent("2026-09-22T09:01:00.000Z");
+    const narrowed = commandsResponseSchema.parse(await (await bridge.request(`/commands?since=${since}`, { headers: authed(token) })).json());
+    expect(narrowed.commands.map((c) => c.commandId)).toEqual([late.commandId]);
+    const all = commandsResponseSchema.parse(await (await bridge.request("/commands", { headers: authed(token) })).json());
+    expect(all.commands.map((c) => c.commandId)).toEqual([early.commandId]);
+  });
+
   it("validates since: 400 with path [since] for a bad value or an unknown parameter", async () => {
     const bridge = await makeBridge();
     const { token } = await pairDevice(bridge);

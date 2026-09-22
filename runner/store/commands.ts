@@ -16,8 +16,16 @@ import type { Workspace } from "./workspace.ts";
  *   the lease holds, polls do not return it again; once it lapses without an
  *   acknowledgement, the next poll re-delivers it (at-least-once; the
  *   extension de-duplicates by commandId).
+ * - `since` (the query parameter) only narrows commands that were never
+ *   delivered: they must be created at or after it. A delivered command whose
+ *   lease lapsed unacknowledged comes back whatever `since` says, so a worker
+ *   that died holding it cannot strand it.
  * - Acknowledged: `acknowledge()` (P06, on `browser_command_result`) retires
  *   it for good.
+ *
+ * Safe across processes: the bridge is the only process that leases or
+ * acknowledges (serialised below), and an enqueue from another process (a
+ * tool running inside eve) only creates a new file, exclusively.
  */
 export const COMMAND_LEASE_MS = 5 * MINUTE_MS;
 
@@ -33,7 +41,7 @@ const commandRecordSchema = z
 export type CommandRecord = Omit<z.infer<typeof commandRecordSchema>, "command"> & { readonly command: OpenApplicationGroup };
 
 export interface LeaseOptions {
-  /** Only commands created at or after this instant (the `since` query parameter). */
+  /** The `since` query parameter: a never-delivered command must be created at or after this instant. */
   readonly since?: Date;
 }
 
@@ -97,8 +105,9 @@ export class CommandQueue {
         if (command.deviceId !== deviceId) continue;
         if (record.acknowledgedAt) continue;
         if (new Date(command.expiresAt).getTime() <= now.getTime()) continue;
-        if (options.since && new Date(record.createdAt).getTime() < options.since.getTime()) continue;
         if (record.lease && new Date(record.lease.until).getTime() > now.getTime()) continue;
+        const neverDelivered = record.deliveries === 0;
+        if (neverDelivered && options.since && new Date(record.createdAt).getTime() < options.since.getTime()) continue;
         const next: CommandRecord = {
           ...record,
           lease: { until: new Date(now.getTime() + this.#leaseMs).toISOString() },
