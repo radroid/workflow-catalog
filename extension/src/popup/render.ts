@@ -13,6 +13,10 @@ import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
 import { setLastJobCapture } from "../shared/storage";
 
+// One constant, one place to change: P02's router may end up serving this
+// page as /ui/<name> rather than a literal jobs.html file (that's P02's
+// own routing decision, not yet landed as of part A). P07-B syncs this
+// path once P02 lands rather than part A guessing at it now.
 const RUNNER_JOBS_URL = "http://127.0.0.1:4310/ui/jobs.html";
 
 export function renderLoading(app: Element): void {

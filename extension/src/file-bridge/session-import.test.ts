@@ -1,5 +1,6 @@
+import { MAX_BRIDGE_BODY_BYTES } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
-import { parseSessionManifestFile } from "./session-import";
+import { checkImportFileSize, parseSessionManifestFile } from "./session-import";
 
 const validManifest = {
   protocol: 1,
@@ -21,19 +22,23 @@ describe("parseSessionManifestFile", () => {
     expect(result.manifest.items).toHaveLength(2);
   });
 
-  it("rejects invalid JSON with a clear reason instead of throwing", () => {
+  it("rejects invalid JSON with a clear summary instead of throwing", () => {
     expect(() => parseSessionManifestFile("{not json")).not.toThrow();
     const result = parseSessionManifestFile("{not json");
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toMatch(/valid JSON/);
+    expect(result.summary).toMatch(/valid JSON/);
+    expect(result.detail).toBeUndefined();
   });
 
-  it("rejects a well-formed JSON object that doesn't match SessionManifest", () => {
+  it("rejects a well-formed JSON object that doesn't match SessionManifest, with a plain-sentence summary and the zod issues kept separately as detail", () => {
     const result = parseSessionManifestFile(JSON.stringify({ hello: "world" }));
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toMatch(/session manifest shape/);
+    expect(result.summary).toMatch(/session manifest shape/);
+    expect(result.summary).toMatch(/^[^\n]+$/); // one line -- a plain sentence, not a dump
+    expect(result.detail).toBeTruthy();
+    expect(result.detail).toContain("\n"); // the per-issue breakdown lives here instead
   });
 
   it("rejects an empty items array (min 1)", () => {
@@ -59,6 +64,26 @@ describe("parseSessionManifestFile", () => {
       url: "https://jobs.example/postings/1",
     }));
     const result = parseSessionManifestFile(JSON.stringify({ ...validManifest, items }));
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("checkImportFileSize (review issue 3: a 20 MB file froze the options page for ~160s reading it in unchecked)", () => {
+  it("accepts a file at or under the contracts body cap", () => {
+    expect(checkImportFileSize(0).ok).toBe(true);
+    expect(checkImportFileSize(MAX_BRIDGE_BODY_BYTES).ok).toBe(true);
+  });
+
+  it("rejects a file over the cap, with the byte counts in the message, without ever reading its content", () => {
+    const result = checkImportFileSize(MAX_BRIDGE_BODY_BYTES + 1);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toContain((MAX_BRIDGE_BODY_BYTES + 1).toLocaleString());
+    expect(result.reason).toContain(MAX_BRIDGE_BODY_BYTES.toLocaleString());
+  });
+
+  it("rejects a 20 MB file specifically (the reviewer's repro size)", () => {
+    const result = checkImportFileSize(20 * 1024 * 1024);
     expect(result.ok).toBe(false);
   });
 });

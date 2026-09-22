@@ -67,3 +67,21 @@ section h2 {
   color: var(--muted-foreground);
   overflow-wrap: anywhere;
 }
+
+details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+details pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin: 8px 0 0;
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--foreground);
+}
