@@ -1,0 +1,65 @@
+@import "../../../docs/spec/visuals/theme.css";
+
+/* theme.css sets --font-sans/--font-mono to bare "Geist"/"Geist Mono"
+   family names; remap them to the next/font (geist package) CSS variables
+   set on <html> in app/layout.tsx, so no network font request is ever made. */
+:root {
+  --font-sans: var(--font-geist-sans), sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 64px 28px;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  margin: 0 0 10px;
+}
+
+h1 {
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.lede {
+  max-width: 60ch;
+  color: var(--muted-foreground);
+  margin: 0 0 28px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  font-size: 13.5px;
+  color: var(--muted-foreground);
+}

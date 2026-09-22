@@ -1,0 +1,10 @@
+{
+  "name": "@workflow-catalog/extension",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "echo '@workflow-catalog/extension: placeholder, no TypeScript yet (P07 fills this in)'",
+    "test": "echo '@workflow-catalog/extension: placeholder, no tests yet (P07 fills this in)'",
+    "lint": "echo '@workflow-catalog/extension: placeholder, nothing to lint yet (P07 fills this in)'"
+  }
+}

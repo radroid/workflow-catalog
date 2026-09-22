@@ -1,0 +1,10 @@
+{
+  "name": "@workflow-catalog/job-assistant",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "echo '@workflow-catalog/job-assistant: placeholder, no TypeScript yet (P01 fills this in)'",
+    "test": "echo '@workflow-catalog/job-assistant: placeholder, no tests yet (P01 fills this in)'",
+    "lint": "echo '@workflow-catalog/job-assistant: placeholder, nothing to lint yet (P01 fills this in)'"
+  }
+}
