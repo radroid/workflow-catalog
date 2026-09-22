@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "eve/workflow-modules"],
+    // Scripts, the bridge and route modules run on Node 24's built-in type
+    // stripping (node --import ./lib/register-ts.mjs), so relative imports
+    // name their .ts file and only erasable syntax is allowed: no enums,
+    // namespaces or parameter properties, and type-only imports say `type`.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["agent", "cli", "evals", "eval-agent", "lib", "server", "store", "test"]
+}

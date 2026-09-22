@@ -3,6 +3,12 @@ packages:
   - packages/*
   - runner
   - extension
+  # P02: the job-assistant package's eve adapter is its own package (an eve
+  # extension: `eve extension build` needs a package.json of its own), nested
+  # inside packages/job-assistant so it ships in that package's tarball.
+  # `packages/*` above does not reach it. runner/ mounts it as
+  # `workspace:*` from runner/agent/extensions/jobs.ts.
+  - packages/job-assistant/adapters/eve
 # .npmrc doesn't apply to pnpm 11.17.0 (pnpm config get engine-strict /
 # save-exact returned undefined with it in place) — these are the
 # pnpm-workspace.yaml equivalents, which pnpm does read.

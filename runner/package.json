@@ -2,9 +2,22 @@
   "name": "@workflow-catalog/runner",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "typecheck": "echo '@workflow-catalog/runner: placeholder, no TypeScript yet (P02 fills this in)'",
     "test": "echo '@workflow-catalog/runner: placeholder, no tests yet (P02 fills this in)'",
     "lint": "echo '@workflow-catalog/runner: placeholder, nothing to lint yet (P02 fills this in)'"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "@workflow-catalog/contracts": "workspace:*",
+    "@workflow-catalog/job-assistant-eve": "workspace:*",
+    "ai": "7.0.107",
+    "eve": "0.63.0",
+    "hono": "4.13.8",
+    "zod": "4.5.4"
   }
 }

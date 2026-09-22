@@ -1,0 +1,12 @@
+{
+  // Also the project `eve extension build` hands to tsc for declaration emit.
+  // Without a tsconfig.json here, eve passes the source files on the command
+  // line instead, and TypeScript 6 refuses that whenever any ancestor
+  // directory holds a tsconfig.json (TS5112; packages/job-assistant has one).
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["extension/**/*.ts"]
+}
