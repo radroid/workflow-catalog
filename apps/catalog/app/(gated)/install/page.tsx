@@ -6,6 +6,32 @@ import { INSTALL_STEPS } from "../../../lib/install-commands";
 
 export const metadata = { title: "Install · workflow catalog" };
 
+/**
+ * One <code> per command line, not one text blob joined with "\n" — P09.1
+ * (UI critic, revision round): a long command (e.g. the git clone URL)
+ * wrapping onto a second visual row at 390px looked identical to a fresh
+ * command starting there, since nothing distinguished a soft-wrapped
+ * continuation from a new line. Each command is its own block-level
+ * element, so text-indent's negative hanging-indent trick (globals.css's
+ * .command-line) applies per command rather than only to the whole
+ * <pre>'s first line: a wrapped continuation indents under the line
+ * above it, a new command starts flush left again. No extra prompt
+ * character (e.g. "$ ") is ever added to the DOM — this is exactly the
+ * command text, so selecting and copying a block reproduces exactly its
+ * commands (see tests/install-command-block.test.ts).
+ */
+function CommandBlock({ commands }: { commands: string[] }) {
+  return (
+    <pre className="command-block">
+      {commands.map((command, index) => (
+        <code className="command-line" key={index}>
+          {command}
+        </code>
+      ))}
+    </pre>
+  );
+}
+
 export default async function InstallPage() {
   const session = await requireSession();
   const db = await getDb();
@@ -25,11 +51,17 @@ export default async function InstallPage() {
         {INSTALL_STEPS.map((step) => (
           <li key={step.id}>
             <p className="step-label">{step.label}</p>
-            {step.commands ? (
-              <pre className="command-block">
-                <code>{step.commands.join("\n")}</code>
-              </pre>
+            {step.prereqs ? (
+              <ul className="plain-list">
+                {step.prereqs.map((prereq, index) => (
+                  <li key={index}>
+                    {prereq.text}
+                    {prereq.commands ? <CommandBlock commands={prereq.commands} /> : null}
+                  </li>
+                ))}
+              </ul>
             ) : null}
+            {step.commands ? <CommandBlock commands={step.commands} /> : null}
             {step.note ? <p className="step-note">{step.note}</p> : null}
           </li>
         ))}

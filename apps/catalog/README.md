@@ -38,6 +38,12 @@ works on a fresh clone where `apps/catalog/.data/` doesn't exist yet either). De
 directory to start over. Never run `pnpm --filter catalog dev` on port 3000 — that's the
 owner's port (see the repo root `CLAUDE.md`); this app defaults to whatever port you pass.
 
+The `dev` script is `next dev --hostname localhost` (P09.1): plain `next dev` binds
+`0.0.0.0` by default and advertises a LAN address, which a local dev server handling
+invite tokens and owner secrets has no reason to do. `--port <N>` still appends after it
+(`pnpm --filter catalog dev --port 3103`), since npm/pnpm hand extra CLI args to the
+underlying script.
+
 **Browse `localhost`, not `127.0.0.1`.** Next 16's dev server only accepts the dev-only
 `/_next/hmr` WebSocket handshake from an allowed origin, and `localhost` is allowed by
 default — `127.0.0.1` is not, even on the same machine. Loading the app via `127.0.0.1:<port>`

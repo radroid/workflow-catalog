@@ -2,7 +2,7 @@ import { Fragment } from "react";
 import Link from "next/link";
 import { requireSession } from "../../../../lib/auth/require-session";
 import { workflowManifest } from "../../../../lib/workflow-manifest";
-import { fetchPackageRelease } from "../../../../lib/release";
+import { getCachedPackageRelease } from "../../../../lib/release";
 import { BROWSER_PERMISSION_DESCRIPTIONS, CONNECTION_LABELS, SOURCE_CATEGORY_LABELS } from "../../../../lib/template-labels";
 
 export const metadata = { title: "job-assistant template · workflow catalog" };
@@ -17,7 +17,7 @@ export const metadata = { title: "job-assistant template · workflow catalog" };
 export default async function TemplatePage() {
   await requireSession();
 
-  const releaseResult = await fetchPackageRelease(workflowManifest.version);
+  const releaseResult = await getCachedPackageRelease(workflowManifest.version);
   const changelogNewestFirst = [...workflowManifest.changelog].reverse();
 
   return (
@@ -72,25 +72,21 @@ export default async function TemplatePage() {
           Every one of these is accounted for during onboarding&nbsp;&mdash; provided, unavailable, or not
           applicable, never silently skipped.
         </p>
-        <div className="kv">
+        <ul className="plain-list">
           {workflowManifest.requiredSources.map((source) => (
-            <span className="k" key={source}>
-              {SOURCE_CATEGORY_LABELS[source]}
-            </span>
+            <li key={source}>{SOURCE_CATEGORY_LABELS[source]}</li>
           ))}
-        </div>
+        </ul>
       </div>
 
       <div className="card pad">
         <h3>Connections</h3>
         <p className="lede">Ways the runner can bring each source in.</p>
-        <div className="kv">
+        <ul className="plain-list">
           {workflowManifest.connections.map((connection) => (
-            <span className="k" key={connection}>
-              {CONNECTION_LABELS[connection]}
-            </span>
+            <li key={connection}>{CONNECTION_LABELS[connection]}</li>
           ))}
-        </div>
+        </ul>
       </div>
 
       <div className="card pad">

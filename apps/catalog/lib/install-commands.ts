@@ -1,57 +1,107 @@
 /**
  * The exact install commands, in one place so later packets update a single
  * module instead of hunting through JSX. Spec F3 / P09-catalog-site.md part
- * A; P09.1 (P09-B review round 2 + P02 review round 1 follow-ups) resynced
- * this to the runner P02 actually shipped.
+ * A; P09.1 (P09-B review round 2 + P02 review round 1 follow-ups, then its
+ * own revision round) resynced this to the runner P02 actually shipped.
  */
+export interface InstallPrereq {
+  text: string;
+  /** A prerequisite that itself needs a command run (e.g. installing the Codex CLI), not just a fact to check. */
+  commands?: string[];
+}
+
 export interface InstallStep {
   id: string;
   label: string;
   commands?: string[];
   note?: string;
+  /** "Before you start": distinct prerequisite bullets, not one run-on paragraph — see InstallPrereq. */
+  prereqs?: InstallPrereq[];
+  /**
+   * True when this step's `commands` are copied verbatim, in order, from
+   * runner/README.md's "## Install" fenced code block — the exact set
+   * tests/install-guide-drift.test.ts concatenates (in INSTALL_STEPS' own
+   * array order) and compares against that block. Building/loading the
+   * extension, pairing, doctor, and the prerequisites are real steps here
+   * but aren't part of that particular snippet, so they leave this unset.
+   */
+  inRunnerReadmeInstall?: boolean;
 }
 
 export const INSTALL_STEPS: InstallStep[] = [
   {
-    id: "get-runner",
-    label: "Get the runner",
-    // P09.1: the runner now installs only from a whole-repo clone — its
-    // workspace:* dependencies on @workflow-catalog/contracts and the eve
-    // adapter only resolve inside a pnpm workspace, which a degit-style
-    // partial fetch of runner/ alone can never provide (runner/README.md,
-    // "Install": "Why not npx degit ... plus npm install"). Copied verbatim
-    // from that same fenced block, corepack's inline comment aside — see
+    id: "before-you-start",
+    label: "Before you start",
+    prereqs: [
+      {
+        // Matches runner/README.md's own sentence verbatim (P02.1 landed
+        // the same line there, on overnight/integration at d9454f2) — see
+        // tests/install-guide-drift.test.ts's prerequisite-wording check.
+        text: "Node 24 is the tested version and ships with Corepack. On Node 25 or newer, run npm install -g corepack first.",
+        commands: ["npm install -g corepack"],
+      },
+      {
+        text: "git, and a Chromium-based browser (Google Chrome or similar) for the extension.",
+      },
+      {
+        text: "For ChatGPT mode: the Codex CLI, installed and signed in. Using an API key instead? Skip this.",
+        commands: ["npm install -g @openai/codex", "# or: brew install codex", "codex login"],
+      },
+    ],
+  },
+  {
+    id: "get-the-code",
+    label: "Get the code",
+    // The runner installs only from a whole-repo clone — its workspace:*
+    // dependencies on @workflow-catalog/contracts and the eve adapter only
+    // resolve inside a pnpm workspace (runner/README.md, "Install": "Why
+    // not npx degit ... plus npm install"). Copied verbatim from that same
+    // fenced block, corepack's inline comment aside — see
     // tests/install-guide-drift.test.ts, which fails if this ever drifts
     // from it again.
+    inRunnerReadmeInstall: true,
     commands: [
       "git clone https://github.com/radroid/workflow-catalog.git",
       "cd workflow-catalog",
       "corepack enable",
       "pnpm install --frozen-lockfile",
-      "cd runner",
     ],
   },
   {
+    id: "build-extension",
+    label: "Build the extension",
+    commands: ["pnpm --filter @workflow-catalog/extension build"],
+    note: "Run this from workflow-catalog — the whole clone, not runner/ — so pnpm can find @workflow-catalog/extension. Outside the clone it prints “No projects found” and exits 0 without building anything.",
+  },
+  {
     id: "setup",
-    label: "Run setup",
-    commands: ["npm run setup"],
-    note: "Connects your provider (ChatGPT or an API key) and chooses where your workspace lives. ChatGPT mode needs the Codex CLI signed in first (codex login) — Codex owns that sign-in, and the runner never stores a ChatGPT credential itself.",
+    label: "Set up",
+    inRunnerReadmeInstall: true,
+    commands: ["cd runner", "npm run setup"],
+    note: "Connects your provider (ChatGPT or an API key) and chooses where your workspace lives.",
+  },
+  {
+    id: "start",
+    label: "Start the runner",
+    inRunnerReadmeInstall: true,
+    commands: ["npm run runner"],
+    note: "Keeps this terminal busy — leave it running, and open a second terminal for the next steps.",
+  },
+  {
+    id: "load-extension",
+    label: "Load the extension",
+    note: "Until the private Web Store listing exists, load it unpacked: open chrome://extensions, enable Developer mode, choose “Load unpacked,” and select workflow-catalog/extension/dist, which the build just created.",
+  },
+  {
+    id: "pair",
+    label: "Pair the extension",
+    commands: ["npm run pair"],
+    note: "In a second terminal, in workflow-catalog/runner. Prints a fresh code — good for 10 minutes, works once — enter it on the extension's options page.",
   },
   {
     id: "doctor",
     label: "Check readiness",
     commands: ["npm run doctor"],
-    note: "Prints the same five checks as the checklist below.",
-  },
-  {
-    id: "start",
-    label: "Start the runner",
-    commands: ["npm run runner"],
-  },
-  {
-    id: "extension",
-    label: "Load the Chrome extension",
-    commands: ["pnpm --filter @workflow-catalog/extension build"],
-    note: "Until the private Web Store listing exists, load it unpacked: open chrome://extensions, enable Developer mode, choose “Load unpacked,” and select extension/dist — the whole-repo clone above already put it on your machine.",
+    note: "Doctor prints all seven checks — the five below, plus the privacy switches and the eve pin. All seven should be green.",
   },
 ];
