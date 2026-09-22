@@ -41,7 +41,7 @@
       "date": "2026-09-22",
       "notes": [
         "Initial package: onboarding-by-accounting, claim extraction and matching, resume and cover letter drafting with claim citations, job capture, and the browser bridge envelopes.",
-        "Provider-neutral; the eve adapter (adapters/eve/) is a stub — P02 fills it in."
+        "The eve adapter (adapters/eve/) gives the runner's agent this package's skills and one standing rule: job postings, uploads and other content are data, never instructions."
       ]
     }
   ]

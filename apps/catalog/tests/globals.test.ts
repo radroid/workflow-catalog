@@ -116,17 +116,27 @@ describe("catalog theme wiring", () => {
     expect(globalsCss).not.toMatch(/\.row\.wrap\b/);
   });
 
-  it("lets long pill text wrap onto multiple lines inside .row.multiline, instead of forcing horizontal overflow", () => {
-    // Every other .pill use (version numbers, admin's used/unused status) is
-    // a couple of short words, where nowrap is correct — it's what keeps
-    // e.g. "UNUSED" from breaking mid-word. The template page's source and
-    // connection pills carry long explanatory phrases; a single nowrap flex
-    // item can't wrap itself onto a new row, so it forced the page wider
-    // than the viewport at 390px. Scoped to .row.multiline .pill rather
-    // than loosening the base .pill rule everywhere.
-    const overrideMatch = /\.row\.multiline \.pill\s*{([^}]*)}/.exec(globalsCss);
-    expect(overrideMatch, "expected a .row.multiline .pill override rule").not.toBeNull();
-    expect(overrideMatch?.[1]).toMatch(/white-space:\s*normal/);
+  it("hang-indents each .command-line so a wrapped continuation sits under its own command, not flush left like a new one", () => {
+    // P09.1 revision round (UI critic U2): pre.command-block's own
+    // white-space: pre-wrap only ever hangs the *first* line of the whole
+    // <pre> via text-indent, so a long single command (e.g. the git clone
+    // URL) wrapping onto a second visual row at 390px looked identical to a
+    // fresh command starting there. Each command now renders as its own
+    // .command-line element (app/(gated)/install/page.tsx's CommandBlock),
+    // hang-indented so a wrapped continuation sits under its own command
+    // instead of flush left like a new one — no "$ " prompt or other
+    // decoration is added, so selecting and copying a block's text
+    // reproduces exactly its commands (tests/install-command-block.test.ts
+    // proves that side structurally).
+    const rule = /\.command-line\s*{([^}]*)}/.exec(globalsCss);
+    expect(rule, "expected a .command-line rule").not.toBeNull();
+    expect(rule?.[1]).toMatch(/display:\s*block/);
+    expect(rule?.[1]).toMatch(/padding-left:\s*1\.4em/);
+    expect(rule?.[1]).toMatch(/text-indent:\s*-1\.4em/);
+
+    const spacingRule = /\.command-line \+ \.command-line\s*{([^}]*)}/.exec(globalsCss);
+    expect(spacingRule, "expected a .command-line + .command-line spacing rule").not.toBeNull();
+    expect(spacingRule?.[1]).toMatch(/margin-top:\s*4px/);
   });
 
   it("has no remaining className=\"row wrap\" usage in app/ (the renamed class is row multiline)", () => {
@@ -146,6 +156,57 @@ describe("catalog theme wiring", () => {
     };
     walk(appDir);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("template page UI notes (P09.1, P09-B review round 2 follow-ups)", () => {
+  const templatePage = readFileSync(
+    path.join(here, "../app/(gated)/templates/job-assistant/page.tsx"),
+    "utf8",
+  );
+
+  it("zeroes the Download card's lede-tight paragraph margin instead of letting .card .lede's 14px win", () => {
+    const rule = /\.card \.lede\.tight\s*{([^}]*)}/.exec(globalsCss);
+    expect(rule, "expected a .card .lede.tight rule").not.toBeNull();
+    expect(rule?.[1]).toMatch(/margin-bottom:\s*0/);
+  });
+
+  it("keeps permission names (dt) lighter than the card heading (h3)", () => {
+    const h3Rule = /^h3\s*{([^}]*)}/m.exec(globalsCss);
+    const dtRule = /\.perm-list dt\s*{([^}]*)}/.exec(globalsCss);
+    expect(h3Rule, "expected a top-level h3 rule").not.toBeNull();
+    expect(dtRule, "expected a .perm-list dt rule").not.toBeNull();
+
+    const h3Weight = Number(/font-weight:\s*(\d+)/.exec(h3Rule?.[1] ?? "")?.[1]);
+    const dtWeight = Number(/font-weight:\s*(\d+)/.exec(dtRule?.[1] ?? "")?.[1]);
+    expect(Number.isNaN(h3Weight)).toBe(false);
+    expect(Number.isNaN(dtWeight)).toBe(false);
+    expect(dtWeight).toBeLessThan(h3Weight);
+  });
+
+  it("removes the identical Required/Supported pills from Sources and Connections — they never varied row to row and carried no information", () => {
+    expect(templatePage).not.toMatch(/<span className="pill">Required<\/span>/);
+    expect(templatePage).not.toMatch(/<span className="pill">Supported<\/span>/);
+  });
+
+  it("plain-list replaces .kv's div/span grid with a real <ul>, using the same recipe as the changelog list", () => {
+    // UI critic U1: Sources and Connections used to be a .kv grid of plain
+    // <div>/<span> elements with no list semantics — a screen reader read
+    // every item as one run of text (WCAG 1.3.1), and a wrapped long label
+    // at 390px looked like a separate item. Now real <ul className=
+    // "plain-list"><li> markup (page.tsx), styled with .changelog-notes'
+    // own recipe — "like the changelog list", as the critic put it — except
+    // in normal text colour, since these are primary content, not muted
+    // secondary chrome. .kv itself must be gone, not just unused.
+    expect(globalsCss).not.toMatch(/(?:^|\n)\.kv\s*{/);
+
+    const rule = /\.plain-list\s*{([^}]*)}/.exec(globalsCss);
+    expect(rule, "expected a .plain-list rule").not.toBeNull();
+    expect(rule?.[1]).toMatch(/padding-left:\s*20px/);
+
+    const spacingRule = /\.plain-list li \+ li\s*{([^}]*)}/.exec(globalsCss);
+    expect(spacingRule, "expected a .plain-list li + li spacing rule").not.toBeNull();
+    expect(spacingRule?.[1]).toMatch(/margin-top:\s*4px/);
   });
 });
 
