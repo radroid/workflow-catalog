@@ -62,3 +62,79 @@ The clone is `/tmp/wc-ui5-p08a`, at 0af2945.
 - newest first; runs used today; `aria-disabled`; focus on Save and the JSON view; inert HTML in errors;
 - the decision-2 behaviour;
 - all 16 committed screenshots, correctly named, at true width and full page, covering the prompt's list. They show issues 1 and 6, so they need retaking.
+
+## Reviewer (Opus): REVISE — 5 issues
+
+Scratch: `/tmp/p08a-review/`:
+- the probe results `probe-notes.txt`, `probe-edges.txt`, `probe-more.txt` and `probe-stall.txt`;
+- the probe tests in `in-tree-probes/`;
+- `backup/` and the merge-check logs.
+
+**What holds:**
+- **Chain:** green at the head and on the merge onto 2fde932. Runner 217 tests plus the eval with 20 gates; the counts match the report. CI passes (run 35774073883).
+- **Mutation proofs:** all four reproduce.
+- **Time zones:** tests pass in 5 zones.
+- **eve facts:** all seven are verified against the installed files.
+- **Budget:** defaults and bounds, derived `runsUsedToday`, and decision 2 end to end.
+- **API:** 401 and 403; 400 and 413; non-uuid gives 404 with no filesystem touch; `/status` validates.
+- **Security:** no HTML sinks, and no new dependency.
+- **Scope:** all 33 files are inside Owns.
+- **Overlap with P03:** only `runner/test/route-modules.test.ts`. Take P03's readdir-based version.
+
+**Issues:**
+1. **A timed-out turn is recorded as a success and never cancelled (high).** `run-harness.ts:123-124` trusts `response.result()`.
+   - An abort while eve's client opens or reopens its stream ends quietly as `completed`. This is now eve-runtime.md §8 item 15.
+   - Probes with the real eve `Client` and a stubbed `fetch`: a mid-turn stall with a 17 s timeout, a timeout during the routine reconnect, and a timeout before the stream opens all give `ok` with no cancel. Through `withRun` the record says `success`, and the idempotency lookup then says done.
+   - Deleting the cancel-on-timeout line keeps all tests green. The test at `run-harness.test.ts:157` ("…and cancels") asserts no cancel.
+   - `MessageResponse.cancel()` sends nothing before the turn has started.
+2. **Decision 3 is violated.** An empty error text makes `finishRun`'s schema parse throw inside the `finally` (`run-harness.ts:219, 224-226`; `runs.ts:152`). `withRun` rejects with a ZodError, and the untrue "interrupted" placeholder stays on disk. `runTurn:130` can produce an empty `detail` itself.
+3. **Timeouts and failures lose usage already spent** (`run-harness.ts:128, 130`). 7 input and 3 output tokens were reported as 0/0.
+4. **The idempotency lookup stops at the newest 200 records**, not the 14-day window (`runs.ts:261-262`). A success from 5 days ago behind 200 newer records reads as "not done", which means a duplicate draft.
+5. **Budget writes aren't serialised** (`budget.ts:125-162`). A Save racing a provider-limit pause lost the pause in 15 of 40 trials. `withRun`'s limit check isn't held across `startRun` (`run-harness.ts:167-179`).
+
+**Nits:**
+- **Surviving mutations to pin with tests:**
+  - decision 1's precedence: the regex must not apply when an unrelated `semanticErrorId` is present;
+  - a pause held only in memory: assert the bytes of `runs/budget.json`;
+  - UTC dates under `TZ=UTC`, which is what CI uses;
+  - a run crossing local midnight;
+  - a `paused` record treated as "done".
+- `budget.test.ts:113` names an end-to-end test that doesn't exist.
+- The parked-turn cancel sends nothing on real eve, while the fake counts one.
+- eve's details carry `statusCode` and `upstreamStatusCode`. The chatgpt, openai and anthropic providers have no rate-limit semantic id.
+- `/status` says `paused: false` at the daily limit.
+- `getRun` doesn't check the file's `runId`, and an error listing one date directory turns into a 500.
+- Report accuracy: "classifies … timeout", "never rethrows", the cancels, and two test titles.
+
+## Orchestrator decisions for the revision (G1–G10)
+
+- **G1. Timeouts (issues 1 and 3; eve-runtime.md §8 item 15).** `runTurn` reads the stream event by event with `for await`, summing usage and taking the model id as they arrive.
+  - It is ok only with a terminal boundary event and `!signal.aborted`.
+  - An abort or timeout gives `timeout`, and keeps the partial usage.
+  - Timeouts and parked turns are cancelled through `created.session.cancel()`.
+  - Regression tests use the real eve `Client` with a stubbed `fetch`, for the three abort points: before the stream opens, during an idle reconnect, and during the routine reconnect. The reviewer's `/tmp/p08a-review/` probes are the template.
+  - Fakes count only real cancel requests.
+- **G2. `withRun` never rejects (issue 2).**
+  - Empty error text becomes "The run failed without an error message."
+  - If the full record fails validation, `withRun` writes a minimal fixed-text failure record. If that also fails, it resolves with the in-memory record and logs it.
+  - Test an empty thrown error and an empty turn detail.
+- **G3. Idempotency (issue 4).** Scan the 14-day window without the 200-record cap, newest first, stopping at the first hit. Test with more than 200 newer records, and test that a `paused` record never counts as done.
+- **G4. Budget writes are serialised now, not deferred to P08-B (issue 5).**
+  - One in-process promise chain covers every budget write, and `withRun` holds it across the limit check and `startRun`.
+  - Test that a Save racing a pause keeps both, and that two concurrent runs at one below the limit let exactly one run.
+- **G5. Decision 1, extended.** When no `semanticErrorId` is present, `details.statusCode === 429` or `details.upstreamStatusCode === 429` is also a provider limit, as is the regex. Test the precedence: an unrelated id plus rate-limit text is not a limit.
+- **G6. `/status` at the daily limit.**
+  - `paused` keeps meaning the manual pause that needs Resume.
+  - Consumers (P06, P07-C) derive "daily limit reached" from `runsUsedToday >= dailyRunLimit`; both are in the contract.
+  - The README says so, and Settings shows "Daily limit reached. New runs wait until tomorrow."
+- **G7. Approved edits to `runner/ui/assets/runner.css`, outside Owns**, and only these two:
+  - `.badge.fail` contrast: dark text on the red fill, at least 4.5:1 in both themes;
+  - form-control borders (inputs, selects, textareas) at least 3:1 against the card.
+  List both in the report.
+- **G8. Paths and ids (UI issue 7).**
+  - Show `runs/<date>/<8 chars>….json`, with the full relative path in `title`, and a "Copy path" button that copies the absolute path. Add `absolutePath` to the local runs API only, never to `/status`.
+  - Records that never called the model show no model, token or duration line.
+  - Error codes such as `MODEL_CALL_FAILED:` appear only in the JSON view; the visible reason is plain language.
+- **G9. Skipped files (UI issue 8).** The list API returns the skipped files' relative paths, up to 10. The note is neutral and names them in `<code>`.
+- **G10. Records with no `finishedAt` (polish P3)** show "Did not finish (or still running)" in a neutral pill, without the zero line.
+- **Screenshots.** Retake all 16, and add Settings Budget in the corrupt and at-daily-limit states, at 390 and 1280, light and dark. That makes 24.
