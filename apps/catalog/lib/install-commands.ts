@@ -34,9 +34,9 @@ export interface InstallStep {
 
 /**
  * `command` split just after each "/" in a URL's path, so a narrow screen
- * can wrap the clone URL between path segments ("…github.com/radroid/",
- * then "workflow-catalog.git") instead of mid-word. The install page puts
- * a <wbr> between the parts. A <wbr> adds no character, so the parts always
+ * can wrap the clone URL between path segments (after "github.com/" or
+ * "radroid/") instead of mid-word. The install page puts a <wbr> between
+ * the parts. A <wbr> adds no character, so the parts always
  * join back to exactly `command`, and copying a block still copies exactly
  * its commands (tests/install-command-block.test.ts).
  */

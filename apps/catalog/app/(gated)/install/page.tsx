@@ -22,9 +22,9 @@ export const metadata = { title: "Install · workflow catalog" };
  * commands (see tests/install-command-block.test.ts).
  *
  * P09.1 revision 2 (UI critic): a URL gets a <wbr> after each path "/"
- * (urlBreakParts), so at 390px the clone URL wraps after "radroid/"
- * instead of mid-word. A <wbr> is a break opportunity, not a character,
- * so a copy is unchanged.
+ * (urlBreakParts), so at 390px the clone URL wraps between path segments
+ * (after "github.com/") instead of mid-word. A <wbr> is a break
+ * opportunity, not a character, so a copy is unchanged.
  */
 function CommandBlock({ commands }: { commands: string[] }) {
   return (
