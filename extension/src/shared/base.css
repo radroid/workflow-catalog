@@ -34,6 +34,21 @@
   box-sizing: border-box;
 }
 
+/* P07-B revision 1: the `hidden` attribute's UA-stylesheet `display: none`
+ * is the lowest-priority origin in the cascade -- any author rule that
+ * sets `display` on the same element (e.g. .stack/.row's own `display:
+ * flex`, needed for their own visible-state layout) silently wins over it
+ * whenever that class also happens to be the one thing toggling hidden,
+ * same specificity or not. Caught for real (never in a jsdom/happy-dom
+ * unit test, which only checks the `hidden` *property*, not an actual
+ * browser's layout) once a real screenshot showed the Pairing section's
+ * "Pair again"-collapsed code form -- a `.stack`, hidden via exactly this
+ * -- fully visible instead. This one rule makes `hidden` win everywhere,
+ * regardless of what other classes an element carries. */
+[hidden] {
+  display: none !important;
+}
+
 html {
   color-scheme: light dark;
   /* theme.css has no --amber token by name, but --chart-1 is the exact
