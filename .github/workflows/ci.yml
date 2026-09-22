@@ -47,5 +47,5 @@ jobs:
         run: |
           pnpm --filter @workflow-catalog/extension exec playwright install --with-deps chromium
           pnpm --filter @workflow-catalog/extension build
-          pnpm --filter @workflow-catalog/extension test
+          EXTENSION_DIST_REQUIRED=1 pnpm --filter @workflow-catalog/extension test
           pnpm --filter @workflow-catalog/extension test:e2e

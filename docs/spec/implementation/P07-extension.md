@@ -117,17 +117,23 @@ section first, so a slow/stuck runner left every section blank.
 runs `pnpm --filter @workflow-catalog/extension test` (vitest) right after
 `build`, before `test:e2e`, so `manifest.test.ts`'s two dist-path tests
 run for real against a real `dist/` every CI run instead of never getting
-a chance to. Belt-and-suspenders: those two tests now run (not skip) even
-without `dist/` when `process.env.CI` is set, so a future ordering
-regression fails loudly. **Known conflict, not fixed (out of this
-packet's one-step Owns):** the *root* `pnpm test` step in `ci.yml` runs
-`pnpm -r test` before any build step, and GitHub Actions sets `CI=true`
-for every step in a job by default — once this lands, that earlier,
-pre-build step will hit the same two tests with `CI` set and no `dist/`
-yet, and they'll fail there. Fixing it means reordering the root `Test`
-step to run after the build steps, a different step than the one this
-packet owns. Flagging for the reviewer/coordinator rather than guessing
-whether to touch it.
+a chance to. **Orchestrator-corrected mid-round**: the first pass gated
+those two tests on bare `process.env.CI` — GitHub Actions sets `CI=true`
+for every step in a job by default, including the *root* `pnpm test` step
+in `ci.yml`, which runs `pnpm -r test` *before* any build step, so that
+gate would have made the same two tests fail there too (a real,
+disclosed conflict, flagged in this report and fixed here rather than
+left). Corrected to a dedicated `EXTENSION_DIST_REQUIRED=1`, set only by
+the one extension CI step's own vitest invocation
+(`EXTENSION_DIST_REQUIRED=1 pnpm --filter @workflow-catalog/extension
+test`) — `manifest.test.ts`'s gate is now `built ||
+process.env.EXTENSION_DIST_REQUIRED === "1"`. Verified both directions
+with `dist/` moved aside: `EXTENSION_DIST_REQUIRED=1` fails both tests
+for real (an `expect(false).toBe(true)` and a raw `ENOENT`, same as
+before); `CI=true` alone now stays green (9 passed, 2 skipped) — proving
+the root step's situation is resolved, not just asserted. Restored
+`dist/`, confirmed via `git status`/`git diff` that only
+`manifest.test.ts` and the one `ci.yml` line changed.
 
 **B6** (three files excluded from typecheck hid a real error): added
 `extension/tsconfig.real-bridge.json`, a second `tsc` program (mirrors
@@ -300,9 +306,10 @@ screenshot tests, 5 in `real-popup.spec.ts`, using 4 workers with
   round's issues named that edge case explicitly; adding a persistent
   "was ever paired" flag felt like scope beyond what was asked, so it's
   called out here instead of silently decided either way.
-- B5's known conflict (above) is a real, disclosed risk to the *actual*
-  CI run on this PR, not a local gap — flagged rather than guessed at,
-  since fixing it needs a step outside this packet's Owns.
+- B5's known conflict (above) was real and has been fixed (orchestrator
+  correction, same revision round): the bare `CI` gate is now
+  `EXTENSION_DIST_REQUIRED=1`, set only by the one extension CI step this
+  packet owns. No outstanding risk to the root `Test` step remains.
 
 ### 2026-09-22 — Part B (iter-004 implementer, Sonnet)
 

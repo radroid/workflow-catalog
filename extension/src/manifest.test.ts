@@ -72,12 +72,19 @@ describe("manifest.json paths resolve inside the built extension (when dist/ exi
   // on `vite build` having already run (it hasn't, in the verify chain's
   // order -- see package.json); skip instead of failing when dist/ is
   // absent, the same accommodation scan-dist-for-eval.mjs's own
-  // build-time check makes. Inside CI (P07-B revision 1, B5) the
-  // workflow always builds the extension before running this suite
-  // (.github/workflows/ci.yml), so a missing dist/ there means that
-  // ordering broke, not that these tests don't apply -- run for real
-  // (and let it fail loudly) rather than silently report as skipped.
-  const runIfBuilt = built || process.env.CI ? it : it.skip;
+  // build-time check makes.
+  //
+  // P07-B revision 1, B5 (corrected): gated on a dedicated
+  // EXTENSION_DIST_REQUIRED=1, not bare process.env.CI. GitHub Actions
+  // sets CI=true for every step in a job by default, including the
+  // *root* `pnpm test` step (ci.yml), which runs before any build step
+  // -- a bare CI check would have made these two tests fail there too,
+  // since dist/ genuinely doesn't exist yet at that point in the
+  // pipeline (that ordering is correct, not a bug to alarm on). The one
+  // extension CI step that builds first sets EXTENSION_DIST_REQUIRED=1
+  // explicitly when it runs this suite, so a missing dist/ *there*
+  // still fails loud instead of silently reporting skipped.
+  const runIfBuilt = built || process.env.EXTENSION_DIST_REQUIRED === "1" ? it : it.skip;
 
   runIfBuilt("every manifest-referenced page/worker path exists in dist/", () => {
     const referenced = [
