@@ -1,10 +1,18 @@
 import type { MockModelRequest, MockModelResponse } from "eve/evals";
+import { EXTRA_FIXTURE_HANDLERS } from "./fixture-registry.ts";
 
 /**
  * The fixture agent's scripted model. Each eval opens a session with one of
  * the prompts below; the reply depends only on that prompt and on the tool
  * results already in the conversation, so every run is deterministic and no
  * provider is called.
+ *
+ * P02's own four prompts (below) are never edited by a later packet. A
+ * packet that needs new scripted branches (P03's `extract_claims` and
+ * `ask_follow_up` evals, and any later packet) registers a handler in
+ * `./fixture-registry.ts` instead — see that file's comment for why (and its
+ * fallback, if a future eve version makes registration by file addition
+ * alone possible: check before editing this again).
  */
 export const FIXTURE_PROMPTS = {
   inventory: "fixture: report your tools and system rules",
@@ -59,6 +67,11 @@ export function respond(request: MockModelRequest): MockModelResponse | string {
   if (prompt === FIXTURE_PROMPTS.missingTools) {
     if (!done) return { toolCalls: MISSING_TOOL_CALLS.map((call) => ({ ...call })) };
     return `missing: ${JSON.stringify(request.toolResults.map((result) => ({ name: result.name, isError: result.isError })))}`;
+  }
+
+  for (const handler of EXTRA_FIXTURE_HANDLERS) {
+    const response = handler(request, prompt, done);
+    if (response !== undefined) return response;
   }
 
   return "fixture: unrecognised prompt";
