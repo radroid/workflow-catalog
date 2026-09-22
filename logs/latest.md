@@ -1,8 +1,7 @@
 Latest: iter-005 in progress. The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
 
-Running now: four fresh agents, one worktree each. The old agent worktrees were clean and pushed, and were removed so the packet branches could be switched to.
-- **P03 (#11) round 2** on 9584e93: an Opus reviewer and an Opus UI critic, with `logs/handoff/P03-revision-1.md` as the checklist.
-  - Both APPROVE means squash-merge, then start P04. A REVISE goes to a fresh Opus escalation implementer.
+Running now: three implementers, one worktree each. The P03 round-2 reviewer and UI critic have finished; their worktrees and the pre-pause ones were clean and pushed, and were removed.
+- **P03 (#11):** round 2 returned REVISE from both (reviewer 6, UI critic 9). A fresh **Opus escalation implementer** is working the combined list and decisions D8–D16 in `logs/handoff/P03-round-2-review.md`. Round 3 follows.
 - **P07-B (#12):** a fresh Opus escalation implementer works the combined list in `logs/handoff/P07-B-round-2-review.md`, red CI first.
   - Then a full round 3 (reviewer and UI critic), including what round 2 never checked.
 - **P08-A:** a fresh Sonnet successor builds its predecessor's design (the P08 packet's "Part A paused" note), with the decisions logged in blocks.md ("Loop resumed").
