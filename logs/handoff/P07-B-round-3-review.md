@@ -47,3 +47,56 @@ Scratch:
 - the packet file;
 - 46 screenshots.
 Nothing in `packages/`, `runner/` or `apps/`.
+
+## UI critic (Opus): REVISE — 5 issues
+
+Scratch: `/tmp/wc-ui5-p07b-scratch/`:
+- `shots/`: 129 files (`A-*` options, `B-*` popup, `B-opt-*` the options hand-off, `P-*` probes);
+- `sheets/`: contact sheets, including `cs-committed-*`;
+- the stand-in scripts and the JSON results.
+
+The clone is `/tmp/wc-ui5-p07b`, at d0e2b2c and built.
+
+**What holds:** every round-2 issue and polish item.
+- About 110 axe audits: 0 violations, 0 incomplete.
+- Active text is at least 7.62:1 in light and 7.99:1 in dark.
+- No horizontal scroll at a true 390, and focus lands correctly after every action.
+- The dark popup against the real bridge, "Export last capture", `[hidden]`, E1, E2, E4, B3, B4 and B7–B11 are all verified.
+- All 46 committed shots are accurate.
+
+1. **The Pairing card keeps a stale outcome after a rebuild.**
+   - After a revoke, the card reads "Not paired yet." with a "Paired." flash, and the code field's accessible description is "Paired.".
+   - In the mirror case (un-paired here, paired in another tab), it shows a device alongside "Un-paired. You can pair again below." and no form below.
+2. **The "something other than the runner" state contradicts itself.** The Status alert blames the runner ("didn't match the expected shape" / "unexpected error (HTTP 404)"), with jargon and no next step, while the line below says something else answered.
+3. **The 409 refusal shows developer text:** "This eventId was already used…", with `eventId` twice and an instruction nobody can carry out. The committed `P07B-popup-not-sent-409-*` shots show it.
+4. **A command outside `<code>`:** "Enter the code shown by npm run setup." at `options/main.ts:194` and `:207`.
+5. **Amber for waiting.** "Pairing…" and every automatic-retry outcome in the popup have an amber edge: runner down, no answer, 500, a foreign server, token replaced. The walkthrough reserves amber for "needs a decision".
+
+**Polish:**
+- Focus sits on `<body>` during "Pairing…" and "Saving…" (up to 5 s against a silent runner), because the focused button is disabled.
+- "Check again" gives no feedback when nothing changed; "Checking…" shows for 6 ms.
+- The inert "Saved ✓" is 3.99:1 in light.
+- Wording:
+  - "Not paired yet." after an expiry;
+  - "waiting until this browser is paired" next to a paired device;
+  - "isn't reachable" after a real 500.
+- There are no committed shots of the new states (a foreign server on the port, token replaced).
+
+## Orchestrator decisions for revision 3 (H1–H4)
+
+- **H1. Tone.** Amber marks a state that needs the person to act; that includes the 401 and 403 pauses, which need a re-pair, so move them from red to amber. Progress and automatic retries use a neutral edge. Red marks a refusal where the capture was not kept. Retake the affected shots.
+- **H2. Plain messages.** A refusal ("drop") leads with a sentence for people and a next step: "The runner refused this capture, so it wasn't saved. Save it as a file, or reopen the popup to capture it again."
+  - Known bridge codes are translated.
+  - A handler's own person-facing message is kept as it is.
+  - `invalid_response` and `unknown_error` in `statusFailureMessage` map to one sentence that agrees with the outbox line, for example "Something other than the runner is answering on its port. Close that program, then start the runner with `npm run runner`."
+  - No field names or status codes in visible text.
+- **H3. The reviewer's nits.**
+  - In this revision:
+    - nit 1: stamp each pause with the pairing, and lift pauses from older pairings;
+    - nit 3: adopt the R6-race probe as a test;
+    - nit 4: a full queue offers "Save as a file";
+    - nit 5: a handler for a rejected screencast;
+    - nit 6: adopt the theme-guard probe as a test of the guard's refusal paths;
+    - nit 7: correct the report.
+  - Nit 2 (the `forgetInvalidToken` window) is documented as a known limitation in the report and README ("if you pair at the exact moment an old token is refused, pair again").
+- **H4. Screenshots.** Retake the 409 pair, the tone-changed states and the pairing-card states. Add the foreign-server and token-replaced states, in light and dark.
