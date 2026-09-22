@@ -74,16 +74,17 @@ async function recordCspViolations(page: Page): Promise<void> {
  * string compared to an empty string and would pass no matter what
  * theme.css contained (or if it 404'd entirely).
  *
- * Comparing body's resolved background to a probe element whose
- * background-color is literally `var(--background)` (rather than to a
- * hard-coded color string) means this doesn't need to know or maintain
- * the token's current oklch() value or how Chrome happens to serialize
- * it back out of getComputedStyle — it only needs the two to resolve to
- * the *same* computed value, which is exactly what "theme.css loaded and
- * applied" means. The `toMatch` below guards against the vacuous
- * empty-string-equals-empty-string case the old assertion missed: an
- * empty background never matches that pattern, so a totally missing
- * theme.css fails loudly again.
+ * Revision 2: comparing body's background with a probe styled
+ * `var(--background)` was still vacuous. With the token deleted from
+ * theme.css, both resolve to transparent `rgba(0, 0, 0, 0)` (a `var()` with
+ * no value is invalid at computed-value time), which matches a
+ * `^(rgb|rgba|...)\(` pattern and equals itself, so all 4 tests still
+ * passed. Now:
+ *   - the `--background` token itself must be non-empty on body;
+ *   - body's computed background must not be transparent;
+ *   - and it must equal the token's own value, resolved through a probe
+ *     whose background-color is that literal value. This still never
+ *     hard-codes the token's oklch() value or Chrome's serialization of it.
  */
 async function assertThemeAndFontsLoaded(page: Page): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
@@ -91,16 +92,22 @@ async function assertThemeAndFontsLoaded(page: Page): Promise<void> {
   const fontLoaded = await page.evaluate(() => document.fonts.check("12px Geist"));
   expect(fontLoaded, "Geist should be loaded via the self-hosted woff2, not falling back silently").toBe(true);
 
-  const { bodyBackground, tokenBackground } = await page.evaluate(() => {
+  const { token, bodyBackground, tokenBackground } = await page.evaluate(() => {
+    const token = getComputedStyle(document.body).getPropertyValue("--background").trim();
     const probe = document.createElement("div");
-    probe.style.backgroundColor = "var(--background)";
+    probe.style.backgroundColor = token;
     document.body.appendChild(probe);
     const tokenBackground = getComputedStyle(probe).backgroundColor;
     probe.remove();
-    return { bodyBackground: getComputedStyle(document.body).backgroundColor, tokenBackground };
+    return { token, bodyBackground: getComputedStyle(document.body).backgroundColor, tokenBackground };
   });
+  expect(token, "theme.css should define a non-empty --background token").not.toBe("");
   expect(bodyBackground).toMatch(/^(rgb|rgba|oklch|color)\(/);
-  expect(bodyBackground, "body background should equal the --background token, not the UA default").toBe(tokenBackground);
+  expect(bodyBackground, "body background should be painted, not transparent").not.toBe("transparent");
+  expect(bodyBackground, "body background should be painted, not transparent").not.toBe("rgba(0, 0, 0, 0)");
+  expect(bodyBackground, "body background should equal the --background token's value, not the UA default").toBe(
+    tokenBackground,
+  );
 }
 
 test("the extension loads and its service worker starts", async ({ extensionId }) => {
