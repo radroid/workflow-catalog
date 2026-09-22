@@ -1,7 +1,7 @@
 # P01 · Workflow package and shared contracts
 
 Status: claimed
-Assignee: iter-002 implementer (Sonnet)
+Assignee: iter-002 implementer (Sonnet); revision 2 iter-002 (Opus)
 Blocked by: P00
 Owns: packages/job-assistant/, packages/contracts/
 Spec: §5 data contracts, F12 (manifest only), execution-options.md package layout
@@ -26,6 +26,80 @@ The portable, versioned workflow package and the zod contracts every other part 
 Any model call. Any runner code.
 
 ## Report
+
+### 2026-09-22 — Revision 2 (iter-002, Opus escalation)
+
+The reviewer's second pass found three low-severity issues (A–C), a follow-up (D) and a nit (E). All five are fixed on `packet/P01` in commits `2e44196` (A), `6b05062` (B), `53b739e` (C), `d316ee2` (D), `8f851d4` (E) and `9c7f8a1` (comment precision). Every changed path is inside the allowlist (`packages/contracts/**`, `packages/job-assistant/**`, this file). Everything was staged by explicit path, with no amend, no force-push and no lockfile change.
+
+**A. Envelope size now holds after JSON escaping.**
+- *Reproduced first.* Under revision 1's raw-byte cap, a JobCapture whose text was 200,000 newlines, quotes or backslashes was valid and serialized to 400,291 B. With 200,000 × U+0001 it serialized to 1,200,291 B. (The review measured 400,219 B and 1,200,219 B with a slightly different envelope.)
+- *Two more unbounded fields turned up in the process.* Both were valid:
+  - a `url` padded with 300,000 spaces (300,284 B);
+  - an `occurredAt` with 300,000 fractional-second digits (300,289 B), because `z.iso.datetime()` accepts any number of those digits.
+- *New text measure.* `utf8BoundedTextSchema(maxBytes)` (primitives.ts) now caps `new TextEncoder().encode(JSON.stringify(text)).length`, quotes included. JobSnapshot.text and JobCapture.text both use it.
+- *Caps, all exported.*
+  - `MAX_BRIDGE_BODY_BYTES` = 262,144 (primitives.ts).
+  - `MAX_JOB_CAPTURE_TEXT_BYTES` = 200,000. The value is unchanged; it is now measured as JSON.
+  - `MAX_JOB_CAPTURE_URL_LENGTH` = 2,048.
+  - `MAX_EXTRACTOR_VERSION_LENGTH` = 128.
+  - `MAX_CONTENT_HASH_LENGTH` = 128.
+  - `MAX_OCCURRED_AT_LENGTH` = 64, on all three events.
+  - `BrowserCommandResult.items` is capped at `MAX_APPLICATION_GROUP_SIZE` (20).
+- *The url cap needed a new primitive, `boundedHttpUrlSchema(maxLength)`.* zod 4.5.4's URL check hands later checks a rewritten value: trimmed, with tabs, CR and LF deleted. So `httpUrlSchema.max(n)` measures the cleaned string; in a probe, a URL padded with 100,000 newlines passed `.max(50)`. The new primitive is `z.string().max(n).check(z.url({ protocol })).regex(...)`. It counts the raw input first, then runs `httpUrlSchema`'s two checks in the same order. Its emitted JSON Schema is `httpUrlSchema`'s plus `maxLength`, and a test checks that it agrees with `httpUrlSchema` on inputs within the cap.
+- *Measured sizes.*
+  - Worst case computed from the caps: 214,364 B. The proof counts at most 6 bytes of JSON per UTF-16 code unit, which a test checks over all 65,536 units.
+  - Built maximal JobCapture: **213,299 B**, the same for all six adversarial text types. Every string sits at its cap, and U+0001 or lone surrogates fill the url and extractorVersion.
+  - Worst BrowserCommandResult: 1,637 B. Worst ApplicationStatusChanged: 283 B.
+- *JSON Schema.* The text fields emit `maxLength` = cap − 2 (199,998). Every code point serializes to at least 1 byte, so this never rejects a zod-valid text. Each also carries a `description` saying the byte bound is enforced exactly by zod and, on the wire, by the bridge's raw 256 KB (262,144-byte) body cap. The other caps lower exactly to `maxLength`/`maxItems`.
+- *Tests.*
+  - New `packages/contracts/src/bridge-body-size.test.ts` covers U+0001, quotes, backslashes, newlines, 4-byte emoji and CJK. Each is valid at exactly the cap inside a worst-case envelope ≤ 262,144 B, and invalid one byte over and one character over. It also includes the review's four reproductions, each field cap at N and N+1, and URL padding with trailing spaces, leading spaces and embedded tabs.
+  - The ajv parity test checks that ajv accepts every zod-valid adversarial text at the cap, and that ajv and zod agree on ASCII text and every other cap.
+- *The wrong comment.* The job-snapshot.ts comment claimed the snapshot cap kept a posting under the bridge body cap, and gave "600 KB–1.2 MB of UTF-8" for 200,000 characters. It now says a snapshot is a workspace file, not a bridge body. Its cap equals JobCapture's, so text from a valid capture always fits a snapshot, and pasted or fetched text meets the same limit.
+
+**B. Stale fixture hash.**
+- `job-fernwood.json`'s `contentHash` (`1400ef07…`) was the digest of its text from before revision 1.
+- It is now `375ee7a46fc81e07acc8ce92a77c33078706cd552b877677a30628ab0b99750b`: the lowercase hex SHA-256 of `text` as UTF-8, the same digest the other two postings already carried.
+- The contracts now document that digest on `JobSnapshot.contentHash` and `JobCapture.contentHash`. The type still accepts any hex digest, and `hexDigestSchema` points to the field docs.
+- `fixtures.test.ts` recomputes the digest for every JobSnapshot fixture listed in `fixtures/index.json`.
+
+**C. Always-ask fixture contradiction.**
+- Claim `5e2907bb` ("Led the payments infrastructure team…") now has a `question` ("What was your role on the payments infrastructure team: its manager, its technical lead, or something else?") and an `answeredAt`.
+- `follow-up-questions/SKILL.md` now names role and scope claims beside superlatives. It states the list once, in a form a test can parse: "Always-ask words: `led`, `founded`, `the only`, `fastest`", matched as whole words in any letter case, and described as examples rather than the whole list.
+- `fixtures.test.ts` reads the always-ask kinds (from the "Every claim with `kind: …`" lines) and the words straight from SKILL.md. It checks that every confirmed claim fixture of those kinds, or using those words, has both fields. So the list lives only in the skill.
+- The test failed on `5e2907bb` before the fixture change. Whole-word matching keeps "Ledgerkit"/"ledger" from matching "led".
+
+**D. `uniqueItems`.**
+- The six duplicate-free arrays in `workflow-manifest.ts` now carry `.meta({ uniqueItems: true })`. I checked zod 4.5.4 in node_modules: `GlobalMeta` has a `[k: string]: unknown` index signature, and `z.toJSONSchema` copies metadata into the output.
+- `workflow.schema.json` gained `"uniqueItems": true` on `requiredSources`, `connections`, `browserPermissions`, `actions`, `schemas` and `adapters`, and nowhere else.
+- The parity test checks a repeated entry in each of the six arrays. All six cases failed (ajv accepted the duplicate) before the change.
+
+**E. eve README.** The illustrative tool now does `import { always } from "eve/tools/approval"`, citing `docs/spec/research/eve-runtime.md` §2 (Tools). The approval prose names the path, and `package.test.ts` checks it.
+
+**Tests, real output** (after `9c7f8a1`; CI run 35700787164 on `8f851d4`: `ci pass 1m8s`):
+```
+pnpm -r typecheck                → clean (contracts, job-assistant, apps/catalog; extension/runner placeholders)
+pnpm -r test                     → contracts 16 files 224 passed, job-assistant 6 files 122 passed, apps/catalog 3 passed
+pnpm -r lint                     → clean
+pnpm typecheck && pnpm test      → green, incl. scripts/check-fixtures.test.mjs 2/2
+pnpm --filter contracts build    → tsc + emit-schemas.mjs, zero "wrote" lines (no drift)
+pnpm check:fixtures              → exit 0
+git status --porcelain           → empty
+```
+contracts went from 163 to 224 tests: +38 in bridge-body-size, +21 in primitives, +2 in job-snapshot. job-assistant went from 93 to 122: +21 in the parity test (14 for A, 7 for D), +7 in fixtures (4 for B, 3 for C), +1 in package.
+
+**Skipped, and why.**
+- Only the `/events` bodies got new caps, as the review scoped it. `httpUrlSchema`, `isoDateTimeSchema` and `hexDigestSchema` stay uncapped wherever else they appear: JobSnapshot, OpenApplicationGroup, SessionManifest and the rest.
+- Every capped JobCapture field is at most as loose as its JobSnapshot counterpart, so a valid capture always converts to a valid snapshot.
+
+**Assumptions.**
+- "256 KB" means 256 KiB (262,144 B), per the revision instructions. The worst case also fits a decimal 256,000 B cap.
+- The body bound is stated for JSON data. An exotic input object with a `toJSON` method can serialize to anything, but zod's parsed output never has one.
+- The contentHash digest is now documented as SHA-256 of the UTF-8 text in lowercase hex, because F6's three capture paths must agree on it. The type still accepts any hex digest, so assumption 14 below still holds for the schema.
+
+**The one thing to sharpen next time.**
+- `httpUrlSchema` accepts a URL with leading whitespace, and so does `boundedHttpUrlSchema`, which keeps its check order. zod trims before the `.regex()` runs, while the emitted `"pattern": "^https?:\\/\\/"` rejects it (checked: zod `true`, ajv `false` for `"  https://jobs.example/x"`).
+- That is ajv being stricter than zod. It is harmless because zod's output is the trimmed URL, but it is a parity gap left from revision 1.
+- The fix is to run the `.regex()` before the URL check. Whichever packet does it next (P02 or P04, which consume URLs) should add it to the ajv parity test.
 
 ### 2026-09-22 — Revision 1 (iter-002 implementer, Sonnet) — REVISE verdict, 9 issues + 4 decisions
 
