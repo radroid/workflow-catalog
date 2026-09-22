@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Onboarding · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/onboarding.css" />
+    <script type="module" src="/ui/assets/onboarding.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1>Onboarding</h1>
+      <p class="lede">Account for every career source, extract claims from what you provide, and decide each one. Nothing is invented — a claim without your evidence gets a question, never a guess.</p>
+
+      <section class="card" aria-labelledby="readiness-title">
+        <div class="card-head">
+          <h2 id="readiness-title">Readiness</h2>
+          <button class="button" type="button" id="approve-button" disabled>Approve career profile</button>
+        </div>
+        <ul class="reasons" id="readiness-reasons"></ul>
+        <p class="small" id="readiness-ready" hidden>Ready. Approving unlocks generation.</p>
+        <p id="approve-result" class="small" hidden></p>
+      </section>
+
+      <section class="card" aria-labelledby="sources-title">
+        <h2 id="sources-title">Sources</h2>
+        <p class="muted small">Mark each source provided (and paste or type what you have), unavailable, or not applicable. All seven need an answer before the profile can be approved.</p>
+        <div id="sources"></div>
+      </section>
+
+      <section class="card" aria-labelledby="claims-title">
+        <h2 id="claims-title">Claims</h2>
+        <p class="muted small">Every claim starts as a candidate. A metric, title, date, superlative, role, or scope claim always gets a question before it can be confirmed.</p>
+        <div id="claims"></div>
+      </section>
+
+      <p id="page-error" class="error" role="alert" hidden></p>
+      <div aria-live="polite" class="visually-hidden" id="live-region"></div>
+    </main>
+  </body>
+</html>

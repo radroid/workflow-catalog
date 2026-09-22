@@ -1,0 +1,23 @@
+/* Profile page: status, pending revisions, and the career-profile.md editor. */
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+.markdown-editor {
+  width: 100%; min-height: 28rem; resize: vertical;
+  font: 0.85rem/1.6 var(--font-mono); color: inherit; background: var(--background);
+  border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.75rem;
+}
+.markdown-editor:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+
+.revision { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.875rem 1rem; }
+.revision + .revision { margin-top: 0.625rem; }
+.revision-diff { font-size: 0.9rem; }
+.revision-diff .old { color: var(--muted-foreground); text-decoration: line-through; }
+.revision-diff .new { font-weight: 500; }
+.revision-meta { color: var(--muted-foreground); font-size: 0.8rem; margin: 0.25rem 0 0.625rem; }
+.revision-actions { display: flex; gap: 0.5rem; }
+
+.empty { color: var(--muted-foreground); font-size: 0.9rem; }

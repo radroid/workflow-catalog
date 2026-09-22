@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Profile · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/profile.css" />
+    <script type="module" src="/ui/assets/profile.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1>Career profile</h1>
+      <p class="lede">The document that gets used to draft everything else. Confirmed claims only, and only after you approve it — an edit to an approved fact proposes a revision instead of changing it outright.</p>
+
+      <section class="card" aria-labelledby="status-title">
+        <h2 id="status-title">Status</h2>
+        <p id="status-summary" class="muted"></p>
+      </section>
+
+      <section class="card" aria-labelledby="revisions-title" id="revisions-section" hidden>
+        <h2 id="revisions-title">Pending revisions</h2>
+        <p class="muted small">The current version stays in force until you accept a revision. Documents already prepared keep saying which version they used.</p>
+        <div id="revisions"></div>
+      </section>
+
+      <section class="card" aria-labelledby="markdown-title">
+        <div class="card-head">
+          <h2 id="markdown-title">career-profile.md</h2>
+          <button class="button" type="button" id="save-markdown" disabled>Save edits</button>
+        </div>
+        <p class="muted small">Every bullet ends with an id marker like <code>`[abcd1234]`</code> — edit the text before it and save; the marker itself must stay so your edit finds the right claim. Everything else (adding, removing, or moving a bullet) is not round-tripped: use the buttons on the <a href="/ui/onboarding">Onboarding</a> page for that.</p>
+        <label for="markdown-editor" class="visually-hidden">career-profile.md contents</label>
+        <textarea id="markdown-editor" class="markdown-editor" spellcheck="false"></textarea>
+        <p id="markdown-result" class="small" hidden></p>
+      </section>
+
+      <p id="page-error" class="error" role="alert" hidden></p>
+      <div aria-live="polite" class="visually-hidden" id="live-region"></div>
+    </main>
+  </body>
+</html>
