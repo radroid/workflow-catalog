@@ -4,7 +4,7 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 
 ## Phase 1 — Foundation
 
-- [ ] P1.A — P00 Repository scaffold — pnpm monorepo, themed catalog shell, contracts stub, CI; spec P00-scaffold-and-loop.md.
+- [x] P1.A — P00 Repository scaffold — pnpm monorepo, themed catalog shell, contracts stub, CI; spec P00-scaffold-and-loop.md. Done iter 001, PR #1 (squash d107806).
 - [ ] P1.B — P01 Workflow package and contracts — zod schemas, workflow.json, skills, templates, fixtures; spec P01; blocked by P1.A.
 - [ ] P1.C — P02 spike: chatgpt() under eve start vs eve dev — scratch dir outside the repo; report both outcomes verbatim; spec P02 step 0; blocked by P1.A.
 - [ ] P1.D — P02 Runner skeleton, bridge, pairing, setup, doctor — eve@0.63.0 project in chosen mode; spec P02; blocked by P1.B, P1.C.

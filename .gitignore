@@ -25,6 +25,7 @@ keys/
 .vercel/
 
 # Local verification artifacts, OS and editor cruft
+.claude/worktrees/
 .playwright-mcp/
 *.log
 .DS_Store
