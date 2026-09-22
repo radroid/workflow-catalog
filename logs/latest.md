@@ -1,19 +1,30 @@
-Latest: iter-001 — P00 scaffold merged (PR #1, squash d107806). Integration PR #2 (overnight/integration → main) open.
+Latest: iter-002. P01 merged (PR #3, 18dcf02), P09-A merged (PR #4, 3d64f23), P02 spike chose mode A (docs/spec/research/eve-spike.md). Integration PR #2 open.
 
-Phase: 1
-Next step: iter-002 — three agents in parallel: P01 (Sonnet, worktree, packet/P01), the P02 spike (Opus, scratch dir /tmp/wc-eve-spike, outside the repo; no repo writes), and P09 part A (Sonnet, worktree, packet/P09A: invite sign-in, install-guide shell, docs/learn rendering). Then one Opus reviewer over the P01 and P09-A PRs, and a UI critic on the P09-A pages. The orchestrator writes the spike outcome verbatim into the P02 packet's Report and into docs/spec/research/eve-spike.md.
-Open first: GOALS.md, docs/spec/implementation/README.md, P01-workflow-package-and-contracts.md, P02-runner-spike-and-skeleton.md (step 0), P09-catalog-site.md, logs/blocks.md (P02 and P09 follow-ups).
-Parallel-safety rules for iter-002:
-- Owns are disjoint: P01 = packages/contracts/, packages/job-assistant/; P09-A = apps/catalog/ (no release workflow yet); the spike stays outside the repo.
-- Shared derived file: pnpm-lock.yaml. Change it only through pnpm, never by hand. The PR that merges second gets `overnight/integration` merged into it and `pnpm install` rerun. No rebase or force-push.
-- Root package.json and pnpm-workspace.yaml stay untouched. The one exception is an `allowBuilds` entry for a dependency that truly needs a build script; it needs a comment and a mention in the report. Prefer dependencies without build scripts (Node 24 runs .ts scripts directly).
-Facts for iter-002:
-- The Codex CLI is installed and `codex login status` reports "Logged in using ChatGPT", so the spike can test chatgpt() through codex app-server without a human. No provider API keys are in the environment.
-- Port 3000 is in use by the owner. Agent ports: 3101 and up for implementers and critics, 2000 for eve dev, 3210 for eve start, 4310 for the bridge. Kill servers with `lsof -ti tcp:PORT -sTCP:LISTEN | xargs kill`.
-- Vercel CLI 41.3.2 is logged in (account "curlycloud"), and neonctl is not installed. Creating a Vercel project, provisioning Neon, and turning off Deployment Protection are owner-gated: they are outward-facing account actions. P09-A builds and tests against PGlite (or an equivalent local Postgres), and the deploy steps become an owner dependency.
-Open blocks: none. Follow-ups: see blocks.md entries dated 2026-09-22 (P02 eve init quirks; P09 UI notes and dark-mode font remap).
-Carry-forward: the smoke test is `pnpm typecheck && pnpm test` (green at d107806). Chrome Web Store registration is still an open owner dependency.
-Last-iter shipped: P00 monorepo scaffold, CI, fixture scanner, themed catalog page. Log: logs/iter-001.md.
+Phase: 1 (P02 skeleton, P01.1 left); P09-B and P07-A (Phase 2) are unblocked.
+Next step: iter-003, four implementers in parallel worktrees, then one Opus reviewer over all four PRs and a UI critic on the template page plus the extension pages.
+- P02 skeleton (Opus, packet/P02, mode A) owns runner/ and packages/job-assistant/adapters/eve/.
+- P09-B (Sonnet, packet/P09-B): template page + release workflow; owns apps/catalog/ and .github/workflows/release-package.yml.
+- P07-A (Sonnet, packet/P07-A): manifest, options/pairing page, capture extractor, file export, no bridge calls; owns extension/.
+- P01.1 (Sonnet, packet/P01.1): contracts follow-ups; owns packages/contracts/src/ and job-assistant schemas/, test/, skills/follow-up-questions/, fixtures/expected-claims.json, fixtures/index.json.
+- pnpm-lock.yaml is shared and derived: change it only through pnpm; the PR merged later gets a refresh merge, never a rebase.
+Must-carry (details in logs/blocks.md, 2026-09-22):
+- P02:
+  - Pin eve exactly and keep TS 6.0.3. eve init writes a caret, TS 7, and Vercel leftovers.
+  - Store an explicit model slug in settings; the default is rejected. Doctor checks it.
+  - Keep codex on PATH. Run `eve extension build` before `eve build`. Never alternate modes on one .eve/. Treat logs and .eve/ as personal data.
+  - Tools use approval: always() and take task IDs only; report_status and capture_job are not model-callable.
+  - Choose and document the install path in runner/README.md (a workspace dep breaks `degit runner/`).
+  - Allowed: eve build/start/dev/eval on loopback 2000/3210/4310, stopped afterwards.
+- P09-B:
+  - First fix the dev PGlite duplicate instance (globalThis cache + test) and the `?error=__proto__` crash (Object.hasOwn).
+  - Checksum = SHA-256 published beside the release asset (F2 amended); show a graceful placeholder until a release exists.
+  - The loop never tags or releases.
+  - UI: aria-pressed on a flipping label, focus after in-app submit, blue ring on the alert.
+- P07-A: exactly six permissions; host permission only http://127.0.0.1:4310/*. Export via Blob + <a download> (no downloads permission). No build tools with postinstall scripts.
+- Ports: P09-B 3105, UI critic 3106, P07-A 3107; the owner uses 3000. Kill a server with `lsof -ti tcp:PORT -sTCP:LISTEN | xargs kill`.
+Open blocks: catalog deploy is owner-gated (GOALS Open dependencies).
+Carry-forward: smoke test green at the iter-002 commit. P03 waits for P02 and P01.1.
+Last-iter shipped: contracts + package, catalog invite/install/learn, eve spike decision. Log: logs/iter-002.md.
 
 <!-- Tier 1: read every iter. Hard cap 30 lines. This file IS the handoff —
      keep it self-contained, overwrite (do not append) each iter. -->

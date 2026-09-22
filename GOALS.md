@@ -5,10 +5,11 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 ## Phase 1 — Foundation
 
 - [x] P1.A — P00 Repository scaffold — pnpm monorepo, themed catalog shell, contracts stub, CI; spec P00-scaffold-and-loop.md. Done iter 001, PR #1 (squash d107806).
-- [ ] P1.B — P01 Workflow package and contracts — zod schemas, workflow.json, skills, templates, fixtures; spec P01; blocked by P1.A.
-- [ ] P1.C — P02 spike: chatgpt() under eve start vs eve dev — scratch dir outside the repo; report both outcomes verbatim; spec P02 step 0; blocked by P1.A.
+- [x] P1.B — P01 Workflow package and contracts — zod schemas, workflow.json, skills, templates, fixtures; spec P01; blocked by P1.A. Done iter 002, PR #3 (squash 18dcf02).
+- [x] P1.C — P02 spike: chatgpt() under eve start vs eve dev — scratch dir outside the repo; report both outcomes verbatim; spec P02 step 0; blocked by P1.A. Done iter 002: mode A (docs/spec/research/eve-spike.md).
 - [ ] P1.D — P02 Runner skeleton, bridge, pairing, setup, doctor — eve@0.63.0 project in chosen mode; spec P02; blocked by P1.B, P1.C.
-- [ ] P1.E — P09.A Catalog: invite sign-in, install-guide shell, learn docs — Neon free, no email provider; spec P09; blocked by P1.A.
+- [x] P1.E — P09.A Catalog: invite sign-in, install-guide shell, learn docs — Neon free, no email provider; spec P09; blocked by P1.A. Done iter 002, PR #4 (squash 3d64f23); deploy steps owner-gated.
+- [ ] P1.F — P01.1 Contracts follow-ups — URL rule parity (zod vs JSON Schema), pair code cap, always-ask fixture consistency; spec P01.1-contracts-followups.md; blocked by P1.B. Must land before P2.A (P03).
 
 ## Phase 2 — Own the workflow
 
@@ -35,3 +36,4 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 
 - Chrome Web Store developer registration and private listing (blocks store distribution only; unpacked install covers the overnight build).
 - Confirm the currency reading (USD before tax) and repo visibility (public). No current block.
+- Catalog deploy (P09, owner-gated, outward-facing account actions): create the Vercel project with root `apps/catalog`, provision Neon free via the Vercel Marketplace, set `OWNER_SECRET`, `SESSION_SECRET`, `DATABASE_URL`, turn Deployment Protection off (the app does its own auth), then `vercel pull` → `vercel build` → `vercel deploy --prebuilt` for a preview. Steps: `apps/catalog/README.md`. Blocks only the "catalog live on Hobby" acceptance items.

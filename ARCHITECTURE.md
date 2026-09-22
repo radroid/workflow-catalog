@@ -21,7 +21,7 @@ Execution is never hosted. Each person installs a versioned **workflow package**
 
 - pnpm workspaces, one repo: `apps/catalog`, `runner`, `packages/job-assistant`, `packages/contracts`, `extension`, `docs`. Layout: spec §2.
 - **Catalog:** Next.js on Vercel Hobby (target $0/month, ceiling $25), tweakcn Vercel theme tokens from `docs/spec/visuals/theme.css`, Geist via `next/font`; invite sign-in with a session cookie, no email provider, no OAuth; Neon free tier for invites (P09). Packages ship as GitHub release assets, not Vercel storage.
-- **Runner:** eve pinned exactly at `0.63.0`, Node 24 or newer; bridge server on `127.0.0.1:4310`; plain-HTML local UI served by the bridge; provider credentials in eve's keychain storage or environment. Facts: `docs/spec/research/eve-runtime.md`, budget: `docs/spec/research/runtime-budget.md`.
+- **Runner:** eve pinned exactly at `0.63.0`, Node 24 or newer, run mode A (`eve build && eve start --host 127.0.0.1`, decided by the P02 spike: `docs/spec/research/eve-spike.md`); bridge server on `127.0.0.1:4310`; plain-HTML local UI served by the bridge; provider credentials in eve's keychain storage or environment. Facts: `docs/spec/research/eve-runtime.md`, budget: `docs/spec/research/runtime-budget.md`.
 - **Extension:** Chrome MV3; permissions exactly `activeTab, scripting, tabGroups, storage, sidePanel, alarms`; host permission only the bridge origin. Boundary: `docs/spec/research/browser-boundary.md`.
 - **Contracts:** `packages/contracts` owns every shape as zod schemas, published as JSON Schema into the package for other harnesses.
 - **Package:** `packages/job-assistant` = `workflow.json`, `skills/`, `schemas/`, `templates/`, `fixtures/`, one adapter `adapters/eve`. Fictional fixtures only: `docs/spec/implementation/fixtures-policy.md`.
@@ -50,7 +50,7 @@ Owned by `packages/contracts`; full shapes in spec §5. Main entities:
 - **Invite** — the owner's grant for one named person; five invites, a used link cannot be reused (F1).
 - **Source** — a career-information category marked provided, unavailable, or not applicable; raw files under `sources/<category>/`.
 - **Claim** — `{ id, text, kind, status: candidate|disputed|confirmed|excluded, source, evidence }`; the unit every generated statement must cite.
-- **Career profile** — `career-profile.json` (claims, sources, preferences, boundaries, approval, revisions) with a round-tripping `career-profile.md` view. **Readiness** = every source accounted for, no candidate or disputed claim, profile approved.
+- **Career profile** — `career-profile.json` (claims, sources, presentation rules, preferences, boundaries, approval, revisions) with a round-tripping `career-profile.md` view. **Readiness** = every source accounted for, no candidate or disputed claim, profile approved.
 - **Job snapshot** — `jobs/<jobId>/snapshot-<rev>.json`: url, capturedAt, extractorVersion, contentHash, text, structured.
 - **Application** — `applications/<taskId>.json` (stage, revision, documents, notes, deadlines) plus generated documents and diffs.
 - **Session manifest** and **bridge envelopes** — `open_application_group`, `browser_command_result`, `job_capture`, `application_status_changed`, `protocol: 1`.
@@ -62,7 +62,7 @@ Each flow names the packet that ships it; acceptance lives in the packet and spe
 
 ### Flow 1 — Install from the catalog (P09, P02)
 1. Owner creates an invite link; friend opens it, picks a display name, gets a session cookie.
-2. Template page shows version, checksum, changelog from `workflow.json`; download points at a GitHub release asset.
+2. Template page shows version and changelog from `workflow.json` and the SHA-256 the release workflow publishes beside the tarball; download points at a GitHub release asset.
 3. Guided install: runner setup chooses workspace path and provider, `doctor` verifies, pairing code shown for the extension.
 
 ### Flow 2 — Own the career profile (P03)

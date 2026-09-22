@@ -1,6 +1,6 @@
 # P01 · Workflow package and shared contracts
 
-Status: claimed
+Status: done
 Assignee: iter-002 implementer (Sonnet); revision 2 iter-002 (Opus)
 Blocked by: P00
 Owns: packages/job-assistant/, packages/contracts/

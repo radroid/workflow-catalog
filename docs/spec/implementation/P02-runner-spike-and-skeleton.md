@@ -30,3 +30,22 @@ Scaffold with `npx eve@0.63.0 init runner` (pin; do not use `@latest`), set `mod
 
 ## Out of scope
 Onboarding, capture, preparation logic. Any UI beyond a status page.
+
+## Report
+
+### 2026-09-22 — Step 0 spike (iter-002, Opus spike agent; recorded by the orchestrator)
+The full verbatim report is `docs/spec/research/eve-spike.md`. The two outcomes, verbatim:
+
+**Outcome A — `eve build && eve start` (`chatgpt()`, `httpBasic`).** With the default slug, `chatgpt()` failed: `Model provider API request failed (HTTP 400): {"detail":"The 'gpt-5.6-luna-fast' model is not supported when using Codex with a ChatGPT account."}`. With `chatgpt("gpt-5.6-luna")` it passed: `session.started → turn.started → message.received → step.started → message.appended → message.completed → step.completed → turn.completed → session.waiting`, final text `pong`. Without auth the request got 401 with `WWW-Authenticate: Basic realm="eve"`. A2 (cron): a `* * * * *` schedule fired at 05:09:00Z with no request and completed with text `tick`.
+
+**Outcome B — `eve dev --no-ui` (`chatgpt()`, `localDev`).** With `chatgpt("gpt-5.6-luna")` it passed with the same event sequence, text `pong`. The default slug gave the same 400. `POST /eve/v1/dev/schedules/spike-devtick` returned 200 `{"scheduleId":"spike-devtick","sessionIds":[…]}`, and that session completed with text `tick`.
+
+**Decision per spec §8: mode A.** It has four conditions:
+- an explicit model slug the account accepts, stored in settings and checked by `doctor`;
+- `codex` on the runner's `PATH`;
+- `eve extension build` before `eve build`;
+- never alternating modes on one `.eve/`.
+
+Mode B stays a tested fallback. The skeleton implementer writes the choice into `runner/README.md`. The spike changed nothing in the repo; its scratch project is `/tmp/wc-eve-spike/runner`.
+
+Status stays `open`: the skeleton (the rest of this packet) runs in iter-003.

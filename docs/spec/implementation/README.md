@@ -19,6 +19,7 @@ Bounded work packets for the MVP in [../mvp-spec.md](../mvp-spec.md). Each packe
 |---|---|---|
 | [P00 scaffold and loop](P00-scaffold-and-loop.md) | — | — |
 | [P01 workflow package and contracts](P01-workflow-package-and-contracts.md) | P00 | P09 |
+| [P01.1 contracts follow-ups](P01.1-contracts-followups.md) | P01 | P02, P07, P09 (must land before P03) |
 | [P02 runner spike and skeleton](P02-runner-spike-and-skeleton.md) | P01 | P09 |
 | [P03 onboarding and career profile](P03-onboarding-and-career-profile.md) | P02 | P09, P07 (pairing part) |
 | [P04 job capture](P04-job-capture.md) | P03 | P09 |
