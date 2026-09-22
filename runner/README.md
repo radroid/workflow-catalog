@@ -56,6 +56,9 @@ So a `git pull` that changes any of them rebuilds on the next start.
 
 The runner is used from a **whole-repo clone**:
 
+Node 24 is the tested version and ships with Corepack. On Node 25 or newer,
+run `npm install -g corepack` first.
+
 ```sh
 git clone https://github.com/radroid/workflow-catalog.git
 cd workflow-catalog
