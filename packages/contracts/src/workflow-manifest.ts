@@ -6,6 +6,14 @@ function noDuplicates<T>(arr: T[]): boolean {
   return new Set(arr).size === arr.length;
 }
 
+/**
+ * The JSON Schema form of `noDuplicates`. A zod `.refine()` never reaches the
+ * emitted schema, but `z.toJSONSchema` copies `.meta()` metadata into it
+ * (zod 4.5.4 `GlobalMeta` allows any key), so ajv rejects the same duplicates
+ * zod does. Metadata validates nothing in zod; the `.refine()` still does that.
+ */
+const UNIQUE_ITEMS = { uniqueItems: true } as const;
+
 /** mvp-spec §4, the five MVP-supported connections ("yes" column) — Gmail/calendars/ATS accounts are explicitly "no" and never appear here. */
 export const WORKFLOW_CONNECTIONS = [
   "file_upload",
@@ -68,20 +76,30 @@ export const workflowManifestSchema = z
     description: nonEmptyStringSchema,
     requiredSources: z
       .array(sourceCategorySchema)
-      .refine(noDuplicates, "requiredSources must not contain duplicates"),
+      .refine(noDuplicates, "requiredSources must not contain duplicates")
+      .meta(UNIQUE_ITEMS),
     connections: z
       .array(workflowConnectionSchema)
       .min(1)
-      .refine(noDuplicates, "connections must not contain duplicates"),
+      .refine(noDuplicates, "connections must not contain duplicates")
+      .meta(UNIQUE_ITEMS),
     browserPermissions: z
       .array(browserPermissionSchema)
-      .refine(noDuplicates, "browserPermissions must not contain duplicates"),
-    actions: z.array(workflowActionSchema).refine(noDuplicates, "actions must not contain duplicates"),
-    schemas: z.array(nonEmptyStringSchema).refine(noDuplicates, "schemas must not contain duplicates"),
+      .refine(noDuplicates, "browserPermissions must not contain duplicates")
+      .meta(UNIQUE_ITEMS),
+    actions: z
+      .array(workflowActionSchema)
+      .refine(noDuplicates, "actions must not contain duplicates")
+      .meta(UNIQUE_ITEMS),
+    schemas: z
+      .array(nonEmptyStringSchema)
+      .refine(noDuplicates, "schemas must not contain duplicates")
+      .meta(UNIQUE_ITEMS),
     adapters: z
       .array(workflowAdapterSchema)
       .min(1)
-      .refine(noDuplicates, "adapters must not contain duplicates"),
+      .refine(noDuplicates, "adapters must not contain duplicates")
+      .meta(UNIQUE_ITEMS),
     changelog: z.array(workflowChangelogEntrySchema).min(1),
   })
   .strict();

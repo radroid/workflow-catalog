@@ -27,7 +27,8 @@
           "workSamples",
           "targetRolesAndPreferences"
         ]
-      }
+      },
+      "uniqueItems": true
     },
     "connections": {
       "minItems": 1,
@@ -41,7 +42,8 @@
           "github",
           "social_export_files"
         ]
-      }
+      },
+      "uniqueItems": true
     },
     "browserPermissions": {
       "type": "array",
@@ -55,7 +57,8 @@
           "sidePanel",
           "alarms"
         ]
-      }
+      },
+      "uniqueItems": true
     },
     "actions": {
       "type": "array",
@@ -66,14 +69,16 @@
           "open_application_group",
           "report_status"
         ]
-      }
+      },
+      "uniqueItems": true
     },
     "schemas": {
       "type": "array",
       "items": {
         "type": "string",
         "minLength": 1
-      }
+      },
+      "uniqueItems": true
     },
     "adapters": {
       "minItems": 1,
@@ -83,7 +88,8 @@
         "enum": [
           "eve"
         ]
-      }
+      },
+      "uniqueItems": true
     },
     "changelog": {
       "minItems": 1,

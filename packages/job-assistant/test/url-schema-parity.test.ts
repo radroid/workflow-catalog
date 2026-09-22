@@ -19,7 +19,15 @@ import {
   MAX_JOB_SNAPSHOT_TEXT_BYTES,
   MAX_OCCURRED_AT_LENGTH,
   sessionManifestSchema,
+  workflowManifestSchema,
 } from "@workflow-catalog/contracts";
+
+/*
+ * The ajv-vs-zod parity checks for the emitted JSON Schemas: http(s)-only
+ * URLs (revision 1, issue 2), the POST /events size caps (revision 2, fix A)
+ * and duplicate array entries in workflow.schema.json (revision 2,
+ * follow-up D).
+ */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const schemasDir = path.resolve(here, "../schemas");
@@ -248,4 +256,34 @@ describe("emitted JSON Schema carries the POST /events size caps and is never st
     expect(browserCommandResultSchema.safeParse(body(MAX_APPLICATION_GROUP_SIZE + 1)).success).toBe(false);
     expect(validateResult(body(MAX_APPLICATION_GROUP_SIZE + 1))).toBe(false);
   });
+});
+
+/**
+ * Revision 2, follow-up D. workflow-manifest.ts rejects duplicate entries in
+ * six arrays with a zod `.refine()`, which JSON Schema never sees, so ajv used
+ * to accept duplicates zod rejected. The arrays now carry
+ * `.meta({ uniqueItems: true })`, which lands in workflow.schema.json.
+ */
+describe("emitted workflow.schema.json rejects the duplicate entries zod rejects", () => {
+  const validate = ajvValidatorFor("workflow");
+  const workflow = JSON.parse(readFileSync(path.resolve(here, "../workflow.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
+
+  it("ajv and zod both accept workflow.json as shipped", () => {
+    expect(validate(workflow), JSON.stringify(validate.errors)).toBe(true);
+    expect(workflowManifestSchema.safeParse(workflow).success).toBe(true);
+  });
+
+  it.each(["requiredSources", "connections", "browserPermissions", "actions", "schemas", "adapters"])(
+    "%s: ajv and zod both reject a repeated entry",
+    (key) => {
+      const entries = workflow[key] as unknown[];
+      const withDuplicate = { ...workflow, [key]: [...entries, entries[0]] };
+      expect(validate(withDuplicate), `ajv accepted a duplicate in ${key}`).toBe(false);
+      expect(validate.errors?.map((error) => error.keyword)).toContain("uniqueItems");
+      expect(workflowManifestSchema.safeParse(withDuplicate).success).toBe(false);
+    },
+  );
 });
