@@ -4,10 +4,21 @@
 // environment/globals configured (no other package's own scripts/ was
 // linted before this one) — declare the one Node global this file uses.
 //
-// Copies the two self-hosted asset sources into extension/public/ before
-// `vite build` runs (Vite copies publicDir verbatim into dist/). Both are
-// regenerated on every build instead of being committed as tracked files:
+// Copies three things into extension/public/ before `vite build` runs
+// (Vite copies publicDir verbatim into dist/ root — the same mechanism
+// that makes /theme.css and /fonts/*.woff2 resolve at runtime, see
+// shared/base.css):
 //
+//   - manifest.json itself. Vite's own build only bundles what an HTML/JS
+//     entry point in vite.config.ts's rollupOptions.input reaches by
+//     import/script-tag — a plain root-level file like manifest.json is
+//     never part of that graph, so without this it would silently be
+//     missing from dist/ and `--load-extension=dist` would have nothing
+//     to load (that is exactly what happened the first time this build
+//     ran end to end: dist/ built "successfully" with no manifest.json in
+//     it, and Chromium loaded the extension directory, found no manifest,
+//     and started nothing — no error, no service worker, ever). Copied
+//     (not templated) so there is exactly one manifest.json to review.
 //   - docs/spec/visuals/theme.css: the repo's single source of design
 //     tokens (CLAUDE.md / P07 packet: "import or copy at build time, never
 //     edit it"). Copying instead of hand-duplicating means this package can
@@ -39,6 +50,8 @@ function copyInto(destRelative, srcAbsolute) {
   copyFileSync(srcAbsolute, dest);
   console.log(`copied ${path.relative(repoRoot, srcAbsolute)} -> extension/public/${destRelative}`);
 }
+
+copyInto("manifest.json", path.join(extensionRoot, "manifest.json"));
 
 // docs/spec/visuals/theme.css itself is outside this package's Owns: extension/**
 // allowlist — read-only source, never written.
