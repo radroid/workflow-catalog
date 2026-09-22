@@ -214,10 +214,19 @@ export function localUi(options: LocalUiOptions): Hono {
   app.get("/", (c) => c.redirect("/ui/status", 303));
 
   app.get("/ui/login", async (c) => {
-    const nonce = new URL(c.req.url).searchParams.get("nonce") ?? "";
     if (!uiToken) {
       return htmlResponse(503, messagePage("Setup has not finished", "<p>Run <code>npm run setup</code> in <code>runner/</code>, then start the runner again.</p>"));
     }
+    // Hono answers HEAD with this GET handler. HEAD must not redeem: a nonce
+    // works once, and a link-preview fetch (a chat client, an email scanner)
+    // sends HEAD (sometimes GET) before the person opens the link, which
+    // would spend it first. There is no way to check a nonce without
+    // consuming it (store/one-time-codes.ts), so HEAD skips the check
+    // entirely, the same way HEAD /commands skips the lease.
+    if (c.req.method === "HEAD") {
+      return new Response(null, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
+    const nonce = new URL(c.req.url).searchParams.get("nonce") ?? "";
     const result = nonce ? await ctx.uiLogin.redeem(nonce) : "invalid";
     if (result !== "ok") {
       return htmlResponse(

@@ -35,6 +35,26 @@ describe("local UI: sign-in", () => {
     expect(again.headers.get("set-cookie")).toBeNull();
   });
 
+  it("answers HEAD without redeeming the link, so a HEAD then a GET still signs in", async () => {
+    const bridge = await realBridge();
+    const { url } = await bridge.ctx.uiLogin.issue(BRIDGE);
+    const pathname = url.slice(BRIDGE.length);
+    const head = await bridge.request(pathname, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(head.headers.get("set-cookie")).toBeNull();
+    // The nonce still works: HEAD did not spend it.
+    const get = await bridge.request(pathname);
+    expect(get.status).toBe(303);
+    expect(get.headers.get("location")).toBe("/ui/status");
+    expect(get.headers.get("set-cookie") ?? "").toContain(`${UI_COOKIE}=${UI_TOKEN}`);
+    // Now the link is spent, HEAD or GET.
+    expect((await bridge.request(pathname, { method: "HEAD" })).status).toBe(200);
+    const reused = await bridge.request(pathname);
+    expect(reused.status).toBe(401);
+    expect(reused.headers.get("set-cookie")).toBeNull();
+  });
+
   it("refuses an expired or made-up link", async () => {
     const bridge = await realBridge();
     const { url } = await bridge.ctx.uiLogin.issue(BRIDGE);
