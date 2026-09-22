@@ -1,7 +1,8 @@
 /**
- * The exact install commands, in one place so later packets (P02 finalizes
- * them) update a single module instead of hunting through JSX. Spec F3 /
- * P09-catalog-site.md part A.
+ * The exact install commands, in one place so later packets update a single
+ * module instead of hunting through JSX. Spec F3 / P09-catalog-site.md part
+ * A; P09.1 (P09-B review round 2 + P02 review round 1 follow-ups) resynced
+ * this to the runner P02 actually shipped.
  */
 export interface InstallStep {
   id: string;
@@ -14,27 +15,27 @@ export const INSTALL_STEPS: InstallStep[] = [
   {
     id: "get-runner",
     label: "Get the runner",
-    // Each clone method is paired with its own correct `cd` right where it
-    // happens — a shared later "cd runner" step was wrong for the full
-    // clone (which creates workflow-catalog/, not runner/) and, per the
-    // full-clone-only extension step below, also left no way to find
-    // extension/ from the degit path.
+    // P09.1: the runner now installs only from a whole-repo clone — its
+    // workspace:* dependencies on @workflow-catalog/contracts and the eve
+    // adapter only resolve inside a pnpm workspace, which a degit-style
+    // partial fetch of runner/ alone can never provide (runner/README.md,
+    // "Install": "Why not npx degit ... plus npm install"). Copied verbatim
+    // from that same fenced block, corepack's inline comment aside — see
+    // tests/install-guide-drift.test.ts, which fails if this ever drifts
+    // from it again.
     commands: [
-      "npx degit radroid/workflow-catalog/runner runner && cd runner",
-      "# or, for the full clone (also gives you the extension/ directory locally):",
-      "git clone https://github.com/radroid/workflow-catalog.git && cd workflow-catalog/runner",
+      "git clone https://github.com/radroid/workflow-catalog.git",
+      "cd workflow-catalog",
+      "corepack enable",
+      "pnpm install --frozen-lockfile",
+      "cd runner",
     ],
-  },
-  {
-    id: "install",
-    label: "Install dependencies",
-    commands: ["npm install"],
   },
   {
     id: "setup",
     label: "Run setup",
     commands: ["npm run setup"],
-    note: "Connects your provider (ChatGPT or an API key) and chooses where your workspace lives.",
+    note: "Connects your provider (ChatGPT or an API key) and chooses where your workspace lives. ChatGPT mode needs the Codex CLI signed in first (codex login) — Codex owns that sign-in, and the runner never stores a ChatGPT credential itself.",
   },
   {
     id: "doctor",
@@ -50,7 +51,7 @@ export const INSTALL_STEPS: InstallStep[] = [
   {
     id: "extension",
     label: "Load the Chrome extension",
-    commands: ["# only needed if you used degit above (runner only, no extension/ yet):", "npx degit radroid/workflow-catalog/extension extension"],
-    note: "Until the private Web Store listing exists, load it unpacked: open chrome://extensions, enable Developer mode, choose “Load unpacked.” Used the full clone above? Select workflow-catalog/extension. Used degit? Run the command above first, then select that extension/ directory.",
+    commands: ["pnpm --filter @workflow-catalog/extension build"],
+    note: "Until the private Web Store listing exists, load it unpacked: open chrome://extensions, enable Developer mode, choose “Load unpacked,” and select extension/dist — the whole-repo clone above already put it on your machine.",
   },
 ];
