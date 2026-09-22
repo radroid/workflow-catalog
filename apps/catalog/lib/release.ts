@@ -45,7 +45,9 @@
 // `unstable_cache` caches whatever the wrapped function *returns*, so a
 // stale entry's background refresh re-invokes fetchPackageRelease itself —
 // every invocation, foreground or background, goes through its own
-// AbortController, cap and timeout. See getCachedPackageRelease below.
+// AbortController, cap and timeout. An `error` result is thrown rather than
+// returned, so it is never cached (P09.1 revision 2). See
+// getCachedPackageRelease below.
 
 import { unstable_cache } from "next/cache";
 
@@ -282,7 +284,37 @@ export async function fetchPackageRelease(version: string): Promise<ReleaseFetch
  * fetchPackageRelease directly (fully exercised, no Next runtime needed),
  * and tests/release-cache.test.ts mocks next/cache to prove this wrapper's
  * wiring instead.
+ *
+ * P09.1 revision 2 (reviewer): an `error` result must never be cached.
+ * fetchPackageRelease never throws, so unstable_cache used to store
+ * {kind: "error"} like any other result: one 500 was served for the whole
+ * hour, and a published `found` checksum turned into `error` after one
+ * failed background refresh. unstable_cache stores only what its function
+ * returns, so the cached function throws on an error result instead. A
+ * throw on a cache miss stores nothing, and a stale entry whose background
+ * refresh throws keeps its stale value
+ * (next/dist/server/web/spec-extension/unstable-cache.js, the `.catch` that
+ * returns `cachedResponse`). This wrapper turns the throw back into
+ * {kind: "error"}. `not_found` (a 404) is still returned, so it stays cached.
  */
-export const getCachedPackageRelease = unstable_cache((version: string) => fetchPackageRelease(version), ["release"], {
-  revalidate: RELEASE_REVALIDATE_SECONDS,
-});
+class ReleaseLookupError extends Error {
+  override name = "ReleaseLookupError";
+}
+
+const cachedReleaseLookup = unstable_cache(
+  async (version: string) => {
+    const result = await fetchPackageRelease(version);
+    if (result.kind === "error") throw new ReleaseLookupError(result.message); // never cached
+    return result;
+  },
+  ["release"],
+  { revalidate: RELEASE_REVALIDATE_SECONDS },
+);
+
+export async function getCachedPackageRelease(version: string): Promise<ReleaseFetchResult> {
+  try {
+    return await cachedReleaseLookup(version);
+  } catch (error) {
+    return { kind: "error", message: error instanceof ReleaseLookupError ? error.message : "Release lookup failed." };
+  }
+}
