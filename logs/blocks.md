@@ -774,3 +774,32 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - `.loop/state.json` is marked `stage_status: paused`, with a pointer to the handoff.
 - `logs/latest.md` is rewritten as the resume handoff.
 - PR #2 is updated. Nothing merged during iter 005.
+
+## 2026-09-22 — Loop resumed by the new orchestrator [RESUMED]
+
+**Iter:** 005 (in progress)
+**Source:** owner
+**Severity:** info
+
+**Charter / context:** at 14:26 the owner restarted the loop on the new orchestrator model, from the pause handoff (`logs/handoff/2026-09-22-pause.md`).
+
+**What happened at the resume:**
+- `.loop/state.json` `stage_status` is back to `in-progress`. Its `paused` block was dropped; this log and the handoff keep the record.
+- The three old agent worktrees were clean, with nothing unpushed. They were removed, without force, so that fresh worktree agents could switch to `packet/P03`, `packet/P07-B` and `packet/P08-A`. The branches themselves are untouched.
+- Four fresh agents started:
+  - P03 round 2: an Opus reviewer and an Opus UI critic;
+  - an Opus escalation implementer for P07-B;
+  - a Sonnet successor for P08-A.
+- **Process fix** for genuine pauses being treated as injections: every prompt now carries a private code word for its agent, kept out of the repo, and every mid-round message carries it. A real stop also uses TaskStop.
+
+**P08-A decisions** on the predecessor's five open assumptions:
+1. **Provider limit.**
+   - Detect it primarily from `details.semanticErrorId`: `gateway-rate-limited` or `gateway-free-tier-rate-limited`.
+   - A `/\b429\b|rate.?limit/i` fallback on `code` or `message` applies only when no id is present, and is documented as a heuristic.
+   - Pausing is the conservative direction, and the harness never retries.
+2. **A corrupt `runs/budget.json`** fails closed as a pause (`budget settings unreadable (runs/budget.json)`), never a crash. Resume rewrites the defaults; Save keeps the pause.
+3. **`withRun`** resolves with the record and never rethrows.
+4. **`localDateString`** stays in `store/runs.ts` and uses the OS-local time zone. Tests must pass in any time zone; the implementer runs them under two.
+5. **The runs API** returns full records plus `path`, bounded to 200 records and 14 days.
+
+**Action taken:** iter-005 continues from the handoff.
