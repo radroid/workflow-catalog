@@ -44,15 +44,11 @@ invite tokens and owner secrets has no reason to do. `--port <N>` still appends 
 (`pnpm --filter catalog dev --port 3103`), since npm/pnpm hand extra CLI args to the
 underlying script.
 
-**Browse `localhost`, not `127.0.0.1`.** Next 16's dev server only accepts the dev-only
-`/_next/hmr` WebSocket handshake from an allowed origin, and `localhost` is allowed by
-default — `127.0.0.1` is not, even on the same machine. Loading the app via `127.0.0.1:<port>`
-still serves the initial HTML/CSS correctly, but the HMR socket never connects, which (for
-reasons internal to Next's dev client bootstrap) blocks React hydration entirely: every
-interaction silently degrades to a plain no-JS-style full-page POST/reload instead of a
-client-side transition. `next.config.ts` also lists `127.0.0.1` in `allowedDevOrigins` as a
-second line of defense for tooling that defaults to it, but `localhost` is still the
-recommended way to browse this app locally.
+**Browse `http://localhost:<port>`.** The `dev` script binds `localhost` only, which on macOS
+is the IPv6 loopback `[::1]`, so `http://127.0.0.1:<port>` refuses the connection outright.
+(`next.config.ts` still lists `127.0.0.1` in `allowedDevOrigins`, for a server started without
+`--hostname localhost`: Next 16's dev server accepts its dev-only `/_next/hmr` WebSocket only
+from an allowed origin, and without that socket the page never hydrates.)
 
 ## Database
 
@@ -122,7 +118,8 @@ that same fixed pattern) and no share of the unauthenticated API's 60/hour rate 
 case of "no release published yet" (a plain 404 on that fixed URL). Unauthenticated, a 5s timeout that
 covers the full response body read (not just headers) with a small size cap, Next's data cache revalidating
 hourly. Before any release exists, or if the fetch errs or times out, the page says so instead of showing a
-broken link; it never falls back to any other source for the download URL.
+broken link; it never falls back to any other source for the download URL. A failed lookup is never cached:
+the next visit tries again, and a checksum already shown stays up when a refresh fails.
 
 **`.github/workflows/release-package.yml`** packs `packages/job-assistant` into `job-assistant-<version>.tgz`
 and publishes it as a GitHub release, triggered by pushing a tag `job-assistant@x.y.z`. It refuses to run

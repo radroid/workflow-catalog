@@ -214,4 +214,50 @@ describe("install guide — synced to runner/README.md, extension/README.md and 
 
     expect(INSTALL_STEPS.at(-1)?.id).toBe("doctor");
   });
+
+  it("the doctor step's note quotes doctor's real output, and --live is a real doctor flag", () => {
+    // P09.1 revision 2 (reviewer and UI critic): the note used to say all
+    // seven checks "should be green". Doctor prints no colours: it marks
+    // each item [ok], [warn] or [FAIL] (formatDoctorReport), and on a first
+    // install the provider item stays [warn] until the model is verified
+    // once (providerItem). Every piece of doctor output the note quotes must
+    // really be in runner/lib/doctor.ts.
+    const note = INSTALL_STEPS.find((step) => step.id === "doctor")?.note ?? "";
+
+    // The marks, read from formatDoctorReport's own `mark` record: every
+    // [mark] in the note must be one of them, and each must appear.
+    const markLine = doctorTs.split("\n").find((line) => line.includes("const mark: Record<DoctorStatus, string>"));
+    expect(markLine, "expected formatDoctorReport's mark record in runner/lib/doctor.ts").toBeDefined();
+    const doctorMarks = [...markLine!.matchAll(/"(\[[^\]]+\])\s*"/g)].map((match) => match[1]!);
+    expect(doctorMarks).toEqual(["[ok]", "[warn]", "[FAIL]"]);
+    const noteMarks = [...note.matchAll(/\[[^\]]+\]/g)].map((match) => match[0]);
+    for (const mark of noteMarks) {
+      expect(doctorMarks).toContain(mark);
+    }
+    expect(new Set(noteMarks)).toEqual(new Set(doctorMarks));
+
+    for (const quoted of ["All required checks pass.", "Provider connected", "the model has not been verified yet"]) {
+      expect(note).toContain(quoted);
+      expect(doctorTs).toContain(quoted);
+    }
+
+    // The note's `npm run doctor -- <flag>` must name flags that runner/
+    // README.md's Scripts table lists for doctor, and doctor's own fix for
+    // an unverified model names the same command.
+    const noteFlags = [...note.matchAll(/npm run doctor -- (--[a-z-]+)/g)].map((match) => match[1]!);
+    expect(noteFlags).toContain("--live");
+    const doctorRow = sectionToNextHeading(runnerReadme, "## Scripts")
+      .split("\n")
+      .find((line) => line.startsWith("| `doctor` |"));
+    expect(doctorRow, "expected a `doctor` row in runner/README.md's Scripts table").toBeDefined();
+    for (const flag of noteFlags) {
+      expect(doctorRow).toContain(`\`${flag}\``);
+    }
+    expect(doctorTs).toContain("npm run doctor -- --live");
+
+    // The other way to verify the model: the status page's button, as
+    // runner/README.md's Doctor section names it.
+    expect(note).toContain("“Check the model”");
+    expect(sectionToNextHeading(runnerReadme, "### Doctor")).toContain('"Check the model"');
+  });
 });

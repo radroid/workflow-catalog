@@ -537,6 +537,16 @@ pre.command-block {
   margin-top: 4px;
 }
 
+/* P09.1 revision 2 (UI critic): a caption just above a command block that
+   says when or where to run it ("Node 25 or newer only:", "In a second
+   terminal, in workflow-catalog/runner:"). It sits outside the <pre>, so
+   copying the block still copies only its commands. */
+.command-label {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin: 6px 0;
+}
+
 .step-list {
   list-style: decimal;
   margin: 0;
