@@ -12,7 +12,7 @@ import {
 import type { Clock } from "../lib/clock.ts";
 import { newId } from "../lib/crypto.ts";
 import { writeFileAtomic } from "./atomic.ts";
-import { renderProfileMarkdown, applyMarkdownEdits } from "./profile-markdown.ts";
+import { renderProfileMarkdown, parseProfileMarkdownEdits, updateStatements } from "./profile-markdown.ts";
 import {
   reduce,
   readiness as computeReadiness,
@@ -190,11 +190,45 @@ export class ProfileStore {
     return renderProfileMarkdown(await this.read());
   }
 
-  /** Applies `` `[id]` ``-marked text edits from an edited `career-profile.md` back into the profile (F5's round trip). */
+  /**
+   * Applies `` `[id]` ``-marked text edits from an edited `career-profile.md`
+   * back into the profile (F5's round trip). A confirmed claim's text change
+   * is routed through the reducer's `editClaimText` action one claim at a
+   * time — not the pure `applyMarkdownEdits` helper in `profile-markdown.ts`,
+   * which has no notion of approval — so an edit to an already-approved
+   * profile proposes a revision instead of silently overwriting what was
+   * approved (F5: "after approval, edits become revisions with an explicit
+   * accept"; matches `profile.html`'s own copy). A candidate/disputed/
+   * excluded claim has no approval/revision concept, so its text still
+   * applies directly, same as before this method existed. Boundaries,
+   * preferences, and presentation are the person's own free-form statements
+   * with no revision concept either, so those apply directly too, via the
+   * same `updateStatements` helper `applyMarkdownEdits` itself uses.
+   */
   async applyMarkdownEdit(markdown: string): Promise<OnboardingProfile> {
     const current = await this.read();
-    const next = applyMarkdownEdits(current, markdown);
-    await this.#write(next);
-    return next;
+    const edits = parseProfileMarkdownEdits(markdown);
+    if (edits.size === 0) return current;
+
+    let profile = current;
+    for (const claim of current.claims) {
+      const text = edits.get(claim.id);
+      if (text === undefined || text === claim.text) continue;
+      if (claim.status === "confirmed") {
+        const result = reduce(profile, { type: "editClaimText", claimId: claim.id, text, now: this.#now(), newId });
+        profile = result.profile;
+      } else {
+        profile = { ...profile, claims: profile.claims.map((c) => (c.id === claim.id ? { ...c, text } : c)) };
+      }
+    }
+    profile = {
+      ...profile,
+      boundaries: updateStatements(profile.boundaries, edits),
+      preferences: updateStatements(profile.preferences, edits),
+      presentation: updateStatements(profile.presentation, edits),
+    };
+
+    await this.#write(profile);
+    return profile;
   }
 }

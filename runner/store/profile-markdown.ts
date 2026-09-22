@@ -15,9 +15,19 @@ import type { OnboardingProfile, ProfileStatement } from "./profile-types.ts";
  * `` `[id]` `` marker is section-agnostic: `parseProfileMarkdownEdits` reads
  * every marked line in the document into one id→text map, and
  * `applyMarkdownEdits` updates whichever claim, boundary, preference, or
- * presentation statement in the profile carries that id. Structural edits
- * (adding/removing a bullet, moving something between sections) are not
- * round-tripped — the local UI is the supported way to change status,
+ * presentation statement in the profile carries that id, with no awareness
+ * of approval state — it is the low-level rendering/parsing primitive
+ * (this module owns no persistence and calls the reducer for nothing).
+ * `store/profile.ts`'s `ProfileStore.applyMarkdownEdit` (singular "Edit") is
+ * the layer that actually understands approval: it uses
+ * `parseProfileMarkdownEdits` plus the exported `updateStatements` for
+ * boundaries/preferences/presentation, but routes a confirmed claim's text
+ * change through the reducer's `editClaimText` action instead of this file's
+ * `applyMarkdownEdits`, so editing an approved profile's fact proposes a
+ * revision rather than overwriting it outright (F5, "after approval, edits
+ * become revisions with an explicit accept"). Structural edits (adding/
+ * removing a bullet, moving something between sections) are not round-
+ * tripped either way — the local UI is the supported way to change status,
  * approve, or answer a question.
  */
 
@@ -121,7 +131,8 @@ export function parseProfileMarkdownEdits(markdown: string): Map<string, string>
   return edits;
 }
 
-function updateStatements(items: readonly ProfileStatement[], edits: ReadonlyMap<string, string>): ProfileStatement[] {
+/** Applies id-matched text edits to a list of boundary/preference/presentation statements. Exported for `store/profile.ts`: those statements are the person's own free-form text with no approval/revision concept, so `ProfileStore.applyMarkdownEdit` applies their edits directly, unlike a confirmed claim's text (routed through the reducer's `editClaimText` action instead, so an edit to an approved profile proposes a revision rather than silently overwriting it). */
+export function updateStatements(items: readonly ProfileStatement[], edits: ReadonlyMap<string, string>): ProfileStatement[] {
   return items.map((item) => (edits.has(item.id) ? { ...item, text: edits.get(item.id)! } : item));
 }
 
