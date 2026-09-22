@@ -11,8 +11,8 @@ import { openStore } from "../../../agent/lib/onboarding-store.ts";
 // directive-free helper in runner/agent/lib/ask-follow-up-steps.ts, the same
 // call runner/agent/tools/ask_follow_up.ts makes. The logic itself is never
 // copied here, so the evals exercise the helpers production runs, and
-// test/ask-follow-up-tools.test.ts checks this file and the production one
-// behave the same.
+// test/onboarding-tools.test.ts runs this file and the production one and
+// checks they behave the same.
 
 async function checkClaimIsOpen(claimId: string): Promise<void> {
   "use step";
