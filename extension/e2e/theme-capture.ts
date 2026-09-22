@@ -46,16 +46,19 @@ const RECORD_RESIZES = `(() => {
 /** Resolves once no `resize` event has fired for 1.1 s, then two frames
  * later. DevTools' "380px × 418px" viewport-size label is painted after a
  * resize and removed by Chrome's overlay one second later (Blink's
- * InspectorOverlayAgent::OnResizeTimer). In the real popup the label kept
- * appearing in captures taken right after a theme switch, even with
- * Overlay.setShowViewportSizeOnResize({ show: false }) sent on the driving
- * session (see real-popup-cdp.ts's triggerRealPopup), so it isn't that
- * session's overlay painting it. A capture taken after 1.1 s without a
- * resize never showed it (checked on the first popup of fresh browsers,
- * the case that showed it most) -- captureInTheme's own retry below covers
- * the (rarer, since-observed-under-repeated-runs) cases where even this
- * wasn't enough. */
-const AFTER_RESIZE_QUIET = `new Promise((resolve) => {
+ * InspectorOverlayAgent::OnResizeTimer). In the real popup the label
+ * appeared in captures even with Overlay.setShowViewportSizeOnResize({
+ * show: false }) sent on the driving session (see real-popup-cdp.ts's
+ * triggerRealPopup), so it isn't that session's overlay painting it.
+ *
+ * Two things resize the popup: a theme switch, and -- until P07-B revision
+ * 2 -- `Page.captureScreenshot` itself (real-popup-cdp.ts's `captureFrame`
+ * explains why and what replaced it). This wait covers the first. The
+ * second is why the label still turned up "even after this wait" in
+ * earlier rounds: the capture fired its own resize after the wait had
+ * already ended. Exported for real-popup.spec.ts's regression test of
+ * exactly that. */
+export const AFTER_RESIZE_QUIET = `new Promise((resolve) => {
   ${RECORD_RESIZES};
   const settle = () => (performance.now() - window.__wcLastResizeAt >= 1100 ? resolve(true) : setTimeout(settle, 50));
   settle();
@@ -71,7 +74,7 @@ export function popupThemeTarget(popup: RawCdpSession): ThemeTarget {
     evaluate: <T>(expression: string) => popup.evaluate<T>(expression),
     capture: async () => {
       await popup.evaluate(AFTER_RESIZE_QUIET);
-      return popup.screenshot();
+      return popup.captureFrame();
     },
   };
 }
@@ -337,33 +340,44 @@ function decodeTopRows(png: Buffer, rowCount: number): { width: number; bpp: num
   return { width, bpp, rows };
 }
 
+/** "380x404": a PNG's own width and height (IHDR, bytes 16-23), for
+ * failure messages -- a capture of the wrong size is itself a clue (CI's
+ * failing P07A-popup-dark.png was at most 319 px wide, since its first bad
+ * pixel was x = 159 of a 160-px band). */
+function pngSize(png: Buffer): string {
+  return `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`;
+}
+
 /**
  * P07-B carry-forward: "Assert that the screenshot's top-right corner has
  * no DevTools size label." Chrome's device-emulation viewport-size label
  * (e.g. "380px x 418px"), when present, paints over the page there --
- * AFTER_RESIZE_QUIET is what keeps it out of a normal capture (see above);
- * this is the regression guard that it actually stayed out, not the
- * mechanism that removes it.
+ * this is the regression guard that it stayed out, not the mechanism that
+ * keeps it out (AFTER_RESIZE_QUIET, and a capture that fires no resize of
+ * its own -- real-popup-cdp.ts's `captureFrame`).
  *
  * Every pixel in a small band along the top-right edge must match the
  * image's OWN top-left pixel almost exactly: a real screenshot is a
  * lossless PNG straight from Chrome's own compositor, the page background
  * is one flat colour with nothing painted near either corner, and the
  * top-left pixel is already proven to show the right theme
- * (topLeftBrightness, checked just before this runs). Comparing corner to
+ * (topLeftBrightness, checked before this runs). Comparing corner to
  * corner within the same image, instead of re-deriving an "expected"
  * colour from `getComputedStyle` CSS text, sidesteps that text not always
  * being `rgb(...)` -- Chrome can serialize a computed background declared
  * via `oklch()` (this repo's theme.css) back out as `oklch(...)` too, which
  * a plain rgb()-pattern parse would reject.
+ *
+ * Returns a description of the first pixel that differs, or undefined when
+ * the band is clean.
  */
-function assertNoDevToolsLabelTopRight(png: Buffer, fileName: string): void {
+export function findDevToolsLabelTopRight(png: Buffer): string | undefined {
   const bandHeight = 24;
   const bandWidth = 160;
   const tolerance = 12;
   const { width, bpp, rows } = decodeTopRows(png, bandHeight);
   const reference = rows[0];
-  if (!reference) throw new Error(`${fileName}: could not decode row 0 to sample a reference colour`);
+  if (!reference) throw new Error(`could not decode row 0 of a ${pngSize(png)} PNG to sample a reference colour`);
   const [refR, refG, refB] = [reference[0] ?? 0, reference[1] ?? 0, reference[2] ?? 0];
   const startX = Math.max(0, width - bandWidth);
 
@@ -376,13 +390,18 @@ function assertNoDevToolsLabelTopRight(png: Buffer, fileName: string): void {
       const g = row[offset + 1] ?? 0;
       const b = row[offset + 2] ?? 0;
       if (Math.abs(r - refR) > tolerance || Math.abs(g - refG) > tolerance || Math.abs(b - refB) > tolerance) {
-        throw new Error(
-          `${fileName}: pixel (${x}, ${y}) in the top-right corner is rgb(${r}, ${g}, ${b}), not the page's own background rgb(${refR}, ${refG}, ${refB}) (sampled from the image's own top-left corner) -- looks like a DevTools viewport-size label`,
-        );
+        return `pixel (${x}, ${y}) in the top-right corner of the ${pngSize(png)} image is rgb(${r}, ${g}, ${b}), not the page's own background rgb(${refR}, ${refG}, ${refB}) (sampled from the image's own top-left corner) -- looks like a DevTools viewport-size label`;
       }
     }
   }
+  return undefined;
 }
+
+/** Each of captureInTheme's two repairs may run this many times before the
+ * capture fails. They are counted separately, so one can never use up the
+ * other's budget. */
+const MAX_SCHEME_REPAIRS = 3;
+const MAX_LABEL_WAITS = 3;
 
 /** Captures `target` in `theme` and writes the PNG (via `resolvePath`, so
  * each caller keeps its own committed-vs-gitignored-output policy) only
@@ -391,34 +410,27 @@ function assertNoDevToolsLabelTopRight(png: Buffer, fileName: string): void {
  * for dark, and its top-right corner shows no DevTools viewport-size
  * label. A wrong image is never written.
  *
- * AFTER_RESIZE_QUIET (inside target.capture()) is what is supposed to keep
- * the label out in the first place, but its own doc comment says it was
- * only checked "on the first popup of fresh browsers" -- under repeated
- * runs the label has also been observed painted at capture time even after
- * that wait (P07-B). assertNoDevToolsLabelTopRight is the regression guard
- * for that, not a second removal mechanism, so retake the screenshot (a
- * fresh AFTER_RESIZE_QUIET wait, then a fresh screenshot) a few times
- * before actually failing -- the same "retry the arrange, not the
- * assertion" shape as ensureColorScheme.
+ * Two different, understood browser behaviours can spoil a capture, and
+ * each gets its own repair with its own bound (P07-B revision 2 split
+ * them: in revision 1 they shared one four-attempt loop):
  *
- * A brightness mismatch gets a bounded retry too, but only when it's
- * actually the same quirk ensureColorScheme documents: `inTheme`'s own
- * "before" verifyTheme call already proved matchMedia/data-theme/the CSS
- * background all agreed with `theme` immediately before this action
- * started, so a wrong brightness here is only that known spurious drop if
- * matchMedia *itself* has gone back to disagreeing with `theme` right now
- * too -- confirmed for real in CI (PR #12, P07A-popup-dark.png, mean RGB
- * 252 where dark was expected, on a 2-worker Linux runner that never
- * reproduced locally across 20+ 4-worker runs, where matchMedia had indeed
- * dropped). Per ensureColorScheme's own rule ("any other failure... must
- * fail the test at once, not be silently retried away by a broad catch-
- * and-retry"), a brightness mismatch while matchMedia still agrees is a
- * *different*, unexplained failure -- not this quirk -- and fails
- * immediately instead of spending retries hoping a fresh capture differs.
- * Each retry of the genuine quirk re-forces the colour scheme via
- * ensureColorScheme (the same repair verifyTheme itself uses) before
- * retaking the shot, bounded by the same maxAttempts as the label check
- * below. */
+ * 1. The matchMedia drop (see ensureColorScheme): the background has the
+ *    wrong brightness AND the page's own `matchMedia` disagrees with
+ *    `theme` right now. Repair: re-force the scheme, recapture. `inTheme`'s
+ *    "before" check already proved matchMedia, data-theme and the CSS
+ *    background all agreed immediately before this action started, so a
+ *    wrong brightness while matchMedia still agrees is not this quirk; it
+ *    fails at once (the P07-B revision 1 reviewer nit, kept).
+ * 2. The overlay: DevTools' viewport-size label is in the top-right
+ *    corner. Chrome removes it one second after the last resize, so the
+ *    repair is to wait that out -- `target.capture()` always starts with a
+ *    fresh AFTER_RESIZE_QUIET -- and recapture. Since `captureFrame`
+ *    (real-popup-cdp.ts) the popup capture no longer resizes the popup
+ *    itself, so this should only ever be a late resize from a theme
+ *    switch.
+ *
+ * Anything else -- or either repair running out -- fails the test with the
+ * image's size in the message. */
 export async function captureInTheme(
   target: ThemeTarget,
   theme: Theme,
@@ -428,40 +440,34 @@ export async function captureInTheme(
   const png = await inTheme(target, theme, async () => {
     await target.evaluate("document.fonts.ready.then(() => true)");
 
-    const maxAttempts = 4;
-    let capture: Buffer | undefined;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      capture = await target.capture();
+    let schemeRepairs = 0;
+    let labelWaits = 0;
+    for (;;) {
+      const capture = await target.capture();
       const brightness = topLeftBrightness(capture);
       const observed: Theme = brightness >= 128 ? "light" : "dark";
       if (observed !== theme) {
-        // Reviewer nit (P07-B revision 1): only retry when matchMedia
-        // itself still disagrees with `theme` right now -- that's the one
-        // quirk this retry exists for (see the doc comment above). If
-        // matchMedia already agrees, this isn't a spurious drop to wait
-        // out; fail now instead of burning the remaining attempts on a
-        // mismatch that quirk doesn't explain.
         const stillMatches = await target.evaluate<boolean>(matchesColorSchemeExpr(theme));
-        if (stillMatches || attempt === maxAttempts - 1) {
+        if (stillMatches || schemeRepairs === MAX_SCHEME_REPAIRS) {
           expect(
             observed,
-            `${fileName}: captured background, mean RGB ${brightness}` +
-              (stillMatches ? " (matchMedia already agrees with the requested theme -- not the known spurious-drop quirk)" : ""),
+            `${fileName} (${pngSize(capture)}): captured background, mean RGB ${brightness}` +
+              (stillMatches
+                ? " (matchMedia already agrees with the requested theme -- not the known spurious-drop quirk)"
+                : ` (matchMedia still disagreed after ${schemeRepairs} re-forced overrides)`),
           ).toBe(theme);
         }
+        schemeRepairs += 1;
         await ensureColorScheme(target, theme);
         continue;
       }
-      try {
-        assertNoDevToolsLabelTopRight(capture, fileName);
-        return capture;
-      } catch (error) {
-        if (attempt === maxAttempts - 1) throw error;
+      const label = findDevToolsLabelTopRight(capture);
+      if (label === undefined) return capture;
+      if (labelWaits === MAX_LABEL_WAITS) {
+        throw new Error(`${fileName}: ${label}; still there after ${labelWaits} waits for the overlay to clear`);
       }
+      labelWaits += 1;
     }
-    // unreachable (the loop always returns or throws on its last attempt),
-    // but keeps TypeScript happy about capture's definite assignment.
-    return capture as Buffer;
   });
   writeFileSync(resolvePath(fileName), png);
 }

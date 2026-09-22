@@ -37,7 +37,14 @@ import {
   type RawCdpSession,
   type RealPopupHarness,
 } from "./real-popup-cdp";
-import { captureInTheme, inTheme, pageThemeTarget, popupThemeTarget } from "./theme-capture";
+import {
+  AFTER_RESIZE_QUIET,
+  captureInTheme,
+  findDevToolsLabelTopRight,
+  inTheme,
+  pageThemeTarget,
+  popupThemeTarget,
+} from "./theme-capture";
 
 test.describe.configure({ mode: "serial" });
 
@@ -222,6 +229,43 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     expect(capture.text).toContain("Staff Software Engineer");
     rmSync(path.join(downloadDir, "job-capture.json"));
   });
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await page.close();
+});
+
+test("capturing the real popup fires no resize of its own, so DevTools' size label never lands in the frame (P07-B revision 2, CI run 35758037837)", async () => {
+  // The CI failure this guards: Page.captureScreenshot fired a same-size
+  // `resize` in the popup during every capture (real-popup-cdp.ts's
+  // captureFrame explains the Chrome mechanism), DevTools' overlay painted
+  // its viewport-size label in response, and the label landed in the very
+  // frame being captured -- again on every retry. Both halves are checked:
+  // no resize (deterministic: the old capture fired exactly one, every
+  // time) and no label in the frame.
+  const page = await harness.context.newPage();
+  await page.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+  expect(await waitForPopupState(popup)).toBe("preview");
+
+  await popup.evaluate(`(() => {
+    window.__wcResizeCount = 0;
+    addEventListener("resize", () => { window.__wcResizeCount += 1; });
+    return true;
+  })()`);
+
+  for (let capture = 0; capture < 5; capture += 1) {
+    await popup.evaluate(AFTER_RESIZE_QUIET);
+    const before = await popup.evaluate<number>("window.__wcResizeCount");
+    const png = await popup.captureFrame();
+    // A capture-fired resize landed 3-60 ms after the old capture returned
+    // (measured); 300 ms leaves a wide margin.
+    await sleep(300);
+    const after = await popup.evaluate<number>("window.__wcResizeCount");
+    expect(after - before, `capture ${capture}: resize events fired by the capture itself`).toBe(0);
+    expect(findDevToolsLabelTopRight(png), `capture ${capture}`).toBeUndefined();
+  }
 
   await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
   await popup.detach();
