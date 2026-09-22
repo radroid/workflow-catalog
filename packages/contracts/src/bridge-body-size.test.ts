@@ -198,13 +198,27 @@ describe("the other POST /events strings and arrays are capped", () => {
     expect(new Set(issuePaths(result))).toEqual(new Set([field]));
   });
 
-  // zod's URL check trims whitespace and deletes tab/CR/LF before later checks
-  // see the value, so a cap chained after it would measure the cleaned string.
+  // P01.1 packet, deliverable 1: httpUrlSchema now rejects surrounding
+  // whitespace outright (it no longer trims-and-accepts it), so a short URL
+  // padded at either edge is rejected by httpUrlSchema itself — the padding
+  // never reaches a length comparison at all. jobCaptureSchema.url (bounded)
+  // rejects it the same way.
   it.each([
     ["trailing spaces", `${URL_PREFIX}p${" ".repeat(MAX_JOB_CAPTURE_URL_LENGTH)}`],
     ["leading spaces", `${" ".repeat(MAX_JOB_CAPTURE_URL_LENGTH)}${URL_PREFIX}p`],
-    ["embedded tabs", `${URL_PREFIX}p${"\t".repeat(MAX_JOB_CAPTURE_URL_LENGTH)}q`],
-  ])("JobCapture.url counts the raw input: a short URL padded with %s is over the cap", (_label, padded) => {
+  ])("JobCapture.url rejects a short URL padded with %s (surrounding whitespace)", (_label, padded) => {
+    expect(httpUrlSchema.safeParse(padded).success).toBe(false);
+    expect(jobCaptureSchema.safeParse({ ...base, url: padded }).success).toBe(false);
+  });
+
+  // zod's URL check deletes embedded tab/CR/LF from anywhere in the string
+  // before later checks see the value (WHATWG URL input preprocessing), so a
+  // cap chained after it would measure the cleaned string. An embedded tab
+  // sits inside the string, not at either edge, so it is not surrounding
+  // whitespace — httpUrlSchema accepts it (the tab is silently dropped) —
+  // but the raw-input cap on jobCaptureSchema.url must still count it.
+  it("JobCapture.url counts the raw input: a short URL padded with embedded tabs is over the cap", () => {
+    const padded = `${URL_PREFIX}p${"\t".repeat(MAX_JOB_CAPTURE_URL_LENGTH)}q`;
     expect(httpUrlSchema.safeParse(padded).success).toBe(true);
     expect(jobCaptureSchema.safeParse({ ...base, url: padded }).success).toBe(false);
   });

@@ -24,9 +24,9 @@ import {
 
 /*
  * The ajv-vs-zod parity checks for the emitted JSON Schemas: http(s)-only
- * URLs (revision 1, issue 2), the POST /events size caps (revision 2, fix A)
- * and duplicate array entries in workflow.schema.json (revision 2,
- * follow-up D).
+ * URLs (revision 1, issue 2), the POST /events size caps (revision 2, fix A),
+ * duplicate array entries in workflow.schema.json (revision 2, follow-up D),
+ * and surrounding whitespace / well-formedness (P01.1 packet, deliverable 1).
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +43,79 @@ const VALID_URL = "https://jobs.example/posting/1";
 // The exact threats httpUrlSchema's doc comment (primitives.ts) names:
 // "reject javascript:, local files, privileged browser URLs, and arbitrary
 // code."
-const DANGEROUS_URLS = ["javascript:alert(1)", "file:///etc/passwd", "chrome-extension://abc/page.html"];
+const DANGEROUS_URLS = [
+  "javascript:alert(1)",
+  "file:///etc/passwd",
+  "chrome://settings",
+  "chrome-extension://abc/page.html",
+  "data:text/html,<script>",
+];
+
+/** `httpUrlSchema` is used at every nesting depth below: a top-level field, a field nested in an optional object, and a field inside an array item. */
+const URL_FIELD_CASES: Array<{
+  schemaFileBaseName: string;
+  zodSchema: z.ZodType;
+  label: string;
+  build: (url: string) => unknown;
+}> = [
+  {
+    schemaFileBaseName: "job-snapshot",
+    zodSchema: jobSnapshotSchema,
+    label: "JobSnapshot.url (top-level field)",
+    build: (url) => ({
+      jobId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      revision: 1,
+      url,
+      capturedAt: new Date().toISOString(),
+      extractorVersion: "extractor@1.0.0",
+      contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      text: "Senior Platform Engineer at Northwind Labs.",
+      structured: {},
+    }),
+  },
+  {
+    schemaFileBaseName: "job-snapshot",
+    zodSchema: jobSnapshotSchema,
+    label: "JobSnapshot.structured.applyUrl (field nested in an optional object)",
+    build: (url) => ({
+      jobId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      revision: 1,
+      url: VALID_URL,
+      capturedAt: new Date().toISOString(),
+      extractorVersion: "extractor@1.0.0",
+      contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      text: "Senior Platform Engineer at Northwind Labs.",
+      structured: { applyUrl: url },
+    }),
+  },
+  {
+    schemaFileBaseName: "job-capture",
+    zodSchema: jobCaptureSchema,
+    label: "JobCapture.url (top-level field)",
+    build: (url) => ({
+      protocol: 1,
+      type: "job_capture",
+      eventId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      url,
+      text: "Senior Platform Engineer at Northwind Labs.",
+      extractorVersion: "extractor@1.0.0",
+      contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      occurredAt: new Date().toISOString(),
+    }),
+  },
+  {
+    schemaFileBaseName: "session-manifest",
+    zodSchema: sessionManifestSchema,
+    label: "SessionManifest.items[].url (field inside an array item)",
+    build: (url) => ({
+      protocol: 1,
+      sessionId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      title: "Apply today",
+      items: [{ taskId: "0d3a4b0e-58cc-4372-a567-0e02b2c3d479", jobRevision: 1, url }],
+      createdAt: new Date().toISOString(),
+    }),
+  },
+];
 
 /**
  * Issue 2 regression. `httpUrlSchema`'s http(s)-only restriction was
@@ -63,72 +135,7 @@ const DANGEROUS_URLS = ["javascript:alert(1)", "file:///etc/passwd", "chrome-ext
  * item.
  */
 describe("emitted JSON Schema enforces the same http(s)-only URL restriction zod does", () => {
-  const cases: Array<{
-    schemaFileBaseName: string;
-    zodSchema: z.ZodType;
-    label: string;
-    build: (url: string) => unknown;
-  }> = [
-    {
-      schemaFileBaseName: "job-snapshot",
-      zodSchema: jobSnapshotSchema,
-      label: "JobSnapshot.url (top-level field)",
-      build: (url) => ({
-        jobId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-        revision: 1,
-        url,
-        capturedAt: new Date().toISOString(),
-        extractorVersion: "extractor@1.0.0",
-        contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        text: "Senior Platform Engineer at Northwind Labs.",
-        structured: {},
-      }),
-    },
-    {
-      schemaFileBaseName: "job-snapshot",
-      zodSchema: jobSnapshotSchema,
-      label: "JobSnapshot.structured.applyUrl (field nested in an optional object)",
-      build: (url) => ({
-        jobId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-        revision: 1,
-        url: VALID_URL,
-        capturedAt: new Date().toISOString(),
-        extractorVersion: "extractor@1.0.0",
-        contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        text: "Senior Platform Engineer at Northwind Labs.",
-        structured: { applyUrl: url },
-      }),
-    },
-    {
-      schemaFileBaseName: "job-capture",
-      zodSchema: jobCaptureSchema,
-      label: "JobCapture.url (top-level field)",
-      build: (url) => ({
-        protocol: 1,
-        type: "job_capture",
-        eventId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-        url,
-        text: "Senior Platform Engineer at Northwind Labs.",
-        extractorVersion: "extractor@1.0.0",
-        contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        occurredAt: new Date().toISOString(),
-      }),
-    },
-    {
-      schemaFileBaseName: "session-manifest",
-      zodSchema: sessionManifestSchema,
-      label: "SessionManifest.items[].url (field inside an array item)",
-      build: (url) => ({
-        protocol: 1,
-        sessionId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-        title: "Apply today",
-        items: [{ taskId: "0d3a4b0e-58cc-4372-a567-0e02b2c3d479", jobRevision: 1, url }],
-        createdAt: new Date().toISOString(),
-      }),
-    },
-  ];
-
-  for (const { schemaFileBaseName, zodSchema, label, build } of cases) {
+  for (const { schemaFileBaseName, zodSchema, label, build } of URL_FIELD_CASES) {
     describe(label, () => {
       const validate = ajvValidatorFor(schemaFileBaseName);
 
@@ -144,6 +151,57 @@ describe("emitted JSON Schema enforces the same http(s)-only URL restriction zod
           expect(validate(payload), "ajv accepted a non-http(s) URL the emitted schema should reject").toBe(
             false,
           );
+          expect(zodSchema.safeParse(payload).success).toBe(false);
+        });
+      }
+    });
+  }
+});
+
+/**
+ * P01.1 packet, deliverable 1, round-3 review follow-ups. Two gaps in the
+ * emitted schema, both now closed in the shared `httpUrlSchema`/
+ * `boundedHttpUrlSchema` primitive (primitives.ts) and proven here the same
+ * way issue 2 above is: ajv, compiled from the committed `.schema.json`,
+ * against the live zod schema, at every nesting depth.
+ *
+ * 1. zod trimmed a leading/trailing-whitespace-padded URL and accepted the
+ *    trimmed value; the emitted schema had no whitespace rule at all, so
+ *    ajv validated the *untrimmed* (still-padded) input and happened to
+ *    also accept it — the same result by coincidence, not by a shared rule.
+ *    zod now rejects the padding outright instead of trimming it.
+ * 2. the emitted schema had no rule at all for "well-formed URL" beyond the
+ *    http(s) prefix, so ajv accepted `https://` (no host) and
+ *    `https://exa mple.com/` (a space inside the host) — both already
+ *    rejected at the zod level by `z.url()`'s own `new URL()` call, which
+ *    (like the `protocol` option issue 2 above fixes) never lowers to a
+ *    JSON Schema keyword on its own.
+ */
+describe("emitted JSON Schema enforces the same whitespace and well-formed-URL rules zod does", () => {
+  const MALFORMED_URLS = [
+    "  https://jobs.example/posting/1",
+    "https://jobs.example/posting/1  ",
+    "https://",
+    "https://exa mple.com/",
+  ];
+
+  for (const { schemaFileBaseName, zodSchema, label, build } of URL_FIELD_CASES) {
+    describe(label, () => {
+      const validate = ajvValidatorFor(schemaFileBaseName);
+
+      it("ajv (emitted JSON Schema) and zod both accept a URL with a port, path, query and IDN host", () => {
+        const payload = build("https://xn--exmple-cua.com:8080/posting/1?ref=board");
+        expect(validate(payload), JSON.stringify(validate.errors, null, 2)).toBe(true);
+        expect(zodSchema.safeParse(payload).success).toBe(true);
+      });
+
+      for (const malformed of MALFORMED_URLS) {
+        it(`ajv (emitted JSON Schema) and zod both reject ${JSON.stringify(malformed)}`, () => {
+          const payload = build(malformed);
+          expect(
+            validate(payload),
+            "ajv accepted a whitespace-padded or malformed URL the emitted schema should reject",
+          ).toBe(false);
           expect(zodSchema.safeParse(payload).success).toBe(false);
         });
       }
