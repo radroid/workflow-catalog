@@ -1,4 +1,4 @@
-import { isTurnFailureEvent, type MessageResponse, type MessageResult, type MessageStreamEvent } from "eve/client";
+import { isCurrentTurnBoundaryEvent, isTurnFailureEvent, type CreatedClientSession, type MessageResult, type MessageStreamEvent } from "eve/client";
 import { SOURCE_CATEGORIES, sourceStatusSchema, uuidSchema, type SourceCategory } from "@workflow-catalog/contracts";
 import { z } from "zod";
 import { extractClaimsOutputSchema } from "../../agent/lib/extract-claims-schema.ts";
@@ -42,6 +42,14 @@ const MAX_MARKDOWN_BYTES = 512 * 1024;
 export const MAX_TOTAL_SOURCE_TEXT_BYTES = 2 * 1024 * 1024;
 /** One real model call, single-shot: the same default as `eve-gateway.ts`'s `checkModel`. */
 export const EXTRACTION_TIMEOUT_MS = 90_000;
+/** The deadline the route actually uses. Only tests change it, to reach the timeout path without waiting 90 s. */
+export const extractionTiming = { timeoutMs: EXTRACTION_TIMEOUT_MS };
+/** A cancel request to an eve that has stopped answering must not hold the page's request open. */
+const CANCEL_TIMEOUT_MS = 5_000;
+
+function seconds(ms: number): string {
+  return ms >= 1000 ? `${Math.round(ms / 1000)} s` : `${ms} ms`;
+}
 
 function isSourceCategory(value: string): value is SourceCategory {
   return (SOURCE_CATEGORIES as readonly string[]).includes(value);
@@ -82,10 +90,17 @@ type ExtractionTurnOutcome = { readonly ok: true } | { readonly ok: false; reado
 
 /**
  * Whether an extraction turn succeeded (R3). `result.status` alone is not
- * enough: a turn can fail (`turn.failed` and friends, found with eve's own
- * `isTurnFailureEvent`) while the session still parks "waiting", and a turn
- * parked on an input request this route can never show also reports
- * "waiting".
+ * enough:
+ *
+ * - a turn can fail (`turn.failed` and friends, found with eve's own
+ *   `isTurnFailureEvent`) while the session still parks "waiting";
+ * - a turn parked on an input request this route can never show also
+ *   reports "waiting";
+ * - eve@0.63.0's client reports "completed" for a turn it never saw finish
+ *   when its stream ends without a terminal `session.*` event, which is what
+ *   an abort while the stream is opening or reopening produces
+ *   (docs/spec/research/eve-runtime.md §8 item 15). So a turn counts as
+ *   finished only when eve's own `isCurrentTurnBoundaryEvent` saw one.
  */
 function interpretExtractionTurn(result: Pick<MessageResult, "status" | "events" | "inputRequests">): ExtractionTurnOutcome {
   const failure = result.events.find(isTurnFailureEvent);
@@ -94,6 +109,7 @@ function interpretExtractionTurn(result: Pick<MessageResult, "status" | "events"
   if (result.inputRequests.length > 0) {
     return { ok: false, reason: "The model asked a question instead of finishing. This page can't show or answer it; try again, or simplify the source text." };
   }
+  if (!result.events.some(isCurrentTurnBoundaryEvent)) return { ok: false, reason: "The turn ended before the model finished. Try again." };
   return { ok: true };
 }
 
@@ -316,22 +332,35 @@ export default defineRouteModule({
       const eve = ctx.eve;
       if (!eve) return errorResponse(503, "eve_not_running", "eve is not running. Start the runner with npm run runner, then try again.");
 
-      const signal = AbortSignal.timeout(EXTRACTION_TIMEOUT_MS);
-      let response: MessageResponse | undefined;
+      const timeoutMs = extractionTiming.timeoutMs;
+      const signal = AbortSignal.timeout(timeoutMs);
+      const timedOut = () => errorResponse(504, "extraction_timed_out", `No answer from the model within ${seconds(timeoutMs)}. The turn was stopped; try again.`);
+      let created: CreatedClientSession | undefined;
+      // eve-runtime §8 item 15: MessageResponse.cancel() sends nothing before
+      // the client has seen the turn start, or once the turn is parked, so a
+      // timed-out, unfinished or parked turn is cancelled through its session.
+      const cancelSession = async (why: string) => {
+        if (!created) return;
+        await created.session.cancel({ signal: AbortSignal.timeout(CANCEL_TIMEOUT_MS) }).catch((error: unknown) => {
+          ctx.log.warn(`onboarding: failed to cancel ${why} extraction session for ${category}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      };
       try {
-        ({ response } = await eve.client.sessions.create({ message: buildExtractionPrompt(category, sourceText), signal }));
-        const result = await response.result();
-        const outcome = interpretExtractionTurn(result);
+        created = await eve.client.sessions.create({ message: buildExtractionPrompt(category, sourceText), signal });
+        const result = await created.response.result();
 
-        // Never leave a turn parked on an input request this route can't show
-        // or answer. Cooperative per-turn cancellation is as close as
-        // eve@0.63.0's client gets to closing a session (MessageResponse has
-        // cancel(); there is no separate close call).
-        if (!outcome.ok && result.inputRequests.length > 0) {
-          await response.cancel().catch((error: unknown) => {
-            ctx.log.warn(`onboarding: failed to cancel a parked extraction session for ${category}: ${error instanceof Error ? error.message : String(error)}`);
-          });
+        // eve-runtime §8 item 15: an abort while the client opens or reopens
+        // the stream resolves result() quietly instead of throwing.
+        if (signal.aborted) {
+          await cancelSession("a timed-out");
+          ctx.log.warn(`onboarding: extraction turn for ${category} timed out after ${seconds(timeoutMs)}`);
+          return timedOut();
         }
+
+        const outcome = interpretExtractionTurn(result);
+        // Never leave a turn running or parked on an input request this route
+        // can't show or answer.
+        if (!outcome.ok && (result.inputRequests.length > 0 || !result.events.some(isCurrentTurnBoundaryEvent))) await cancelSession("an unfinished");
 
         const persisted = outcome.ok ? persistedExtraction(result.events, category) : undefined;
         if (persisted) await s.recordExtractionContentHash(category, sourceText); // D14
@@ -345,15 +374,13 @@ export default defineRouteModule({
         return c.json({ ok: outcome.ok && persisted !== undefined, status: result.status, message, claims: claimsFor(after) });
       } catch (error) {
         // The turn never produced a MessageResult (a network error, or the
-        // timeout fired). Cancel a turn that did start rather than leaving it
-        // running unattended.
-        if (response) await response.cancel().catch(() => undefined);
-        const timedOut = isTimeout(error, signal);
+        // timeout fired while an open stream was being read). Cancel a turn
+        // that did start rather than leaving it running unattended.
+        const isTimedOut = isTimeout(error, signal);
+        await cancelSession(isTimedOut ? "a timed-out" : "a failed");
         const detail = error instanceof Error ? error.message : String(error);
-        ctx.log.warn(`onboarding: extraction turn for ${category} ${timedOut ? "timed out" : "failed"}: ${detail}`);
-        return timedOut
-          ? errorResponse(504, "extraction_timed_out", `No answer from the model within ${EXTRACTION_TIMEOUT_MS / 1000} s. Nothing was saved; try again.`)
-          : errorResponse(502, "extraction_failed", `The extraction turn for ${label} failed: ${detail}`);
+        ctx.log.warn(`onboarding: extraction turn for ${category} ${isTimedOut ? "timed out" : "failed"}: ${detail}`);
+        return isTimedOut ? timedOut() : errorResponse(502, "extraction_failed", `The extraction turn for ${label} failed: ${detail}`);
       }
     });
 

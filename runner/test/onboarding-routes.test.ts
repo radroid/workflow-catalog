@@ -38,6 +38,15 @@ interface FakeTurnResult {
   readonly extract?: ExtractClaimsInput["claims"];
   /** Makes `sessions.create` reject with this error instead of answering. */
   readonly reject?: Error;
+  /** Leaves out the terminal `session.*` event every finished turn ends with (eve-runtime §8 item 15). */
+  readonly noBoundary?: boolean;
+}
+
+function boundaryEvent(status: FakeTurnResult["status"]): MessageStreamEvent {
+  const meta = { at: "2026-09-22T09:00:01.000Z", id: "evt-9" };
+  if (status === "completed") return { type: "session.completed", meta } as MessageStreamEvent;
+  if (status === "waiting") return { type: "session.waiting", data: { continuationToken: "fake-session", wait: "next-user-message" }, meta } as MessageStreamEvent;
+  return { type: "session.failed", data: { code: "fake_failure", message: "The fake turn failed.", sessionId: "fake-session" }, meta } as MessageStreamEvent;
 }
 
 interface FakeExtraction {
@@ -75,13 +84,19 @@ function fakeExtraction(results: readonly FakeTurnResult[]): FakeExtraction {
           const output = await verifyAndPersistExtractedClaims({ sourceCategory: category, claims: chosen.extract }, new ProfileStore(bridge!.workspace, bridge!.clock));
           events.push(actionResult(output));
         }
+        if (!chosen.noBoundary) events.push(boundaryEvent(chosen.status));
         return {
-          session: undefined as never,
+          // eve-runtime §8 item 15: the route cancels through the session, never MessageResponse.cancel().
+          session: {
+            cancel: async () => {
+              calls.cancelCount += 1;
+              return { status: "accepted" } as never;
+            },
+          } as never,
           response: {
             sessionId: "fake-session",
             cancel: async () => {
-              calls.cancelCount += 1;
-              return { status: "accepted", turnId: "fake-turn" } as never;
+              throw new Error("MessageResponse.cancel() sends nothing once a turn is parked; cancel through the session.");
             },
             result: async () => ({ data: undefined, message: chosen.message, events, inputRequests: chosen.inputRequests ?? [], sessionId: "fake-session", status: chosen.status }),
           } as never,
@@ -372,8 +387,19 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     expect(response.status).toBe(504);
     expect(((await response.json()) as { error: { code: string; message: string } }).error).toEqual({
       code: "extraction_timed_out",
-      message: "No answer from the model within 90 s. Nothing was saved; try again.",
+      message: "No answer from the model within 90 s. The turn was stopped; try again.",
     });
+  });
+
+  it("a 'completed' turn with no terminal session event never finished: not ok, no hash, and the session is cancelled (eve-runtime §8 item 15)", async () => {
+    const fake = fakeExtraction([{ status: "completed", extract: [LED_CLAIM], noBoundary: true }]);
+    const bridge = await realBridge(fake);
+    await provideResume(bridge);
+    const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; message: string };
+    expect(body).toMatchObject({ ok: false, message: "Extraction from Resume did not finish: The turn ended before the model finished. Try again." });
+    expect(fake.calls.cancelCount).toBe(1);
+    await post(bridge, "/sources/resume/extract");
+    expect(fake.calls.count).toBe(2); // no hash was recorded, so the same text runs again
   });
 
   it("eve not running is a 503 with no literal backticks", async () => {
