@@ -251,6 +251,21 @@ describe("launcher: once ready", () => {
     expect(h.spawned[0]?.received).toEqual(["SIGTERM"]);
   });
 
+  it("still closes the bridge and stops eve when a module's stop function throws", async () => {
+    const routes = await tempDir("wc-routes-");
+    await writeFile(
+      path.join(routes, "hooks.ts"),
+      `import { defineRouteModule } from ${JSON.stringify(ROUTE_MODULES)};\nexport default defineRouteModule({ start: () => () => { throw new Error("stop failed"); } });\n`,
+    );
+    const errors: string[] = [];
+    const h = await harness({ routesDir: routes, log: { info: () => undefined, error: (line) => void errors.push(line) } });
+    expect((await launchRunner(h.deps)).state).toBe("ready");
+    h.signals.send("SIGINT");
+    await vi.waitFor(() => expect(h.exits).toEqual([0]));
+    expect(h.events).toEqual(["bridge listening", "bridge closed", "eve exited"]);
+    expect(errors).toEqual(["stop failed"]);
+  });
+
   it("stops the bridge, then eve when the terminal closes (SIGHUP), and exits 0", async () => {
     const h = await harness();
     expect((await launchRunner(h.deps)).state).toBe("ready");

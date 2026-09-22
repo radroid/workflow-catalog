@@ -155,7 +155,8 @@ export async function launchRunner(deps: LauncherDeps): Promise<LaunchResult> {
   async function stopStarted(): Promise<void> {
     const pending = stops;
     stops = [];
-    for (const stop of pending) await Promise.resolve(stop()).catch((error: Error) => deps.log.error(error.message));
+    // .then(stop), not stop(): a stop that throws synchronously is caught too.
+    for (const stop of pending) await Promise.resolve().then(stop).catch((error: Error) => deps.log.error(error.message));
     const open = bridge;
     bridge = undefined;
     await open?.close();
