@@ -1,15 +1,31 @@
 @import "../../../docs/spec/visuals/theme.css";
 
-/* theme.css sets --font-sans/--font-mono to bare "Geist"/"Geist Mono"
-   family names; remap them to the next/font (geist package) CSS variables
-   set on <html> in app/layout.tsx, so no network font request is ever made. */
+/* theme.css sets --font-sans/--font-mono to bare "Geist"/"Geist Mono" family
+   names; remap them to the next/font (geist package) CSS variables set on
+   <html> in app/layout.tsx, so no network font request is ever made.
+   next/font's generated variable already ends in a full fallback chain
+   (down to the generic family), so this does not append another generic
+   fallback on top — that produced a doubled "..., monospace, monospace".
+   Declared in both :root and [data-theme="dark"] explicitly: theme.css's
+   own [data-theme="dark"] block re-declares the bare family names, so the
+   remap must be explicit in dark mode too rather than relying on cascade
+   order between two equal-specificity selectors. */
 :root {
-  --font-sans: var(--font-geist-sans), sans-serif;
-  --font-mono: var(--font-geist-mono), monospace;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+[data-theme="dark"] {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 * {
   box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 html,
@@ -26,10 +42,18 @@ body {
   line-height: 1.5;
 }
 
+a {
+  color: inherit;
+}
+
 .wrap {
   max-width: 720px;
   margin: 0 auto;
   padding: 64px 28px;
+}
+
+.wrap.wide {
+  max-width: 960px;
 }
 
 .eyebrow {
@@ -49,17 +73,426 @@ h1 {
   margin: 0 0 12px;
 }
 
+h2 {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  margin: 36px 0 12px;
+}
+
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+}
+
 .lede {
   max-width: 60ch;
   color: var(--muted-foreground);
   margin: 0 0 28px;
 }
 
+.lede strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+/* Non-breaking space before an em dash keeps it from ever starting a line
+   on its own — use "word&nbsp;— word" (see e.g. app/page.tsx). */
+
+section + section {
+  margin-top: 36px;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px;
-  font-size: 13.5px;
+  box-shadow: var(--shadow-sm);
+}
+
+.card.pad {
+  padding: 18px 20px;
+}
+
+.card + .card {
+  margin-top: 12px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stack > p {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.row.between {
+  justify-content: space-between;
+}
+
+button,
+.button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 14px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  line-height: 1.3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+button:hover,
+.button:hover {
+  background: var(--muted);
+}
+
+/* One shared rule so every button and link gets the theme's ring on
+   keyboard focus instead of falling back to the browser default (e.g.
+   Chrome's blue outline), which doesn't match either theme. :focus-visible
+   (not :focus) so a mouse click doesn't show it, only keyboard/programmatic
+   focus — matching the role="alert" flash boxes' tabIndex={-1} autoFocus,
+   which also rely on :focus-visible-style rendering for the outline. */
+button:focus-visible,
+.button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+button.primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+button.primary:hover {
+  opacity: 0.92;
+}
+
+/* .button.ghost too, not just button.ghost — an <a className="button ghost">
+   (e.g. Home's "Owner sign-in" link) is styled by the shared `.button` rule
+   above but is not a <button> element, so button.ghost alone never matched
+   it and it rendered as a raised, bordered button instead of a ghost link. */
+button.ghost,
+.button.ghost {
+  background: transparent;
+  box-shadow: none;
+}
+
+button.small {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+label {
+  display: block;
+  font-size: 12.5px;
   color: var(--muted-foreground);
+  margin: 0 0 6px;
+}
+
+input[type="text"],
+input[type="password"] {
+  font: inherit;
+  font-size: 14px;
+  width: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field-note {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 6px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  white-space: nowrap;
+}
+
+.pill.ok {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+.pill.warn {
+  background: var(--amber, oklch(0.81 0.17 75.35));
+  color: #000;
+  border-color: var(--amber, oklch(0.81 0.17 75.35));
+}
+
+.pill.dim {
+  opacity: 0.65;
+}
+
+.flash {
+  border-left: 3px solid var(--foreground);
+  background: var(--muted);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13.5px;
+  margin-bottom: 20px;
+}
+
+.flash.error {
+  border-left-color: var(--destructive);
+}
+
+.flash .tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  display: block;
+  margin-bottom: 3px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.check-row + .check-row {
+  border-top: 1px solid var(--border);
+}
+
+.check-row .check-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.check-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex: none;
+}
+
+.check-mark.done {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+pre,
+code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+pre.command-block {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  /* Wrap instead of relying on horizontal scroll (matches the prototype's
+     own `pre` rule — docs/spec/visuals/index.html): at narrow viewports
+     (e.g. 390px) a long command overflowed this box, and axe flags a
+     scrollable region with no keyboard access as serious. white-space:
+     pre-wrap still preserves the newlines between commands; overflow-wrap
+     covers the rare single "word" with no space to wrap at, like a bare
+     URL, so nothing can force horizontal scroll back on. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+
+.step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.step-list > li {
+  margin-bottom: 20px;
+}
+
+.step-list .step-label {
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.step-note {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin-top: 6px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  padding: 0 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.tight {
+  margin: 0;
+}
+
+.break-all {
+  word-break: break-all;
+}
+
+/* Standard "sr-only" pattern: present in the accessibility tree and to
+   find-in-page, but removed from visual layout — unlike display:none or
+   visibility:hidden, which would also remove it from the accessible name
+   computation. Used to prefix a stable, item-specific identifier onto a
+   button whose short visible text (e.g. "Mark done") repeats across
+   several controls — see the install checklist. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.top-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 28px 0;
+  font-size: 13px;
+}
+
+.top-nav a {
+  text-decoration: none;
+  color: var(--muted-foreground);
+}
+
+.top-nav a:hover {
+  color: var(--foreground);
+}
+
+.top-nav .who {
+  color: var(--muted-foreground);
+}
+
+.doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.doc-list li + li {
+  margin-top: 4px;
+}
+
+.doc-list a {
+  display: block;
+  padding: 10px 0;
+  text-decoration: none;
+  color: var(--foreground);
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-list a:hover {
+  color: var(--muted-foreground);
+}
+
+footer.page-footer {
+  max-width: 720px;
+  margin: 40px auto 0;
+  padding: 20px 28px 40px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  border-top: 1px solid var(--border);
 }
