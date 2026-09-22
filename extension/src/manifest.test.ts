@@ -67,11 +67,17 @@ describe("manifest.json (P07 packet Decisions: exact permission/host sets)", () 
 
 describe("manifest.json paths resolve inside the built extension (when dist/ exists)", () => {
   const distDir = path.resolve(path.dirname(manifestPath), "dist");
-  // A gate here would make the fast `vitest run` pass depend on `vite
-  // build` having already run (it hasn't, in the verify chain's order —
-  // see package.json); skip instead of failing when dist/ is absent, the
-  // same accommodation scan-dist-for-eval.mjs's own build-time check makes.
-  const runIfBuilt = existsSync(distDir) ? it : it.skip;
+  const built = existsSync(distDir);
+  // Outside CI, a gate here would make the fast `vitest run` pass depend
+  // on `vite build` having already run (it hasn't, in the verify chain's
+  // order -- see package.json); skip instead of failing when dist/ is
+  // absent, the same accommodation scan-dist-for-eval.mjs's own
+  // build-time check makes. Inside CI (P07-B revision 1, B5) the
+  // workflow always builds the extension before running this suite
+  // (.github/workflows/ci.yml), so a missing dist/ there means that
+  // ordering broke, not that these tests don't apply -- run for real
+  // (and let it fail loudly) rather than silently report as skipped.
+  const runIfBuilt = built || process.env.CI ? it : it.skip;
 
   runIfBuilt("every manifest-referenced page/worker path exists in dist/", () => {
     const referenced = [
