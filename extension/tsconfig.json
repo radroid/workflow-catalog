@@ -13,5 +13,19 @@
     // scripts/check-fixtures.mjs is today).
     "allowJs": true
   },
-  "include": ["src", "scripts", "e2e", "playwright.config.ts", "vite.config.ts"]
+  "include": ["src", "scripts", "e2e", "playwright.config.ts", "vite.config.ts"],
+  // P07-B's two "drive the real bridge" test files import
+  // @workflow-catalog/runner's server source (an allowed devDependency --
+  // see the P07 packet's allowlist) to start the actual P02 bridge against
+  // a temp workspace. runner/tsconfig.json compiles that source with
+  // allowImportingTsExtensions + lib ES2024 (Node 24's native TS type
+  // stripping needs the literal .ts extension; runner only ever runs on
+  // Node 24), options this package intentionally does not turn on for its
+  // own browser-targeted (DOM lib, no .ts-extension imports) source. tsc
+  // has one compiler-options set per program, so type-checking these two
+  // files here would mean checking the whole imported runner/ graph under
+  // this package's options instead of its own -- excluded from tsc rather
+  // than loosening this package's options repo-wide. Playwright and Vitest
+  // both run them fine regardless (transpile-only, no tsc involved).
+  "exclude": ["src/shared/bridge-client.realbridge.test.ts", "e2e/bridge-e2e.spec.ts"]
 }

@@ -17,6 +17,7 @@
   "devDependencies": {
     "@playwright/test": "1.63.0",
     "@types/chrome": "0.3.0",
+    "@workflow-catalog/runner": "workspace:*",
     "axe-core": "4.13.0",
     "geist": "1.7.2",
     "happy-dom": "20.14.5"
