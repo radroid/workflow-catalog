@@ -803,3 +803,22 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 5. **The runs API** returns full records plus `path`, bounded to 200 records and 14 days.
 
 **Action taken:** iter-005 continues from the handoff.
+
+## 2026-09-22 — Provider session limit stopped all four iter-005 agents [FAILURE]
+
+**Iter:** 005
+**Source:** smoke-failure (provider usage limit)
+**Severity:** medium
+
+**Charter / context:** at about 14:45, roughly 20 minutes after the resume, all four agents stopped with HTTP 429 "You've hit your session limit · resets 2:50pm (America/Toronto)". The Opus and Sonnet agents stopped alike.
+**Verdict text / failure detail:** nothing was lost; every worktree was intact.
+- **P03 reviewer:** stopped mid-checklist. It had already found that `markdownError` is returned by the API but neither page reads it (R10).
+- **P03 UI critic:** stopped mid-screenshots. Its harness was left listening on 4340.
+- **P07-B escalation:** still investigating. One unpushed setup merge (36b78ba).
+- **P08-A:** mid-code. One unpushed resume-claim commit (269d21b), plus work in progress.
+
+**Action taken:**
+- At 14:52, after the reset, the owner re-kicked ("Continue").
+- All four agents resumed with SendMessage, keeping their context. Each message carried that agent's code word.
+- P08-A was told to push at its next green step.
+- Lesson carried from iter 004: four agents at once reached the session limit within about 20 minutes, so the budget of seven is a ceiling, not a target.
