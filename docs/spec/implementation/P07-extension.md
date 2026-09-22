@@ -1,7 +1,7 @@
 # P07 · Chrome extension
 
 Status: claimed (part A)
-Assignee: iter-003 implementer (Sonnet), part A
+Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus)
 Blocked by: P02 (pairing and bridge), P06 (manifests and commands)
 Owns: extension/
 Spec: F6 (capture path), F9, §7 rule 3, browser-boundary.md (all sections; the nine gates are this packet's definition of done)
@@ -26,6 +26,97 @@ The nine gates from browser-boundary.md as automated tests where possible (repla
 Form filling, uploads, submission, cookies, native messaging.
 
 ## Report
+
+### 2026-09-22 — Revision 2 (iter-003, Opus escalation)
+
+Opus escalation after the Sonnet implementer's one revision round. The reviewer's second pass verified 7 of its 8 earlier issues as fixed and found 2 remaining issues plus test-validity follow-ups. All are fixed on `packet/P07-A`: `3bf8823` (item 1), `6d87bed` (3b), `8cb51b2` + `dc11be2` (item 2), `c6051da` (3a), then this report. No merge from `overnight/integration`. Touched only `extension/**`, `docs/screenshots/P07A-popup-{dark,light}.png`, and this file. The manifest is unchanged: exactly six permissions and one host permission.
+
+**1. The dist scanner's zod exception hid whole lines. Fixed; proven at build level.** `scan-dist-for-eval.mjs` used `!line.includes(ZOD_JITLESS_PROBE_SNIPPET)`, and the built `assets/zod-jitless-*.js` is a single ~10 KB line, so the exception covered the whole chunk. The scanner now removes every exact occurrence of the snippet from the line and tests `NEW_FUNCTION_RE` on what remains (`withoutZodProbe`). That is the only pattern the exception touches; the snippet contains no `eval`, remote script, or import. Each occurrence is replaced with a space, not the suggested `""`: `x$<probe>Function(e)` would otherwise become `x$Function(e)`, which the `(?<![\w$.])` lookbehind skips. A space can neither create nor hide a match at the seam. 4 new unit tests, 20/20 in the file:
+- the reviewer's minified shape on one line is flagged;
+- an unminified `new Function(code)()` on the probe's line is flagged;
+- a line of only probes passes;
+- a `Function(` right after the probe is still seen.
+
+The existing "probe alone passes" test still passes. For the build-level proof I cloned the branch into `/tmp/wc-p07a-rev2-plant` (never committed) and appended to `src/shared/zod-jitless.ts` a planted `export function runPlanted(code) { return new Function(code)(); }` plus a `globalThis` reference so it isn't tree-shaken. It minified to exactly the reviewer's `function ce(e){return Function(e)()}`, on the same single line as `try{return Function(``),!0}catch{return!1}`:
+```
+$ pnpm --filter @workflow-catalog/extension build     # planted
+assets/zod-jitless-DFI4lULH.js:1: forbidden Function(...) constructor call in built output
+
+1 built-output violation(s) found.
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] ... Exit status 1
+old scanner (bdc8095) on the same planted dist: []      # the hole, reproduced
+$ pnpm --filter @workflow-catalog/extension build     # plant removed
+dist/ scan clean: no eval, new Function, or remote script/import found.   # exit 0
+```
+
+**2. `test:e2e` rewrote the committed screenshots, sometimes wrongly. Fixed and root-caused.** An unmodified run here reproduced both of the reviewer's symptoms: `P07A-popup-dark.png` came out light, and both popup images carried the `380px × 418px` label. The reviewer suspected a stale frame. Scratch experiments in the clone above found three causes:
+- **Dropped override.** Early in a fresh popup's life (observed within ~1.3 s of it opening), Chrome drops a just-set `prefers-color-scheme` override at a late resize ~150-550 ms later. The page's own `matchMedia("(prefers-color-scheme: dark)")` flips back to false and `data-theme` returns to light. Re-applying the override afterwards holds. Playwright is not attached to the popup (no `page` event, and `pw:protocol` shows only this test's `Target.attachToTarget`), so this happens inside Chrome.
+- **Stale frame.** A capture taken right after the switch can return the previous frame.
+- **Overlay.** The label is painted after a resize by an overlay other than this test's own session: it still appeared with `Overlay.setShowViewportSizeOnResize({ show: false })` sent on that session right after attach, and a mouse move didn't dismiss it either. Per Blink's `InspectorOverlayAgent::OnResizeTimer`, Chrome removes it 1 s after the resize. On the first popup of three fresh browsers, captures taken right after a switch had the label 6/6, and captures taken after 1.1 s without a resize had it 0/6, with the theme correct in all 6.
+
+Fixes, in `e2e/real-popup.spec.ts` and `e2e/real-popup-cdp.ts`:
+- **Opt-in writes.** `screenshotPath()` writes into `docs/screenshots/` only when `P07A_UPDATE_SCREENSHOTS=1`. Otherwise it writes to `test.info().outputPath()` under `extension/test-results/` (gitignored).
+- **`inTheme(target, theme, action)`.** Sets the scheme and waits two `requestAnimationFrame`s. It then requires `data-theme === theme`, a non-empty declared token, a non-transparent body background, and a computed body background equal to `theme.css`'s own `--background` for that theme. That value is read from the theme's `:root` / `[data-theme="dark"]` rule and resolved through a probe, so no colour is hard-coded. These checks run before and after `action`. A failed check re-applies the scheme via `expect(...).toPass()`, bounded at 10 s.
+- **The dark axe audit.** The popup's dark axe audit now goes through `inTheme` too, because the same drop let it run against the light page. With attempts instrumented in the scratch clone, its first attempt failed the "after" check in 3 of 4 runs and the retry passed.
+- **`captureInTheme()`.** Waits until no `resize` has fired for 1.1 s, then two frames, and captures. It then requires the PNG's own top-left pixel (page background) to be light (mean RGB ≥ 128) for light and dark for dark before writing anything. Row 0's first pixel is stored verbatim under every PNG filter, so only an inflate is needed.
+- **Overlay flag kept.** `Overlay.setShowViewportSizeOnResize({ show: false })` is still sent right after attaching to the popup (`triggerRealPopup`) and on the options page's CDP session, as asked. On the evidence above it only covers those sessions' own overlays, and the comments say so.
+- **Retaken.** All four screenshots were retaken with `P07A_UPDATE_SCREENSHOTS=1` and opened one by one: light is light, dark is dark, no label. The popup pair changed. The options pair came out byte-identical to the committed files. The popup's URL row now shows the fixture server's OS-assigned port instead of `3107`.
+
+A scratch PNG decoder (`/tmp`, not committed) checked every normal-run capture:
+```
+5 consecutive normal runs: 9 passed each; 20/20 captures right theme, 0 labels
+  P07A-popup-dark.png   380x418 bg=0   theme=dark  label=no
+  P07A-popup-light.png  380x418 bg=252 theme=light label=no
+  P07A-options-dark.png 1280x800 bg=0   theme=dark  label=no
+  P07A-options-light.png 1280x800 bg=252 theme=light label=no
+(the same decoder on the reviewer's rerun-popup-dark.png: bg=252 theme=light WRONG label=YES)
+```
+
+**3a. The `--background` check passed when the token was missing. Fixed.** `assertThemeAndFontsLoaded` now requires:
+- the `--background` token on body to be non-empty;
+- body's computed background to be neither `transparent` nor `rgba(0, 0, 0, 0)`;
+- body's computed background to equal the token's own value, resolved through a probe styled with that literal value.
+
+The comment at the old `extension.spec.ts:83-86` claimed the pattern check caught a missing theme.css. It is rewritten to explain why that was vacuous. Scratch plants were run on a copied `dist/theme.css` (never committed; restored after, `diff` clean against the canonical file):
+```
+token deleted (both --background lines)
+  bdc8095 spec: 4 passed                                   # the reviewer's result, reproduced
+  new spec:     3 failed, 1 passed
+                Error: theme.css should define a non-empty --background token
+token set to "not-a-colour"
+  new spec:     3 failed  Error: body background should be painted, not transparent
+restored
+  new spec:     4 passed
+```
+
+**3b. The fixture server's fixed port 3107 collided with other harnesses. Fixed.** `startFixtureServer()` now listens on port 0 on 127.0.0.1 and returns `{ origin, close }`. Every fixture URL and URL assertion in `real-popup.spec.ts` uses `fixtureServer.origin`. The header comment no longer cites a CLAUDE.md checklist that doesn't exist. The README says how the port is chosen.
+
+**Tests run (real output, at `c6051da`):**
+```
+pnpm -r typecheck && pnpm -r test && pnpm -r lint && pnpm typecheck && pnpm test && pnpm check:fixtures
+  → exit 0: contracts 224/224, apps/catalog 87/87, job-assistant 122/122, extension 132/132 (was 128;
+    +4 scanner tests), root node --test 2/2, check:fixtures 0 offenses; runner still a P02 placeholder
+pnpm --filter @workflow-catalog/extension build → dist/ scan clean: no eval, new Function, or remote script/import found.
+pnpm --filter @workflow-catalog/extension test:e2e → 9 passed (12.0s); git status --porcelain → (empty)
+pnpm --filter @workflow-catalog/extension test:e2e → 9 passed (10.2s); git status --porcelain → (empty)
+gh pr checks 7 --watch (head c6051da) → ci pass 1m17s (run 35723001373); CodeRabbit pass (review skipped)
+```
+No fixture server or Chrome for Testing process was left running. The listening sockets matched the pre-run baseline, and the node servers on 3000/3001 belong to other sessions. The e2e suite now takes ~10-13 s instead of ~8 s, mostly the 1.1 s resize-quiet wait before each of the four captures.
+
+**Skipped, as the brief directs (each assigned elsewhere):**
+- the SPA case where the URL changes before the content (P07-C, gate 5);
+- building the extension in CI (P07-B);
+- the UI critic's cosmetic notes (P07-B);
+- the `/ui/jobs` link (P07-B, after P02).
+
+Also, `logs/latest.md` still lists "P07-A 3107" among the reserved ports. The suite no longer uses a fixed port; that file is outside this packet's allowlist, so the loop should drop the entry.
+
+**Assumptions:**
+- A space seam in the scanner, not `""` (reason above).
+- The extra `inTheme` guard on the popup's dark axe audit is within item 2: it is the same dropped-override root cause, and without it that audit could pass against the light page.
+- Keeping the reviewer-named overlay flag even though the resize-quiet wait is what actually removes the label.
+
+**One thing to sharpen:** DevTools emulation on the real popup is not stable early in its life. Chrome drops a fresh `prefers-color-scheme` override at a late resize, and a viewport-size label from another overlay appears after resizes. Any P07-B/C e2e that emulates media or device metrics on the popup should go through `inTheme`-style verify-and-retry, and capture after a resize-quiet period. A one-shot set-then-poll is not enough.
 
 ### 2026-09-22 — Revision 1 (iter-003 implementer, Sonnet) — REVISE verdict, 8 issues + 9 fold-ins
 
