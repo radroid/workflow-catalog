@@ -20,6 +20,17 @@ describe("pairRequestSchema / pairResponseSchema", () => {
     expect(pairRequestSchema.safeParse({ code: "" }).success).toBe(false);
   });
 
+  // P01.1 packet: uncapped, a 300 KB body was valid under zod. P02's printed
+  // codes are short (at most 12 characters); 64 is comfortably above that.
+  it("accepts a code at exactly 64 characters and rejects one more", () => {
+    expect(pairRequestSchema.safeParse({ code: "a".repeat(64) }).success).toBe(true);
+    expect(pairRequestSchema.safeParse({ code: "a".repeat(65) }).success).toBe(false);
+  });
+
+  it("rejects a 300 KB code", () => {
+    expect(pairRequestSchema.safeParse({ code: "a".repeat(300_000) }).success).toBe(false);
+  });
+
   it("accepts a pairing response", () => {
     expect(pairResponseSchema.safeParse({ deviceId: uuid1, token: "opaque-device-token" }).success).toBe(
       true,

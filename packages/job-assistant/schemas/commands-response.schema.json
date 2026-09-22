@@ -65,7 +65,17 @@
                     },
                     "url": {
                       "type": "string",
-                      "pattern": "^https?:\\/\\/"
+                      "allOf": [
+                        {
+                          "pattern": "^(?!\\s)[\\s\\S]*(?<!\\s)$"
+                        },
+                        {
+                          "pattern": "^https?:\\/\\/"
+                        },
+                        {
+                          "pattern": "^https?:\\/\\/[^\\s/?#]+(?:[/?#]|$)"
+                        }
+                      ]
                     }
                   },
                   "required": [
