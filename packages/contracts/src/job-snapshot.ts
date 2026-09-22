@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { hexDigestSchema, isoDateTimeSchema, httpUrlSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
+import { hexDigestSchema, isoDateTimeSchema, httpUrlSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
 
 /**
  * mvp-spec §5: `jobs/<jobId>/snapshot-<rev>.json` — "structured" data only,

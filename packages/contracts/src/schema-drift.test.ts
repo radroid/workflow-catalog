@@ -2,8 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { SCHEMA_REGISTRY } from "./registry.js";
+import { SCHEMA_REGISTRY } from "./registry";
+import { generateSchemaDocument } from "./to-json-schema";
 
 /**
  * `pnpm --filter contracts build` regenerates
@@ -31,7 +31,7 @@ describe("committed JSON Schema files match SCHEMA_REGISTRY", () => {
         );
       }
 
-      const regenerated = `${JSON.stringify(z.toJSONSchema(entry.schema, { target: "draft-2020-12" }), null, 2)}\n`;
+      const regenerated = generateSchemaDocument(entry);
 
       expect(committed, `${entry.name}.schema.json is stale — run \`pnpm --filter contracts build\``).toBe(
         regenerated,

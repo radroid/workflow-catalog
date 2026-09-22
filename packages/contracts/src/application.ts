@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
+import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
 
 /**
  * F8: "Local UI board with stages Saved → Preparing → Ready → Applied →

@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
-import { sourceCategorySchema } from "./source.js";
+import { isoDateTimeSchema, nonEmptyStringSchema, uuidSchema } from "./primitives";
+import { sourceCategorySchema } from "./source";
 
 /**
  * mvp-spec §5, verbatim: "Claim `{ id, text, kind: fact|metric|title|date|credential,

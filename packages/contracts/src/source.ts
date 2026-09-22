@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { nonEmptyStringSchema } from "./primitives.js";
+import { nonEmptyStringSchema } from "./primitives";
 
 /**
  * The seven source categories from mvp-spec §3 F4 ("Onboarding by
