@@ -87,17 +87,27 @@ export function listen(app: Hono, port = BRIDGE_PORT): Promise<RunningBridge> {
   });
 }
 
-/** Runs every module's start hook; returns the stop functions in reverse order. */
+/**
+ * Runs every module's start hook; returns the stop functions in reverse order.
+ * When a hook fails, the modules already started are stopped, newest first,
+ * before the failure is thrown. A stop that fails is logged, and the rest
+ * still run.
+ */
 export async function startModules(ctx: RunnerContext, modules: readonly LoadedRouteModule[]): Promise<StopFunction[]> {
-  const stops: StopFunction[] = [];
+  const started: Array<{ name: string; stop: StopFunction }> = [];
   for (const { name, module } of modules) {
     if (!module.start) continue;
     try {
       const stop = await module.start(ctx);
-      if (typeof stop === "function") stops.unshift(stop);
+      if (typeof stop === "function") started.unshift({ name, stop });
     } catch (error) {
+      for (const done of started) {
+        await Promise.resolve()
+          .then(done.stop)
+          .catch((stopError: Error) => ctx.log.error(`server/routes/${done.name}.ts failed to stop: ${stopError.message}`));
+      }
       throw new Error(`server/routes/${name}.ts failed to start: ${(error as Error).message}`);
     }
   }
-  return stops;
+  return started.map(({ stop }) => stop);
 }

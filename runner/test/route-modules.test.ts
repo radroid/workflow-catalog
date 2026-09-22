@@ -3,7 +3,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { startModules } from "../server/app.ts";
-import { buildEventRegistry, loadRouteModules, RouteModuleError, validateRouteModule } from "../server/route-modules.ts";
+import {
+  buildEventRegistry,
+  defineRouteModule,
+  loadRouteModules,
+  RouteModuleError,
+  validateRouteModule,
+  type LoadedRouteModule,
+  type RouteModule,
+} from "../server/route-modules.ts";
 import { jobCapture, makeBridge, pairDevice, postEvent } from "./helpers.ts";
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "route-modules");
@@ -33,6 +41,38 @@ describe("route modules", () => {
     expect(started).toContain("beta-two");
     for (const stop of stops) await stop();
     expect(started).toContain("beta-two stopped");
+  });
+
+  it("stops the modules already started, newest first, when a later start hook fails", async () => {
+    const calls: string[] = [];
+    const starting = (name: string, start: NonNullable<RouteModule["start"]>): LoadedRouteModule => ({ name, module: defineRouteModule({ start }) });
+    const modules = [
+      starting("alpha", () => {
+        calls.push("alpha started");
+        return () => void calls.push("alpha stopped");
+      }),
+      starting("beta", () => {
+        calls.push("beta started");
+        return () => {
+          calls.push("beta stopping");
+          throw new Error("beta could not stop");
+        };
+      }),
+      starting("gamma", () => void calls.push("gamma started")), // no stop function
+      starting("delta", async () => {
+        calls.push("delta started");
+        return async () => void calls.push("delta stopped");
+      }),
+      starting("epsilon", async () => {
+        throw new Error("catch-up failed");
+      }),
+      starting("omega", () => void calls.push("omega started")),
+    ];
+    const bridge = await makeBridge();
+    await expect(startModules(bridge.ctx, modules)).rejects.toThrow(/epsilon\.ts failed to start: catch-up failed/);
+    // Newest first; a stop that throws is logged, and the ones before it still run.
+    expect(calls).toEqual(["alpha started", "beta started", "gamma started", "delta started", "delta stopped", "beta stopping", "alpha stopped"]);
+    expect(bridge.logs).toContain("server/routes/beta.ts failed to stop: beta could not stop");
   });
 
   it("refuses two modules that handle the same event type", async () => {
