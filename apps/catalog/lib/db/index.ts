@@ -5,7 +5,27 @@ import { neonDb } from "./neon-db";
 
 export type { Db, QueryResult, SqlRow } from "./types";
 
-let cached: Promise<Db> | null = null;
+// Cached on `globalThis`, not a module-level `let`. Under `next dev`
+// (Turbopack), a Route Handler and a Server Component can each end up as
+// separate bundled copies of this module — a module-level `let cached`
+// would then be two independent bindings, each lazily creating its OWN
+// PGlite client pointed at the same on-disk directory. Two live PGlite
+// instances against one directory silently diverge (each is its own
+// in-process WASM Postgres with no shared-buffer/WAL visibility across
+// instances the way a real server would have): a write through one client
+// is not guaranteed visible to a read through the other. That is exactly
+// how this served stale sessions in a live walkthrough — a signed-out
+// cookie still opened lessons, and a brand-new session was bounced —
+// because app/(gated)/learn/[...slug]/route.ts's copy of `getDb()` had
+// never seen what the page-rendering copy had written or revoked.
+// `globalThis` is the one JS object every bundled copy of this module
+// shares in the same process, in dev, in tests (see
+// tests/db/global-singleton.test.ts, which simulates the duplicate-module
+// scenario with `vi.resetModules()`), and in production (Neon's HTTP
+// driver is just as safe, and cheaper than rebuilding it per bundle too).
+declare global {
+  var __catalogDbPromise: Promise<Db> | undefined;
+}
 
 /**
  * Fail-closed driver selection, per docs/spec/implementation/P09-catalog-site.md:
@@ -20,10 +40,10 @@ let cached: Promise<Db> | null = null;
  * `DATABASE_URL` branch (neon-db.ts) ever executes there.
  */
 export function getDb(): Promise<Db> {
-  if (!cached) {
-    cached = createDb();
+  if (!globalThis.__catalogDbPromise) {
+    globalThis.__catalogDbPromise = createDb();
   }
-  return cached;
+  return globalThis.__catalogDbPromise;
 }
 
 async function createDb(): Promise<Db> {
@@ -58,5 +78,5 @@ function defaultPgliteDataDir(): string {
 
 /** Test-only: forces the next `getDb()` call to rebuild its driver from scratch. */
 export function resetDbCacheForTests(): void {
-  cached = null;
+  globalThis.__catalogDbPromise = undefined;
 }
