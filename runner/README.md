@@ -41,7 +41,16 @@ same test and stays the fallback.
 
 eve reads the model at runtime (`agent/lib/model.ts`), but its build also
 records the model id as metadata, so the launcher rebuilds whenever the
-provider or model differs from the last build (a stamp in `.output/`).
+provider or model differs from the last build (a stamp in `.output/`). The
+stamp also covers every source the build reads (`lib/build.ts`
+`buildInputsFor`):
+
+- `agent/`, `lib/` and `store/`
+- the adapter source and the package skills
+- `packages/contracts/src/`
+- the manifests and `pnpm-lock.yaml`
+
+So a `git pull` that changes any of them rebuilds on the next start.
 
 ## Install
 

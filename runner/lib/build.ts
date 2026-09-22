@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 import type { ModelSettings } from "../agent/lib/model.ts";
 import { writeJsonAtomic, readJsonFile } from "../store/atomic.ts";
 import { EVE_PIN } from "./package-info.ts";
-import { ADAPTER_DIR, EVE_OUTPUT_DIR, JOB_ASSISTANT_DIR, RUNNER_DIR } from "./paths.ts";
+import { ADAPTER_DIR, EVE_OUTPUT_DIR, REPO_ROOT, RUNNER_DIR } from "./paths.ts";
 
 /**
  * Builds for mode A (eve-spike.md): the adapter first (`eve extension build`,
@@ -56,35 +56,88 @@ export async function buildRunner(env: NodeJS.ProcessEnv): Promise<void> {
 
 const IGNORED_DIRS = new Set(["node_modules", ".eve", ".output", ".nitro", "dist", ".git"]);
 
-async function hashTree(hash: ReturnType<typeof createHash>, root: string, relative = ""): Promise<void> {
+/** A directory the build reads. `exclude` names top-level entries that are generated from another input. */
+export interface BuildTree {
+  readonly dir: string;
+  readonly exclude?: readonly string[];
+}
+
+export interface BuildInputs {
+  readonly trees: readonly BuildTree[];
+  readonly files: readonly string[];
+}
+
+/**
+ * Everything a build of the runner depends on, for the repo at `repoRoot`:
+ * - runner/agent/, and runner/lib/ and runner/store/, which agent code may
+ *   import (a tool enqueues commands with store/commands.ts, README
+ *   "Commands"). Agent code that imports from another runner directory must
+ *   add it here.
+ * - The adapter's source, and the package skills it copies in. Its
+ *   extension/skills/ is left out: the build makes it from the package skills.
+ * - packages/contracts/src/: eve compiles the contracts in from source, since
+ *   the package's exports point at src/.
+ * - The manifests, the runner's tsconfig, and pnpm-lock.yaml, which fixes
+ *   every dependency version eve bundles.
+ */
+export function buildInputsFor(repoRoot: string): BuildInputs {
+  const runner = path.join(repoRoot, "runner");
+  const jobAssistant = path.join(repoRoot, "packages", "job-assistant");
+  const adapter = path.join(jobAssistant, "adapters", "eve");
+  const contracts = path.join(repoRoot, "packages", "contracts");
+  return {
+    trees: [
+      { dir: path.join(runner, "agent") },
+      { dir: path.join(runner, "lib") },
+      { dir: path.join(runner, "store") },
+      { dir: path.join(adapter, "extension"), exclude: ["skills"] },
+      { dir: path.join(jobAssistant, "skills") },
+      { dir: path.join(contracts, "src") },
+    ],
+    files: [
+      path.join(runner, "package.json"),
+      path.join(runner, "tsconfig.json"),
+      path.join(adapter, "package.json"),
+      path.join(contracts, "package.json"),
+      path.join(repoRoot, "pnpm-lock.yaml"),
+    ],
+  };
+}
+
+export const BUILD_INPUTS = buildInputsFor(REPO_ROOT);
+
+async function hashTree(hash: ReturnType<typeof createHash>, tree: BuildTree, relative = ""): Promise<void> {
   let entries;
   try {
-    entries = await readdir(path.join(root, relative), { withFileTypes: true });
+    entries = await readdir(path.join(tree.dir, relative), { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (relative === "" && tree.exclude?.includes(entry.name)) continue;
     const child = path.join(relative, entry.name);
     if (entry.isDirectory()) {
-      if (!IGNORED_DIRS.has(entry.name)) await hashTree(hash, root, child);
+      if (!IGNORED_DIRS.has(entry.name)) await hashTree(hash, tree, child);
     } else if (entry.isFile()) {
       hash.update(`${child}\0`);
-      hash.update(await readFile(path.join(root, child)));
+      hash.update(await readFile(path.join(tree.dir, child)));
       hash.update("\0");
     }
   }
 }
 
-/** Everything a build depends on: the agent, the adapter source, the package skills, the manifests, the model. */
-export async function computeBuildStamp(model: ModelSettings): Promise<string> {
+/** A hash of every build input plus eve's pin and the model: the build stamp. */
+export async function computeBuildStamp(model: ModelSettings, inputs: BuildInputs = BUILD_INPUTS): Promise<string> {
   const hash = createHash("sha256");
   hash.update(`eve ${EVE_PIN}\0${model.provider}\0${model.model}\0`);
-  await hashTree(hash, path.join(RUNNER_DIR, "agent"));
-  await hashTree(hash, path.join(ADAPTER_DIR, "extension"));
-  await hashTree(hash, path.join(JOB_ASSISTANT_DIR, "skills"));
-  for (const file of [path.join(RUNNER_DIR, "package.json"), path.join(ADAPTER_DIR, "package.json"), path.join(RUNNER_DIR, "tsconfig.json")]) {
-    hash.update(`${file}\0`);
+  for (const [index, tree] of inputs.trees.entries()) {
+    hash.update(`tree ${index}\0`);
+    await hashTree(hash, tree);
+  }
+  for (const [index, file] of inputs.files.entries()) {
+    hash.update(`file ${index}\0`);
     hash.update(await readFile(file).catch(() => Buffer.alloc(0)));
+    hash.update("\0");
   }
   return hash.digest("hex");
 }
