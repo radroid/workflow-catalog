@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -19,8 +19,44 @@ describe("catalog theme wiring", () => {
     expect(themeCss).toMatch(/--background:/);
   });
 
-  it("globals.css remaps --font-sans and --font-mono to the next/font variables", () => {
-    expect(globalsCss).toMatch(/--font-sans:\s*var\(--font-geist-sans\)/);
-    expect(globalsCss).toMatch(/--font-mono:\s*var\(--font-geist-mono\)/);
+  it("globals.css remaps --font-sans and --font-mono to the next/font variables, with no extra generic fallback appended", () => {
+    // next/font's generated variable already ends in a full fallback chain
+    // (see geist's dist/mono.js: fallback: [..., "monospace"]), so the
+    // remap must not append another generic family after it — that's what
+    // produced the doubled "..., monospace, monospace" the P00 UI critique
+    // flagged. These regexes require the declaration to end right at the
+    // var(...) call (an optional space then ";"), not extend past it.
+    expect(globalsCss).toMatch(/--font-sans:\s*var\(--font-geist-sans\)\s*;/);
+    expect(globalsCss).toMatch(/--font-mono:\s*var\(--font-geist-mono\)\s*;/);
+  });
+
+  it("the font remap is declared explicitly under both :root and [data-theme=\"dark\"]", () => {
+    // theme.css's own [data-theme="dark"] block re-declares the bare
+    // "Geist, sans-serif" family names, so the remap must be explicit in
+    // dark mode too rather than relying on cascade order between two
+    // equal-specificity selectors (the P00 UI critique's other font note).
+    const darkBlockMatch = /\[data-theme="dark"\]\s*{([^}]*)}/.exec(globalsCss);
+    expect(darkBlockMatch, "globals.css must have its own [data-theme=\"dark\"] block").not.toBeNull();
+    const darkBlockBody = darkBlockMatch?.[1] ?? "";
+    expect(darkBlockBody).toMatch(/--font-sans:\s*var\(--font-geist-sans\)/);
+    expect(darkBlockBody).toMatch(/--font-mono:\s*var\(--font-geist-mono\)/);
+  });
+
+  it("sets -webkit-text-size-adjust: 100% on html", () => {
+    expect(globalsCss).toMatch(/-webkit-text-size-adjust:\s*100%/);
+  });
+
+  it("cards pair the hairline border with --shadow-sm", () => {
+    const cardRuleMatch = /\.card\s*{([^}]*)}/.exec(globalsCss);
+    expect(cardRuleMatch).not.toBeNull();
+    const body = cardRuleMatch?.[1] ?? "";
+    expect(body).toMatch(/border:\s*1px solid var\(--border\)/);
+    expect(body).toMatch(/box-shadow:\s*var\(--shadow-sm\)/);
+  });
+});
+
+describe("app icon", () => {
+  it("app/icon.svg exists, so /favicon.ico is no longer the only icon Chrome tries", () => {
+    expect(existsSync(path.join(here, "../app/icon.svg"))).toBe(true);
   });
 });
