@@ -1,9 +1,9 @@
 Latest: iter-005 in progress. The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
 
-Running now: three implementers (the P03 escalation, P08-A revision 1, and P07-B revision 3), one worktree each. The P03 round-2 reviewer and UI critic have finished; their worktrees and the pre-pause ones were clean and pushed, and were removed.
+Running now: the P03 escalation, P07-B revision 3, and the P08-A round-2 pair, one worktree each. The P03 round-2 reviewer and UI critic have finished; their worktrees and the pre-pause ones were clean and pushed, and were removed.
 - **P03 (#11):** round 2 returned REVISE from both (reviewer 6, UI critic 9). A fresh **Opus escalation implementer** is working the combined list and decisions D8–D16 in `logs/handoff/P03-round-2-review.md`. Round 3 follows.
 - **P07-B (#12):** round 3 on d0e2b2c: the reviewer returned REVISE (1 issue, README only; the code holds) and the UI critic REVISE (5 issues, messages and tone). Revision 3 went to the same Opus implementer with decisions H1–H4 (`logs/handoff/P07-B-round-3-review.md`). Round 4 is a narrow confirmation round.
-- **P08-A (#13):** round 1 returned REVISE from both (reviewer 5, UI critic 9). Revision 1 went to the same Sonnet implementer with decisions G1–G10 (`logs/handoff/P08-A-round-1-review.md`). This is its one round; a round-2 REVISE goes to a fresh Opus escalation.
+- **P08-A (#13):** revision 1 (G1–G10) reached 371cd63, CI green. Round 2 is running: an Opus reviewer and an Opus UI critic, with `logs/handoff/P08-A-round-1-review.md` as the checklist. A REVISE now goes to a fresh Opus escalation implementer.
 - **Then:** P04 after P03; P05 (Opus) after P04; P03.1 after P03 and P04; P08-B after P05. After that, the wave plan continues.
 
 If this session dies: every agent pushes its branch at green steps. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
