@@ -307,10 +307,13 @@ input[type="text"][aria-invalid="true"] {
 }
 
 /* P07-B revision 2 polish: commands in messages and labels (`npm run
- * pair`) in the mono face, as in the design reference. */
+ * pair`) in the mono face, as in the design reference, and never broken
+ * across lines (revision 1's "no mid-command wraps"): a command that
+ * doesn't fit moves to the next line whole. */
 code {
   font-family: var(--font-mono);
   font-size: 0.95em;
+  white-space: nowrap;
 }
 
 a {

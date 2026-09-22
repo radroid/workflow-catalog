@@ -49,7 +49,7 @@ import type { Locator, Page, Route } from "@playwright/test";
 import type { JobCapture } from "@workflow-catalog/contracts";
 import { DEVICE_TOKEN_TTL_MS } from "@workflow-catalog/runner/store/devices.ts";
 import { listen } from "@workflow-catalog/runner/server/app.ts";
-import { assertNoAxeViolations, expectEmptyRegionsCollapsed, expectHiddenReallyHidden, waitForDownload } from "./checks";
+import { assertNoAxeViolations, expectEmptyRegionsCollapsed, expectHiddenReallyHidden, expectNoSplitCommands, waitForDownload } from "./checks";
 import { expect, extensionDist, test } from "./fixtures";
 import { startFixtureServer, type FixtureServerHandle } from "./fixture-server";
 import {
@@ -583,6 +583,7 @@ async function captureOptionsBothWidths(page: Page, fileState: string): Promise<
   await expectHiddenReallyHidden(evaluate, `options ${fileState}`);
   for (const width of [1280, 390] as const) {
     await page.setViewportSize({ width, height: 800 });
+    await expectNoSplitCommands(evaluate, `options ${fileState} (${width})`);
     const theme = pageThemeTarget(page, `options-${fileState}-${width}`);
     await inTheme(theme, "light", () => assertNoAxeViolations(evaluate, `options ${fileState} (light, ${width})`));
     await captureInTheme(theme, "light", `P07B-options-${fileState}-light-${width}.png`, screenshotPath);
@@ -599,6 +600,7 @@ async function auditAndCapturePopup(popup: RawCdpSession, fileState: string): Pr
   const evaluate = (expression: string): Promise<unknown> => popup.evaluate(expression);
   await expectEmptyRegionsCollapsed(evaluate, `popup ${fileState}`);
   await expectHiddenReallyHidden(evaluate, `popup ${fileState}`);
+  await expectNoSplitCommands(evaluate, `popup ${fileState}`);
   const popupTheme = popupThemeTarget(popup);
   await inTheme(popupTheme, "light", () => assertNoAxeViolations(evaluate, `popup ${fileState} (light)`));
   await captureInTheme(popupTheme, "light", `P07B-popup-${fileState}-light.png`, screenshotPath);

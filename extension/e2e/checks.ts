@@ -97,3 +97,15 @@ export async function expectEmptyRegionsCollapsed(evaluate: Evaluate, label: str
   const offenders = (await evaluate(EMPTY_REGIONS_MISBEHAVING)) as unknown[];
   expect(offenders, `${label}: empty message areas that take space, draw a border, or left the page`).toEqual([]);
 }
+
+/** P07-B revision 2 polish: a command in a message (`npm run runner`) is
+ * never broken across two lines -- a `<code>` element with more than one
+ * line box was split by a wrap. */
+const SPLIT_COMMANDS = `Array.from(document.querySelectorAll("code"))
+  .filter((code) => code.getClientRects().length > 1)
+  .map((code) => code.textContent)`;
+
+export async function expectNoSplitCommands(evaluate: Evaluate, label: string): Promise<void> {
+  const split = (await evaluate(SPLIT_COMMANDS)) as string[];
+  expect(split, `${label}: commands broken across lines`).toEqual([]);
+}
