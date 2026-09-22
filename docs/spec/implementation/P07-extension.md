@@ -1,7 +1,7 @@
 # P07 · Chrome extension
 
-Status: open (part A done iter 003, PR #7, squash bc55bb3; parts B and C pending)
-Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus)
+Status: claimed (part B)
+Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus); part B iter-004 implementer (Sonnet)
 Blocked by: P02 (pairing and bridge), P06 (manifests and commands)
 Owns: extension/
 Spec: F6 (capture path), F9, §7 rule 3, browser-boundary.md (all sections; the nine gates are this packet's definition of done)
