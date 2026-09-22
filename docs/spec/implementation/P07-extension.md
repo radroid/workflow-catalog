@@ -27,6 +27,251 @@ Form filling, uploads, submission, cookies, native messaging.
 
 ## Report
 
+### 2026-09-22 — Part B (iter-004 implementer, Sonnet)
+
+Scope was **part B**: real pairing and `job_capture` against the P02
+bridge, which landed mid-packet (`9a0c5b7`, confirmed via `runner/`'s own
+tests no longer printing a placeholder line). Part A (merged, `bc55bb3`)
+and part C (sessions, tab groups, side panel — out of scope, nothing part
+B touches blocks it) are untouched. Branch `packet/P07-B` off
+`overnight/integration` at `dc36fc0`; head `e92ade1` across 9 commits
+(`a96bae2` claim … `e92ade1` the CI step; this report is the next commit).
+
+**What was built** (the six part-B deliverables):
+1. **Real pairing.** `options/main.ts`'s Pairing form now posts to the
+   real `POST /pair` via `shared/bridge-client.ts`'s `createBridgeClient()`
+   (replacing part A's network-free stub), stores `{deviceId, token,
+   pairedAt}` in `chrome.storage.session` only, shows an abbreviated
+   device id (full id in `title`), and Un-pair forgets the token,
+   announces "Un-paired.", and links to `http://127.0.0.1:4310/ui/status`
+   for the actual server-side revocation.
+2. **`GET /status`** on the options page: connected/version/workspace on
+   success, and one of four distinct, announced, recoverable states — not
+   paired, runner not running (`network_error`), 401 (re-pair), 403
+   (re-pair), 429 (wait, `npm run pair`) — via `statusFailureMessage()`.
+3. **`job_capture` delivery.** Save always writes the local
+   `job-capture.json` download first (unconditional fallback), then posts
+   to the bridge: reachable+accepted (including a replayed `duplicate:
+   true`) reads as one "saved and sent" success; not-paired says so
+   without queuing (retrying can't help until a person pairs); any other
+   failure (`network_error` or an HTTP error) queues the exact same
+   `JobCapture` object (same `eventId`, so a later retry is a replay the
+   bridge recognizes) in `chrome.storage.session` via `shared/outbox.ts`
+   and arms a `chrome.alarms` retry (0.5 min → ×2 backoff → 30 min cap,
+   idempotent by alarm name, re-armed on worker startup if anything's
+   still queued) — delivered exactly once.
+4. **`BridgeClient` errors** now carry `{status?, code, message}`
+   (`BridgeError`), not just a string — every call site (pairing, status,
+   job_capture) branches on `code`/`status`, never a string match.
+5. **Jobs link** fixed to `http://127.0.0.1:4310/ui/jobs` (P02's local UI
+   serves `/ui/<name>`, not a literal `.html` file — part A had guessed at
+   the latter before P02 existed to check against).
+6. **Six part-A-review carry-forwards**, all in `7562028`: the `.popup h1`
+   rule that silently overrode `.eyebrow`; `dl.kv`'s UA margin; a visible
+   scroll cue on the excerpt; `<main>` around the side panel; the
+   `scan-dist-for-eval.mjs` lookbehind now also catches
+   `globalThis.Function(`/`self.Function(`; and (`4555fa2`, after
+   stress-testing surfaced two more real races beyond what that carry-
+   forward originally covered) the options page's dark axe audit now goes
+   through the same guarded `inTheme` retry the popup already used, plus a
+   new regression guard (`assertNoDevToolsLabelTopRight`) that a captured
+   screenshot's top-right corner never shows a leaked DevTools viewport-
+   size label.
+7. **One CI step** (`.github/workflows/ci.yml`, `e92ade1`): installs
+   Playwright's chromium channel with OS deps, builds the extension, runs
+   `test:e2e` — nothing else in that file touched, no secrets.
+
+**Contracts ask (flagged, not invented around):** `PairResponse`
+(`packages/contracts/src/bridge-http.ts`) is `{deviceId, token}` — the
+bridge never issues a device *name*. The options page shows an
+abbreviated `deviceId` instead (`shared/storage.ts`'s own comment says
+so). A real device name (e.g. "Chrome on macOS") in `PairResponse` would
+let Un-pair/the paired-device view show something a person actually
+recognizes, instead of a UUID fragment.
+
+**Acceptance gates, automated against the REAL P02 bridge** (not a fake)
+— two layers: `src/shared/bridge-client.realbridge.test.ts` (vitest,
+drives `createBridgeClient()` directly against a real listening bridge, no
+browser) and `e2e/bridge-e2e.spec.ts` (Playwright, drives the real
+options/popup pages against a real listening bridge — proving a person
+actually SEES the right thing, not just that the client call resolves).
+Both start `@workflow-catalog/runner`'s real `createBridgeApp`/`listen()`
+against a fresh `os.tmpdir()` workspace per test
+(`e2e/real-bridge-harness.ts`, shared by both, extracted in `81a6afd` so
+this isolation is audited in one place). HOME/keychain: checked, see
+below.
+
+- **Gate 1 (replay).** vitest: the same `job_capture` sent twice →
+  `duplicate:false` then `duplicate:true`, journaled once; a 3×-retried
+  "outbox" resend still reads as success every time, journaled once. UI: a
+  real Save against a real, reachable, paired bridge shows exactly one
+  "Saved job-capture.json and sent it to the runner." (button "Saved ✓"),
+  and the bridge's own journal has exactly one entry.
+- **Gate 4 (offline/reconnect).** UI only — this is extension-side
+  queueing behaviour vitest's client-only harness can't exercise: Save
+  while the bridge is down shows "The runner isn't reachable right now —
+  it'll be sent automatically once it's back."; the capture sits in
+  `chrome.storage.session`'s `jobCaptureOutbox`. The bridge is restarted
+  (same workspace/device, same port); a *real* `chrome.alarms` retry
+  (genuinely waited out, ~30s, never simulated) delivers it — confirmed
+  via the bridge's own journal gaining the entry and the client's own
+  queue emptying to 0.
+- **Gate 6 (two devices + revoke + expired).** vitest: device A revoked →
+  401 `token_invalid` on its next call, device B (different origin)
+  unaffected; a 30-day-old token (`ManualClock.advance`) → 401. UI: the
+  Status section shows "Your pairing has expired or was revoked. Pair
+  again above." for both the revoked and the (clock-advanced) expired
+  case.
+- **Gate 7 (oversized/hostile-as-data).** vitest: a 300 KB `text`
+  (deliberately bypassing the extension's own pre-send cap) gets 413 from
+  the bridge itself — defence in depth, not just client-side trust; an
+  instruction-shaped hostile string round-trips through the real bridge
+  byte-for-byte, journaled verbatim, never interpreted. (This gate's third
+  named item, non-http URLs, is `boundedHttpUrlSchema`'s job
+  (`packages/contracts/src/primitives.ts`) — already proven at the schema
+  level (`primitives.test.ts`), the bridge level
+  (`runner/test/bridge.test.ts`, a `javascript:` URL → 400), and the
+  client level (`extension/src/shared/url.test.ts`) by other packets/
+  parts; not retested here to avoid duplicating coverage under a different
+  name.)
+- **Gate 9 (part): runner down, wrong extension id.** UI: "runner down" —
+  Status shows "Can't reach the runner. Is it running? Start it with `npm
+  run runner`." "Wrong extension id" turned out to only be provable
+  through `job_capture`'s `POST /events`, not the options page's `GET
+  /status`: Chrome sends no `Origin` header at all on a GET
+  (`runner/server/extension-api.ts`'s own comment says so), so a
+  mismatched-origin token is indistinguishable from a valid one to
+  `/status` — found the hard way, when an earlier version of this test
+  asserted a 403 the real bridge correctly never sent. Rerouted through
+  the popup's Save instead: a token paired at this bridge under a
+  different (fictional) origin, presented from the real extension's own
+  (different, genuine) Origin on a real POST, shows the same safe "queued,
+  will retry" state — and the bridge's journal stays empty, proving the
+  rejection actually happened server-side. vitest separately proves the
+  bridge's own 403 `origin_not_allowed` directly (a Node-side spoofed
+  Origin, `withChromeOrigin`, standing in for what Chrome already
+  guarantees on a real POST).
+
+**HOME/keychain/live-model isolation (checked, per a mid-task
+clarification from the orchestrator):** `e2e/real-bridge-harness.ts` and
+`bridge-client.realbridge.test.ts` import only five things from
+`@workflow-catalog/runner`: `server/app.ts`, `server/context.ts`,
+`lib/clock.ts`, `store/workspace.ts`, `store/devices.ts` — never
+`cli/setup.ts`, `cli/doctor.ts`, `cli/runner.ts`, or `lib/secret-store.ts`.
+Checked one level deeper too, not just by filename: `store/devices.ts`'s
+own only non-relative-utility import is `lib/crypto.ts`, which imports
+nothing but `node:crypto`; the other four files' own `import` lines
+contain no reference to any secret/cli/keychain/homedir-shaped module.
+`Workspace.create` is called with an explicit path built from a fresh
+`mkdtemp(os.tmpdir())` subdirectory every time, never anything derived
+from `os.homedir()`; `createRunnerContext` is called directly, with no
+secret store and no model/`eve` gateway argument at all, so nothing
+reachable from these files can read the real keychain or dispatch a real
+model call. The bridge bound `127.0.0.1:4310` only, and `lsof -ti
+tcp:4310 -sTCP:LISTEN` was empty before and after every run in this
+packet, including the final one below.
+
+**Full verification chain, real output (at `e92ade1`, before this report
+commit):**
+```
+pnpm install --frozen-lockfile  → up to date
+pnpm typecheck (pnpm -r typecheck) → clean: contracts, job-assistant/adapters/eve,
+  apps/catalog, job-assistant, runner, extension
+pnpm test (pnpm -r test && node --test scripts/*.test.mjs) →
+  contracts 235/235, job-assistant 151/151, runner 153/153 (+ 4 evals, 20 gates),
+  apps/catalog 139/139, extension 184/184, root check-fixtures.test.mjs 2/2
+pnpm -r lint → clean (contracts, adapters/eve, runner, apps/catalog, job-assistant, extension)
+pnpm check:fixtures → exit 0, no offenses
+pnpm --filter @workflow-catalog/extension build → dist/ scan clean: no eval,
+  new Function, or remote script/import found.
+pnpm --filter @workflow-catalog/extension test:e2e → 19 passed (47.7s)
+pnpm --filter @workflow-catalog/extension test:e2e → 19 passed (47.1s)   # run 2/2
+git status --porcelain → (empty)
+lsof -ti tcp:4310 -sTCP:LISTEN → (empty)
+```
+e2e went from 9 tests (part A) to 19: 4 in `extension.spec.ts`
+(unchanged), 5 in `real-popup.spec.ts` (unchanged behaviourally — its
+theme/screenshot machinery moved into `e2e/theme-capture.ts` so
+`bridge-e2e.spec.ts` could reuse the same, already-hardened protections
+instead of re-deriving them), 10 new in `bridge-e2e.spec.ts` (7
+acceptance-gate UI proofs + 3 screenshot captures). The full suite (in its
+various sizes as it grew across this session) passed well beyond the two
+runs required here — well over a dozen consecutive full-suite runs total
+across development, after finding and fixing three real races (one
+pre-existing in the SPA-mismatch test, two in this session's own new
+theme/screenshot code — all documented in commit `4555fa2`) and two bugs
+specific to the new UI-layer tests (commit `e165677`: an un-awaited
+`chrome.storage.session.set` racing a `page.reload()`, and a
+pairing-then-status assertion racing `options/main.ts`'s own second,
+separately-fetched `refreshStatusSection()` call).
+
+**Screenshots.** `docs/screenshots/P07B-{options-paired,options-error,
+popup-saved}-{light,dark}.png`, taken with `P07B_UPDATE_SCREENSHOTS=1`;
+each is only written once proven to show the right theme and no leaked
+DevTools label (`theme-capture.ts`'s `captureInTheme`). Confirmed the
+directory held no `P07B-*` files before any run, held exactly these 6
+after the one gated run, and that two subsequent un-gated reruns left
+their checksums byte-identical (a normal run cannot reach
+`committedScreenshotsDir` at all — `screenshotPath()`'s branch on the env
+var is the only path there). Visually spot-checked all three states.
+
+**What was skipped, and why.**
+- All of part C — `GET /commands` polling/alarm, tab groups, side panel
+  content, restore, the closed-tab/"success-looking page" gate (8), the
+  worker-kill/restart gates (2, 3) — explicitly out of part B's scope per
+  this packet's header and my own task brief.
+- The manual smoke-test checklist in `extension/README.md` (already
+  updated with part B's pairing/status/offline-queue steps) is **not
+  personally walked through in a branded-Chrome GUI session** — the same
+  environment limitation part A's report flagged: no interactive browser
+  here to drive by hand.
+- Gate 7's "non-http URLs" item: already covered elsewhere (see that
+  gate's writeup above) — not retested here to avoid duplicating another
+  packet's/part's coverage under a different name.
+
+**Assumptions.**
+- Fictional data only throughout (`Northwind Labs`, `jobs.example`; the
+  two `chrome-extension://` test origins are the same illustrative ones
+  `runner/test/helpers.ts` already uses for its own bridge tests).
+- Gate 9's "wrong extension id" is proven via a token paired under a
+  *different, fictional* origin, injected into `chrome.storage.session`
+  directly, then presented from the real extension's own real Origin —
+  not two genuinely separate Chrome extension installs (would need a
+  second full browser launch just to reproduce what the bridge's own
+  Origin check already proves at the network layer, in
+  `bridge-client.realbridge.test.ts`'s existing gate-9 vitest case).
+- Every `postEvent` failure that isn't `not_paired` is treated as
+  recoverable-by-queueing by the popup (existing part-B design, not new
+  this session) — so a 403 from a mismatched device and a genuine network
+  outage render identically to a person. Acceptable against gate 9's own
+  bar ("produce clear recoverable states"), not "produce a *diagnostic*
+  state" — worth a second look if a future packet wants the two
+  distinguished.
+- `job_capture` has no handler until P04 (`runner/README.md`); every
+  "success" checked here is the bridge's own journal-and-acknowledge
+  contract (`ok:true`, whatever `outcome` P02 currently returns), not a
+  completed downstream action.
+
+**One thing to sharpen.** Gate 4's real ~30 s `chrome.alarms` wait relies
+on Chrome not clamping a short alarm delay for an *unpacked* extension
+(the same exemption `shared/outbox.ts`'s own comment already cites from
+browser-boundary.md, there for a different reason). Verified locally,
+consistently, across every run in this report's own chain plus many more
+during development — never once late or missing within the ~31 s window
+in this environment — but never yet run in this repo's actual GitHub
+Actions CI (`ubuntu-latest`), a different machine class than whatever ran
+here. If it turns out flaky there specifically, the fix is almost
+certainly a larger polling budget in `bridge-e2e.spec.ts`'s gate-4 test
+(already generous, 60 s), not the alarm delay itself — worth watching `gh
+pr checks` for on this PR before assuming it's settled everywhere.
+
+Files changed (verified via `git diff --stat` against the merge-base,
+`dc36fc0`): `extension/**`, `.github/workflows/ci.yml` (one step),
+`docs/screenshots/P07B-*.png`, this packet file, and `pnpm-lock.yaml`
+(pnpm-managed only, from `pnpm install` adding the runner devDependency —
+landed in `6dc0977`, unchanged since). Nothing in `packages/contracts/`
+or `runner/` touched.
+
 ### 2026-09-22 — Revision 2 (iter-003, Opus escalation)
 
 Opus escalation after the Sonnet implementer's one revision round. The reviewer's second pass verified 7 of its 8 earlier issues as fixed and found 2 remaining issues plus test-validity follow-ups. All are fixed on `packet/P07-A`: `3bf8823` (item 1), `6d87bed` (3b), `8cb51b2` + `dc11be2` (item 2), `c6051da` (3a), then this report. No merge from `overnight/integration`. Touched only `extension/**`, `docs/screenshots/P07A-popup-{dark,light}.png`, and this file. The manifest is unchanged: exactly six permissions and one host permission.
