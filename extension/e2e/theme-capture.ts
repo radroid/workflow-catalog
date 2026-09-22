@@ -392,8 +392,20 @@ function assertNoDevToolsLabelTopRight(png: Buffer, fileName: string): void {
  * for that, not a second removal mechanism, so retake the screenshot (a
  * fresh AFTER_RESIZE_QUIET wait, then a fresh screenshot) a few times
  * before actually failing -- the same "retry the arrange, not the
- * assertion" shape as ensureColorScheme. A brightness mismatch is a
- * different, non-timing failure and is never retried. */
+ * assertion" shape as ensureColorScheme.
+ *
+ * A brightness mismatch gets the same treatment, not a different one:
+ * `inTheme`'s own "before" verifyTheme call already proved the theme was
+ * right immediately before this action started, so a wrong brightness here
+ * means the same spurious drop ensureColorScheme documents recurred mid-
+ * capture (or produced a stale frame), not a markup/CSS regression --
+ * confirmed for real in CI (PR #12, P07A-popup-dark.png, mean RGB 252 where
+ * dark was expected, on a 2-worker Linux runner that never reproduced
+ * locally across 20+ 4-worker runs). This used to be left unretried on the
+ * theory that it was always a real regression; that theory was wrong. Each
+ * retry re-forces the colour scheme via ensureColorScheme (the same repair
+ * verifyTheme itself uses) before retaking the shot, bounded by the same
+ * maxAttempts as the label check below. */
 export async function captureInTheme(
   target: ThemeTarget,
   theme: Theme,
@@ -408,7 +420,14 @@ export async function captureInTheme(
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       capture = await target.capture();
       const brightness = topLeftBrightness(capture);
-      expect(brightness >= 128 ? "light" : "dark", `${fileName}: captured background, mean RGB ${brightness}`).toBe(theme);
+      const observed: Theme = brightness >= 128 ? "light" : "dark";
+      if (observed !== theme) {
+        if (attempt === maxAttempts - 1) {
+          expect(observed, `${fileName}: captured background, mean RGB ${brightness}`).toBe(theme);
+        }
+        await ensureColorScheme(target, theme);
+        continue;
+      }
       try {
         assertNoDevToolsLabelTopRight(capture, fileName);
         return capture;
