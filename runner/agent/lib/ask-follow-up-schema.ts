@@ -3,10 +3,12 @@ import { z } from "zod";
 
 /**
  * `ask_follow_up`'s input/output shape and description. Split out from
- * `ask-follow-up-workflow.ts` on purpose — see `extract-claims-schema.ts`'s
- * header comment for why (this file has no `"use step"`/`"use workflow"`
- * directive, so eve's bundler takes the fast, directive-free path for it
- * regardless of which app root imports it).
+ * `agent/tools/ask_follow_up.ts` (P03 revision-1 report nit: this comment
+ * previously named an `ask-follow-up-workflow.ts` that never existed) on
+ * purpose — see `extract-claims-schema.ts`'s header comment for why (this
+ * file has no `"use step"`/`"use workflow"` directive, so eve's bundler
+ * takes the fast, directive-free path for it regardless of which app root
+ * imports it).
  */
 
 export const askFollowUpInputSchema = z

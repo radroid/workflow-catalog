@@ -23,6 +23,7 @@ import type { FixtureHandler } from "../fixture-registry.ts";
 export const ONBOARDING_FIXTURE_PROMPTS = {
   extractResume: "fixture: extract claims from the resume",
   extractHostileResume: "fixture: extract claims from the hostile resume",
+  extractFabricatedQuote: "fixture: extract a claim whose evidence quote is fabricated, not real",
   askFollowUp: "fixture: ask the follow-up question for the pending claim",
 } as const;
 
@@ -91,6 +92,24 @@ export const HOSTILE_EXTRACTION_CLAIMS = [
   },
 ] as const;
 
+/**
+ * P03 revision 1, R5: a claim whose `evidenceQuote` is not a real substring
+ * of any onboarding-extraction fixture text (`resume.md` or the hostile
+ * resume above) — a fabrication the model might draft even in good faith
+ * (paraphrasing instead of quoting). Reviewer-verified gap: before this
+ * existed, replacing `extract_claims`'s quote-verification condition with
+ * `if (true)` still left the eval passing every check, because every quote
+ * in every other fixture here already is real, so nothing ever exercised
+ * the rejection branch. `onboarding-extraction.eval.ts`'s third scenario
+ * sends only this claim and asserts it is rejected, not persisted.
+ */
+export const RESUME_FABRICATED_CLAIM = {
+  text: "Personally wired the entire payments ledger by hand over one weekend.",
+  kind: "fact",
+  evidenceRef: "resume.md#senior-platform-engineer-northwind-labs",
+  evidenceQuote: "Personally wired the entire payments ledger by hand over one weekend",
+} as const;
+
 function toolCallResponse(name: string, input: unknown): MockModelResponse {
   return { toolCalls: [{ name, input }] };
 }
@@ -106,6 +125,12 @@ export const respond: FixtureHandler = (request: MockModelRequest, prompt: strin
     // A hostile source produces claims only: this scripted turn never asks
     // for any tool but extract_claims, whatever the source text says.
     if (!done) return toolCallResponse("extract_claims", { sourceCategory: "resume", claims: HOSTILE_EXTRACTION_CLAIMS });
+    const last = request.toolResults.at(-1);
+    return `extracted: ${JSON.stringify({ name: last?.name, isError: last?.isError, output: last?.output })}`;
+  }
+
+  if (prompt === ONBOARDING_FIXTURE_PROMPTS.extractFabricatedQuote) {
+    if (!done) return toolCallResponse("extract_claims", { sourceCategory: "resume", claims: [RESUME_FABRICATED_CLAIM] });
     const last = request.toolResults.at(-1);
     return `extracted: ${JSON.stringify({ name: last?.name, isError: last?.isError, output: last?.output })}`;
   }

@@ -1,4 +1,5 @@
 import { defineWorkflowTool } from "eve/tools";
+import { verifyAndPersistExtractedClaims } from "../lib/extract-claims-logic.ts";
 import { type ExtractClaimsInput, extractClaimsInputSchema, extractClaimsOutputSchema, type ExtractClaimsOutput, extractClaimsToolDescription } from "../lib/extract-claims-schema.ts";
 import { openStore } from "../lib/onboarding-store.ts";
 
@@ -20,36 +21,27 @@ import { openStore } from "../lib/onboarding-store.ts";
  * the same (category, evidence ref, evidence quote) triple adds nothing new
  * (`profile-reducer.ts`'s `extractClaims` action).
  *
- * The schemas live in `../lib/extract-claims-schema.ts`, freely shared with
- * `eval-agent/agent/tools/extract_claims.ts` (that file's header comment
- * says why: they carry no workflow/step directive). This file's own
- * `"use workflow"` executor and `"use step"` helper stay inline and are
- * necessarily duplicated once per eve app root — empirically, eve's
- * workflow bundler only recognises and registers a directive when it marks
- * a literal function declared in the file it is scanning, not one merely
- * referenced via import (see this repo's P03 report for how that was
- * traced and confirmed against eve's own compiled source).
+ * The schemas live in `../lib/extract-claims-schema.ts`, and the actual
+ * verify-then-persist logic in `../lib/extract-claims-logic.ts`, both
+ * freely shared with `eval-agent/agent/tools/extract_claims.ts` (those
+ * files' header comments say why: they carry no workflow/step directive).
+ * This file's own `"use workflow"` executor and `"use step"` wrapper stay
+ * inline and are necessarily duplicated once per eve app root —
+ * empirically, eve's workflow bundler only recognises and registers a
+ * directive when it marks a literal function declared in the file it is
+ * scanning, not one merely referenced via import (see this repo's P03
+ * report for how that was traced and confirmed against eve's own compiled
+ * source). Until P03 revision 1 (R5) this file's `"use step"` function held
+ * the real verify-then-persist logic directly, duplicated verbatim in
+ * eval-agent's copy of this file; it is now a thin wrapper so the logic
+ * itself is written, and tested, exactly once.
  */
 
-/** "use step": verifies every evidence quote against the real source text, then persists. */
+/** "use step": opens the live store and hands off to the shared, directive-free verify-then-persist logic. */
 async function persistExtractedClaims(input: ExtractClaimsInput): Promise<ExtractClaimsOutput> {
   "use step";
   const store = await openStore();
-  const sourceText = await store.sourceText(input.sourceCategory);
-  const verified: ExtractClaimsInput["claims"] = [];
-  const rejected: string[] = [];
-  for (const claim of input.claims) {
-    if (sourceText.includes(claim.evidenceQuote)) verified.push(claim);
-    else rejected.push(claim.evidenceQuote);
-  }
-  if (verified.length === 0) {
-    return { added: 0, rejected, message: rejected.length > 0 ? "No claim's evidence quote was found in the source text; nothing was added." : "No claims supplied." };
-  }
-  const result = await store.extractClaims(
-    input.sourceCategory,
-    verified.map((claim) => ({ text: claim.text, kind: claim.kind, evidenceRef: claim.evidenceRef, evidenceQuote: claim.evidenceQuote })),
-  );
-  return { added: result.added, rejected, message: result.message };
+  return verifyAndPersistExtractedClaims(input, store);
 }
 
 export default defineWorkflowTool({
