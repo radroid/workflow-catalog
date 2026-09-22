@@ -1,7 +1,7 @@
 # P00 · Repository scaffold and loop protocol
 
-Status: open
-Assignee: none
+Status: claimed
+Assignee: iter-001 implementer (Sonnet)
 Blocked by: none
 Owns: repo root (package.json, pnpm-workspace.yaml, tsconfig.base.json, .github/, .loop/, docs/, apps/catalog/ skeleton, runner/ placeholder, packages/*/ placeholders, extension/ placeholder)
 Spec: §2 layout, §6 theme
