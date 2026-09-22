@@ -23,6 +23,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # actions/checkout persists the job's contents:write token into
+          # .git/config by default, readable by every later step (and
+          # anything a step shells out to) for the rest of the job — more
+          # exposure than this job needs. Only "Create the GitHub release"
+          # actually uses the token, and it gets its own copy explicitly via
+          # env: GITHUB_TOKEN, not by reading it back out of git's config.
+          persist-credentials: false
 
       # actions/checkout@v7, pnpm/action-setup@v6, and actions/setup-node@v7
       # all declare `using: node24` (checked against each action's own
