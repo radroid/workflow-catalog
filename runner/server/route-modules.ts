@@ -134,7 +134,12 @@ export async function loadRouteModules(dir: string): Promise<LoadedRouteModule[]
   const loaded: LoadedRouteModule[] = [];
   for (const file of files) {
     const name = file.slice(0, -".ts".length);
-    const imported = (await import(pathToFileURL(path.join(dir, file)).href)) as { default?: unknown };
+    let imported: { default?: unknown };
+    try {
+      imported = (await import(pathToFileURL(path.join(dir, file)).href)) as { default?: unknown };
+    } catch (error) {
+      throw new RouteModuleError(`server/routes/${file} failed to load: ${(error as Error).message}`);
+    }
     loaded.push({ name, module: validateRouteModule(name, imported.default) });
   }
   return loaded;

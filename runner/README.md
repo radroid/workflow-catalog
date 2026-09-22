@@ -83,7 +83,7 @@ write `pnpm run setup`: a bare `pnpm setup` is pnpm's own command.
 | `setup` | Checks Node 24, chooses the workspace, connects the provider, writes `runner/.env.local`, prints a pairing code. Asks questions in a terminal; `--yes` never asks. |
 | `setup -- --forget` | Lists, then removes, everything the runner stored (see Uninstall). `--dry-run` only lists; `--keep-workspace` keeps your data. |
 | `doctor` | The install checklist. `--json` for machines, `--live` to verify the model with one short call. Exits 1 while a required item fails. |
-| `runner` | Builds when needed, then starts eve and the bridge on loopback. Ctrl-C or SIGTERM stops both. |
+| `runner` | Builds when needed, then starts eve and the bridge on loopback. Ctrl-C or SIGTERM stops both, even during startup (`lib/launcher.ts`: route modules load and the bridge is built before eve is spawned, so a startup failure never leaves eve running). |
 | `pair` | A new pairing code (10 minutes, single use). |
 | `ui` | A new one-time sign-in link for the local UI. |
 | `eval` | `eve eval --strict` on the fixture agent (no model, no credentials). |
@@ -438,7 +438,7 @@ eval-agent/       the eval fixture: its own eve app root on mockModel, with eval
 server/           the bridge: app.ts, extension-api.ts, events.ts, local-ui.ts, route-modules.ts,
                   context.ts, eve-gateway.ts, http.ts, routes/ (status, devices, pairing, model)
 store/            the workspace and the runner's own stores
-lib/              settings, the .env.local file, secrets, codex, doctor, setup, uninstall, builds
+lib/              settings, the .env.local file, secrets, codex, doctor, setup, uninstall, builds, the launcher
 cli/              the npm scripts
 ui/               the local UI pages and assets
 test/             vitest suites and fixtures

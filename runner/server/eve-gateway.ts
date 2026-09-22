@@ -10,6 +10,7 @@ import { Client, type MessageResult } from "eve/client";
  */
 export const EVE_HOST = "127.0.0.1";
 export const EVE_PORT = 3210;
+const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 
 export interface EveHealth {
   readonly ok: boolean;
@@ -81,11 +82,21 @@ export function createEveGateway(options: { readonly password: string; readonly 
     url,
     client,
     async health() {
+      // client.health() takes no abort signal (eve 0.63.0 client.d.ts), so
+      // bound the wait here: a hung check must not stall the launcher's
+      // startup timeout.
+      let timer: NodeJS.Timeout | undefined;
+      const timedOut = new Promise<EveHealth>((resolve) => {
+        timer = setTimeout(() => resolve({ ok: false, detail: `No answer within ${HEALTH_CHECK_TIMEOUT_MS / 1000} s.` }), HEALTH_CHECK_TIMEOUT_MS);
+      });
+      const checked = client.health().then(
+        (result): EveHealth => ({ ok: result.ok === true && result.status === "ready" }),
+        (error: Error): EveHealth => ({ ok: false, detail: shorten(error.message) }),
+      );
       try {
-        const result = await client.health();
-        return { ok: result.ok === true && result.status === "ready" };
-      } catch (error) {
-        return { ok: false, detail: shorten((error as Error).message) };
+        return await Promise.race([checked, timedOut]);
+      } finally {
+        clearTimeout(timer);
       }
     },
     modelId,
