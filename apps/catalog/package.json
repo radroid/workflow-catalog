@@ -11,6 +11,8 @@
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@neondatabase/serverless": "1.1.0",
     "geist": "1.7.2",
     "next": "16.3.5",
     "react": "19.3.0",

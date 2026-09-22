@@ -16,6 +16,19 @@ const nextConfig: NextConfig = {
   // dev/build. This repo's CLAUDE.md hierarchy is deliberate (see root
   // CLAUDE.md and docs/spec/); do not let Next generate a second, stray one.
   agentRules: false,
+  // Keeps the dev-mode route badge out of acceptance screenshots (see
+  // CLAUDE.md's screenshot authorization and P09-catalog-site.md §5).
+  devIndicators: false,
+  // docs/learn lives outside apps/catalog (two levels above this project
+  // root); /learn and /learn/[...slug] read it with fs at request time, so
+  // the production build's file trace needs to be told about it explicitly
+  // or Vercel would not upload those files. Include values are resolved
+  // from this project's root (apps/catalog), not from outputFileTracingRoot
+  // above — see the outputFileTracingIncludes docs' own monorepo example.
+  outputFileTracingIncludes: {
+    "/learn": ["../../docs/learn/**/*"],
+    "/learn/**": ["../../docs/learn/**/*"],
+  },
 };
 
 export default nextConfig;
