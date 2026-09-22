@@ -73,6 +73,14 @@ export const jobSnapshotSchema = z
     url: httpUrlSchema,
     capturedAt: isoDateTimeSchema,
     extractorVersion: nonEmptyStringSchema,
+    /**
+     * Lowercase hex SHA-256 of `text` encoded as UTF-8, exactly as stored (no
+     * trimming or normalization). The type accepts any hex digest
+     * (`hexDigestSchema`); this is the one digest every producer computes, so
+     * F6's three capture paths agree on it. `JobCapture.contentHash` is the
+     * same digest. `job-assistant/test/fixtures.test.ts` recomputes it for
+     * every JobSnapshot fixture.
+     */
     contentHash: hexDigestSchema,
     text: utf8BoundedTextSchema(MAX_JOB_SNAPSHOT_TEXT_BYTES),
     structured: jobStructuredSchema,

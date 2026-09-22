@@ -84,7 +84,7 @@ export const semverSchema = z
     "must be a semantic version, e.g. 1.2.3",
   );
 
-/** A lowercase- or uppercase-hex content digest (sha256, sha1, ...). Length is left open since the hashing algorithm is a runner implementation detail P01 does not pin. */
+/** A lowercase- or uppercase-hex content digest (sha256, sha1, ...). The type does not pin an algorithm or a length; `JobSnapshot.contentHash` (job-snapshot.ts) documents the one digest producers compute. */
 export const hexDigestSchema = z
   .string()
   .regex(/^[0-9a-fA-F]{8,}$/, "must be a hex digest string");

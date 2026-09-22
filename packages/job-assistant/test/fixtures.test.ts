@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +64,26 @@ describe("fixtures/index.json manifest", () => {
       }
     });
   }
+});
+
+/**
+ * Revision 2, fix B. job-snapshot.ts documents `JobSnapshot.contentHash` as
+ * the lowercase hex SHA-256 of `text` encoded as UTF-8, exactly as stored.
+ * Revision 1 edited job-fernwood.json's text and left the old digest behind.
+ */
+describe("JobSnapshot fixtures carry the documented contentHash of their own text", () => {
+  const snapshotFiles = Object.entries(readManifest())
+    .filter(([, schemaName]) => schemaName === "job-snapshot")
+    .map(([file]) => file);
+
+  it("finds the three job posting fixtures", () => {
+    expect([...snapshotFiles].sort()).toEqual(["job-fernwood.json", "job-harbor.json", "job-hostile.json"]);
+  });
+
+  it.each(snapshotFiles)("%s: contentHash = lowercase hex SHA-256 of text as UTF-8", (file) => {
+    const snapshot = readFixture(file) as { text: string; contentHash: string };
+    expect(snapshot.contentHash).toBe(createHash("sha256").update(snapshot.text, "utf8").digest("hex"));
+  });
 });
 
 describe("hostile job posting fixture", () => {

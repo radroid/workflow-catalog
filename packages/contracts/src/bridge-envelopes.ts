@@ -170,6 +170,7 @@ export const jobCaptureSchema = z
     url: boundedHttpUrlSchema(MAX_JOB_CAPTURE_URL_LENGTH),
     text: utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES),
     extractorVersion: nonEmptyStringSchema.max(MAX_EXTRACTOR_VERSION_LENGTH),
+    /** Lowercase hex SHA-256 of `text` as UTF-8: the same digest as `JobSnapshot.contentHash` (job-snapshot.ts). */
     contentHash: z
       .string()
       .regex(/^[0-9a-fA-F]{8,}$/, "must be a hex digest string")

@@ -4,7 +4,7 @@
   "url": "https://jobs.example/postings/fernwood-staff-swe",
   "capturedAt": "2026-09-20T14:03:11.000Z",
   "extractorVersion": "extractor@0.1.0",
-  "contentHash": "1400ef076cbc61d627c74a040b5bcd298c97e538aa181516daa5df9cf8c11044",
+  "contentHash": "375ee7a46fc81e07acc8ce92a77c33078706cd552b877677a30628ab0b99750b",
   "text": "Staff Software Engineer — Fernwood\n\nFernwood is hiring a Staff Software Engineer to help lead our platform team. You will own reliability for our core services and mentor senior engineers.\n\nRequirements:\n- 8+ years of backend engineering experience\n- Experience leading platform or infrastructure teams\n- Strong distributed systems fundamentals\n\nNice to have:\n- Experience with Kubernetes at scale\n- Prior on-call leadership\n\nApplications close October 15, 2026. Apply via our careers page.\n\nFernwood offers competitive pay and full remote work.",
   "structured": {
     "title": "Staff Software Engineer",
