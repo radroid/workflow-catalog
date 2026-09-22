@@ -3,8 +3,8 @@
 The invite-only Next.js catalog site (`apps/catalog`), deployed on Vercel Hobby at a $0 target.
 See `docs/spec/implementation/P09-catalog-site.md` for the packet this ships, and
 `docs/spec/mvp-spec.md` §1/§3 (F1–F3) for the product contracts. Part A ships invite
-sign-in, the install guide, and `docs/learn` rendering; part B (the template page and the
-release workflow) is a later packet.
+sign-in, the install guide, and `docs/learn` rendering. Part B ships the template page
+(`/templates/job-assistant`) and the release workflow that publishes the package it reads.
 
 ## Environment variables
 
@@ -93,8 +93,38 @@ Handler that reads from an allowlist built from the real directory listing — s
 the production build to trace those files too, since Vercel otherwise only uploads what a route
 provably touches.
 
+## Template page and package releases
+
+`/templates/job-assistant` (session-gated, like `/install`) renders `packages/job-assistant/workflow.json`
+— validated at module load with `@workflow-catalog/contracts`'s `workflowManifestSchema.parse`, so an
+invalid manifest fails `next build`, not just a request at runtime — plus the current release's checksum
+and download link, read live from the public GitHub REST API (`lib/release.ts`; unauthenticated, a 5s
+timeout, Next's data cache revalidating hourly). Before any release exists, or if the API errs or times
+out, the page says so instead of showing a broken link; it never falls back to any other source for the
+download URL.
+
+**`.github/workflows/release-package.yml`** packs `packages/job-assistant` into `job-assistant-<version>.tgz`
+and publishes it as a GitHub release, triggered by pushing a tag `job-assistant@x.y.z`. It refuses to run
+unless that version equals both `packages/job-assistant/workflow.json`'s `version` and
+`packages/job-assistant/package.json`'s `version`, runs the package's own tests, and publishes the tarball
+alongside a `job-assistant-<version>.tgz.sha256` file (`sha256sum`'s own `<hex>  <filename>` format) — the
+template page reads its hex from that file's content, per mvp-spec.md F2's amendment: the checksum has to
+be the tarball's own hash, published beside it, because nothing inside the tarball can hold a hash of
+itself.
+
+**The autonomous build loop never pushes a tag or creates a release** — `gh release create` is denied by
+`.claude/settings.json` in every worktree, and pushing a `job-assistant@*` tag is exactly the action that
+would trigger a real, outward-facing release. The owner pushes the first tag by hand once part B's PR is
+merged: `git tag job-assistant@0.1.0 -m "job-assistant 0.1.0" && git push origin job-assistant@0.1.0`
+(matching the version already in `workflow.json`/`package.json` today). Until that first tag is pushed,
+the template page's checksum/download section correctly shows "Checksum and download appear with the
+first release."
+
 ## Tests
 
 `pnpm --filter catalog test` (Vitest). PGlite-backed integration tests cover the invite service,
 the owner/session cookie gates, `proxy.ts`'s redirect behavior, the gated-layout revocation
-check, the schema allowlist, and the learn-docs path-traversal cases — see `tests/`.
+check, the schema allowlist, and the learn-docs path-traversal cases — see `tests/`. Part B adds
+the `workflow.json` manifest validation, the GitHub release fetch (mocked `fetch`: found, absent,
+API error, timeout), and the `getDb()` cross-module-instance singleton (`tests/db/global-singleton.test.ts`,
+which reproduces the dev-mode duplicate-PGlite bug with `vi.resetModules()`).

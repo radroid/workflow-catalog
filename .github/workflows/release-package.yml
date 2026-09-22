@@ -1,0 +1,127 @@
+# Packs packages/job-assistant into a versioned tarball and publishes it as
+# a GitHub release, on push of a `job-assistant@x.y.z` tag. Spec:
+# docs/spec/implementation/P09-catalog-site.md part B, mvp-spec.md F2
+# (AMENDED) — the catalog's template page reads the release this creates.
+#
+# The autonomous build loop never pushes a tag or creates a release itself
+# (`gh release create` is denied by .claude/settings.json in every worktree)
+# — the owner cuts the first release by hand. See apps/catalog/README.md.
+
+name: Release package
+
+on:
+  push:
+    tags:
+      - "job-assistant@*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # actions/checkout@v7, pnpm/action-setup@v6, and actions/setup-node@v7
+      # all declare `using: node24` (checked against each action's own
+      # action.yml at its latest release tag) — the newest majors, chosen
+      # per CLAUDE.md/P00's review note that the v4 actions ci.yml still
+      # uses warn their Node 20 runtime is deprecated. ci.yml itself is out
+      # of this packet's allowlist, so it isn't bumped here.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The tag is the single source of truth for "what version are we
+      # releasing" — refusing unless packages/job-assistant/workflow.json
+      # and packages/job-assistant/package.json both already agree with it
+      # means a version bump that forgot one of the three can never publish
+      # a release the template page would show against the wrong package.json,
+      # or vice versa.
+      - name: Verify tag version matches workflow.json and package.json
+        id: version
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#job-assistant@}"
+          MANIFEST_VERSION="$(node -p "require('./packages/job-assistant/workflow.json').version")"
+          PACKAGE_VERSION="$(node -p "require('./packages/job-assistant/package.json').version")"
+          echo "tag:          $GITHUB_REF_NAME (version $TAG_VERSION)"
+          echo "workflow.json: $MANIFEST_VERSION"
+          echo "package.json:  $PACKAGE_VERSION"
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match packages/job-assistant/workflow.json's version ($MANIFEST_VERSION)"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match packages/job-assistant/package.json's version ($PACKAGE_VERSION)"
+            exit 1
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Test job-assistant package
+        run: pnpm --filter @workflow-catalog/job-assistant test
+
+      # `pnpm pack` names its output after the (scoped) package name, e.g.
+      # workflow-catalog-job-assistant-0.1.0.tgz, not the job-assistant-<version>.tgz
+      # the template page and step below expect — renamed explicitly.
+      # --pack-destination is resolved relative to the directory the pnpm
+      # command runs in (this job's default working-directory, the repo
+      # root), not the filtered package's own directory.
+      - name: Pack the tarball
+        run: pnpm --filter @workflow-catalog/job-assistant pack --pack-destination dist
+
+      - name: Rename the tarball to job-assistant-<version>.tgz and checksum it
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist
+          packed="$(ls workflow-catalog-job-assistant-*.tgz)"
+          tarball="job-assistant-${VERSION}.tgz"
+          mv "$packed" "$tarball"
+          # <hex>  <filename> — the page displays the hex; verifiable by
+          # anyone with `sha256sum -c` against the downloaded tarball.
+          sha256sum "$tarball" > "$tarball.sha256"
+          cat "$tarball.sha256"
+
+      # Written to a file, not interpolated into the `gh release create`
+      # command line: workflow.json's changelog notes are repo content, not
+      # untrusted input, but a file sidesteps shell-quoting/injection
+      # concerns entirely rather than relying on careful escaping. Kept
+      # outside dist/ so the later `dist/*` asset glob can't sweep it in.
+      - name: Extract this version's changelog entry from workflow.json
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("packages/job-assistant/workflow.json", "utf8"));
+            const version = process.env.RELEASE_VERSION;
+            const entry = manifest.changelog.find((e) => e.version === version);
+            if (!entry) {
+              console.error(`No changelog entry for version ${version} in packages/job-assistant/workflow.json`);
+              process.exit(1);
+            }
+            fs.writeFileSync("release-notes.md", entry.notes.map((note) => `- ${note}`).join("\n") + "\n");
+          '
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Create the GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "job-assistant $VERSION" \
+            --notes-file release-notes.md
