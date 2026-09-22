@@ -253,6 +253,13 @@ test("status (gate 6): a clear re-pair state once the device is revoked, and onc
       const stored = await chrome.storage.session.get("deviceToken");
       return (stored.deviceToken as { deviceId: string } | undefined)?.deviceId;
     });
+    // P07-B revision 1, B6: a real type error lived here (deviceId is
+    // string | undefined -- pairThroughTheRealForm above already asserts
+    // Connected: Yes, so an undefined deviceId at this point means
+    // chrome.storage.session itself is broken, not that revoke() should
+    // silently no-op on it). Narrow with a real runtime check instead of
+    // an `as string` cast, so a genuine regression here still fails loud.
+    if (deviceId === undefined) throw new Error("expected a deviceId in chrome.storage.session after pairing, got none");
     expect(await bridge.ctx.devices.revoke(deviceId)).toBe(true);
 
     await page.reload();
