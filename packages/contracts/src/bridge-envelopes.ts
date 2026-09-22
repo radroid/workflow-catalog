@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  boundedHttpUrlSchema,
   httpUrlSchema,
   isoDateTimeSchema,
   MAX_APPLICATION_GROUP_SIZE,
@@ -25,6 +26,42 @@ import {
  * that flows the other direction (runner → extension) and browser-boundary.md's
  * own illustrative JSON includes `deviceId` there, so it is kept.
  */
+
+/**
+ * Size caps for the three `POST /events` bodies (`EventsRequest`,
+ * bridge-http.ts). With them, every body zod accepts serializes
+ * (`JSON.stringify`, UTF-8) to at most `MAX_BRIDGE_BODY_BYTES`
+ * (primitives.ts), the bridge's 256 KiB body cap from mvp-spec §5. A body the
+ * extension has validated never bounces off that cap.
+ *
+ * JobCapture is the only body that gets close. Its worst case:
+ *
+ *     text                200,000 bytes, measured as JSON (quotes included)
+ *     url                  12,290 bytes = 2 + 6 × 2,048
+ *     extractorVersion        770 bytes = 2 + 6 × 128
+ *     contentHash             770 bytes = 2 + 6 × 128
+ *     occurredAt              386 bytes = 2 + 6 × 64
+ *     everything else         148 bytes (keys, punctuation, protocol, type, eventId)
+ *     total               214,364 bytes, under 262,144
+ *
+ * A string of n UTF-16 code units serializes to at most 2 + 6n bytes: the
+ * costliest code unit is a 6-byte escape (`\u0001`, or a lone surrogate).
+ * contentHash and occurredAt only admit ASCII, so their real worst cases are
+ * smaller. BrowserCommandResult (at most `MAX_APPLICATION_GROUP_SIZE` items)
+ * and ApplicationStatusChanged stay under 2 KB. `bridge-body-size.test.ts`
+ * recomputes the bound from these exported caps and builds each worst case.
+ */
+export const MAX_JOB_CAPTURE_TEXT_BYTES = 200_000;
+/** UTF-16 code units of the raw `url`, counted before URL parsing (`boundedHttpUrlSchema`, primitives.ts). Room for a posting URL with long tracking parameters. */
+export const MAX_JOB_CAPTURE_URL_LENGTH = 2_048;
+/** For example `"extractor@0.1.0"`. */
+export const MAX_EXTRACTOR_VERSION_LENGTH = 128;
+/** 128 hex digits fit a SHA-512 digest; a SHA-256 digest is 64. */
+export const MAX_CONTENT_HASH_LENGTH = 128;
+/** `z.iso.datetime()` accepts any number of fractional-second digits. `Date#toISOString()` gives 24 characters; nanoseconds plus an offset give 35. */
+export const MAX_OCCURRED_AT_LENGTH = 64;
+
+const occurredAtSchema = isoDateTimeSchema.max(MAX_OCCURRED_AT_LENGTH);
 
 export const openApplicationGroupItemSchema = z
   .object({
@@ -107,8 +144,9 @@ export const browserCommandResultSchema = z
     eventId: uuidSchema,
     commandId: uuidSchema,
     status: browserCommandResultStatusSchema,
-    items: z.array(browserCommandResultItemSchema).min(1),
-    occurredAt: isoDateTimeSchema,
+    /** One entry per task of the `OpenApplicationGroup` command being reported on, so never more than that command could carry. */
+    items: z.array(browserCommandResultItemSchema).min(1).max(MAX_APPLICATION_GROUP_SIZE),
+    occurredAt: occurredAtSchema,
   })
   .strict();
 
@@ -122,20 +160,21 @@ export type BrowserCommandResult = z.infer<typeof browserCommandResultSchema>;
  * is a new job or a new revision of one it already has (F6). This envelope
  * is untrusted *data*: see hard-problems.md #3 and job-snapshot.ts's
  * hostile-content test, which this shape shares its bounded-text
- * reasoning with.
+ * reasoning with. Every string is capped; see the size caps above.
  */
-export const MAX_JOB_CAPTURE_TEXT_BYTES = 200_000;
-
 export const jobCaptureSchema = z
   .object({
     protocol: protocolVersionSchema,
     type: z.literal("job_capture"),
     eventId: uuidSchema,
-    url: httpUrlSchema,
+    url: boundedHttpUrlSchema(MAX_JOB_CAPTURE_URL_LENGTH),
     text: utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES),
-    extractorVersion: nonEmptyStringSchema,
-    contentHash: z.string().regex(/^[0-9a-fA-F]{8,}$/, "must be a hex digest string"),
-    occurredAt: isoDateTimeSchema,
+    extractorVersion: nonEmptyStringSchema.max(MAX_EXTRACTOR_VERSION_LENGTH),
+    contentHash: z
+      .string()
+      .regex(/^[0-9a-fA-F]{8,}$/, "must be a hex digest string")
+      .max(MAX_CONTENT_HASH_LENGTH),
+    occurredAt: occurredAtSchema,
   })
   .strict();
 
@@ -162,7 +201,7 @@ export const applicationStatusChangedSchema = z
     taskId: uuidSchema,
     expectedRevision: z.number().int().positive(),
     status: applicationStatusChangedStatusSchema,
-    occurredAt: isoDateTimeSchema,
+    occurredAt: occurredAtSchema,
   })
   .strict();
 

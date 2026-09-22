@@ -44,13 +44,15 @@ export const jobStructuredSchema = z
 export type JobStructured = z.infer<typeof jobStructuredSchema>;
 
 /**
- * Bounded so a hostile or oversized posting can't blow past the bridge's
- * 256 KB HTTP body cap (mvp-spec §5) on its own. This is a *byte* cap
- * (`utf8BoundedTextSchema`, primitives.ts) even though the field is prose
- * text likely to contain multi-byte characters — a naive
- * `z.string().max(200_000)` counts UTF-16 code units, and 200,000
- * multi-byte characters can encode to 600 KB-1.2 MB of real UTF-8 bytes,
- * well past the bridge cap despite passing a char-counted schema.
+ * Cap on `JobSnapshot.text`, measured the same way as `JobCapture.text`: the
+ * UTF-8 bytes of `JSON.stringify(text)`, quotes included
+ * (`utf8BoundedTextSchema`, primitives.ts). A snapshot is a workspace file,
+ * not a bridge body, so the bridge's 256 KB body cap does not apply to it; the
+ * cap that keeps a `POST /events` body under 256 KB is on the JobCapture
+ * envelope (bridge-envelopes.ts). This cap equals
+ * `MAX_JOB_CAPTURE_TEXT_BYTES`, so text that arrived in a valid JobCapture
+ * always fits a snapshot, and pasted or fetched text (F6's other two capture
+ * paths) is held to the same limit.
  */
 export const MAX_JOB_SNAPSHOT_TEXT_BYTES = 200_000;
 

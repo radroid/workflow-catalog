@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
+  boundedHttpUrlSchema,
   hexDigestSchema,
   httpUrlSchema,
   isoDateSchema,
   isoDateTimeSchema,
   semverSchema,
+  utf8BoundedTextSchema,
   uuidSchema,
 } from "./primitives";
 
@@ -34,6 +37,66 @@ describe("httpUrlSchema", () => {
       expect(httpUrlSchema.safeParse(url).success).toBe(false);
     },
   );
+});
+
+describe("boundedHttpUrlSchema", () => {
+  const bounded = boundedHttpUrlSchema(64);
+
+  it.each([
+    "https://jobs.example/posting/1",
+    "http://jobs.example/x",
+    "  https://jobs.example/x  ",
+    "https://jobs.example/a\tb",
+    "javascript:alert(1)",
+    "file:///etc/passwd",
+    "chrome://settings",
+    "chrome-extension://abc/x",
+    "https:/jobs.example",
+    "not a url",
+  ])("agrees with httpUrlSchema on %j when within the cap", (url) => {
+    const boundedResult = bounded.safeParse(url);
+    const plainResult = httpUrlSchema.safeParse(url);
+    expect(boundedResult.success).toBe(plainResult.success);
+    expect(boundedResult.data).toBe(plainResult.data);
+  });
+
+  it("counts the raw input, not the trimmed value zod's URL check passes on", () => {
+    const padded = `https://jobs.example/${" ".repeat(64)}`;
+    expect(httpUrlSchema.max(64).safeParse(padded).success).toBe(true);
+    expect(bounded.safeParse(padded).success).toBe(false);
+  });
+
+  it("emits httpUrlSchema's JSON Schema plus maxLength", () => {
+    expect(z.toJSONSchema(bounded)).toEqual({ ...z.toJSONSchema(httpUrlSchema), maxLength: 64 });
+  });
+});
+
+describe("utf8BoundedTextSchema", () => {
+  const schema = utf8BoundedTextSchema(10);
+
+  it.each([
+    ["8 ASCII letters", "a".repeat(8), 10, true],
+    ["9 ASCII letters", "a".repeat(9), 11, false],
+    ["4 double quotes", '"'.repeat(4), 10, true],
+    ["5 double quotes", '"'.repeat(5), 12, false],
+    ["one U+0001", "\u0001", 8, true],
+    ["two U+0001", "\u0001\u0001", 14, false],
+    ["two 3-byte CJK", "字字", 8, true],
+    ["two 4-byte emoji", "\u{1F600}\u{1F600}", 10, true],
+  ] as Array<[string, string, number, boolean]>)(
+    "%s: %j is %i bytes as JSON, valid = %s",
+    (_label, value, jsonBytes, valid) => {
+      expect(new TextEncoder().encode(JSON.stringify(value)).length).toBe(jsonBytes);
+      expect(schema.safeParse(value).success).toBe(valid);
+    },
+  );
+
+  it("emits maxLength = maxBytes - 2 and a description of where the byte bound is enforced", () => {
+    const json = z.toJSONSchema(schema) as { maxLength?: number; description?: string };
+    expect(json.maxLength).toBe(8);
+    expect(json.description).toContain("zod");
+    expect(json.description).toContain("256 KB");
+  });
 });
 
 describe("isoDateTimeSchema", () => {

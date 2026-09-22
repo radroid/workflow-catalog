@@ -31,7 +31,9 @@
     },
     "text": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 199998,
+      "description": "At most 200000 bytes as UTF-8 JSON: new TextEncoder().encode(JSON.stringify(text)).length, the two quote marks included. JSON Schema cannot express that bound, so maxLength is only a looser code-point limit (every code point serializes to at least 1 byte). The byte bound is enforced exactly by the zod schema in @workflow-catalog/contracts, and on the wire by the bridge's raw 256 KB (262144-byte) request body cap."
     },
     "structured": {
       "type": "object",

@@ -7,7 +7,19 @@ import { describe, expect, it } from "vitest";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { z } from "zod";
-import { jobCaptureSchema, jobSnapshotSchema, sessionManifestSchema } from "@workflow-catalog/contracts";
+import {
+  browserCommandResultSchema,
+  jobCaptureSchema,
+  jobSnapshotSchema,
+  MAX_APPLICATION_GROUP_SIZE,
+  MAX_CONTENT_HASH_LENGTH,
+  MAX_EXTRACTOR_VERSION_LENGTH,
+  MAX_JOB_CAPTURE_TEXT_BYTES,
+  MAX_JOB_CAPTURE_URL_LENGTH,
+  MAX_JOB_SNAPSHOT_TEXT_BYTES,
+  MAX_OCCURRED_AT_LENGTH,
+  sessionManifestSchema,
+} from "@workflow-catalog/contracts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const schemasDir = path.resolve(here, "../schemas");
@@ -129,4 +141,111 @@ describe("emitted JSON Schema enforces the same http(s)-only URL restriction zod
       }
     });
   }
+});
+
+/**
+ * Revision 2, fix A. zod caps `text` by its UTF-8 size as JSON, which no JSON
+ * Schema keyword can count. The emitted text fields carry a looser
+ * `maxLength` instead (the byte cap minus the 2 quote bytes, in code points)
+ * plus a description; the other `POST /events` caps lower to
+ * `maxLength`/`maxItems` exactly. So the emitted schemas must never reject a
+ * body zod accepts, and must agree with zod wherever JSON Schema can express
+ * the cap.
+ */
+describe("emitted JSON Schema carries the POST /events size caps and is never stricter than zod", () => {
+  const validateCapture = ajvValidatorFor("job-capture");
+  const validateEvents = ajvValidatorFor("events-request");
+  const validateResult = ajvValidatorFor("browser-command-result");
+
+  function occurredAtOfLength(length: number): string {
+    const head = "2026-09-22T07:00:00.";
+    return head + "0".repeat(length - head.length - 1) + "Z";
+  }
+
+  function capture(fields: Record<string, unknown>) {
+    return {
+      protocol: 1,
+      type: "job_capture",
+      eventId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      url: VALID_URL,
+      text: "Senior Platform Engineer at Northwind Labs.",
+      extractorVersion: "extractor@1.0.0",
+      contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      occurredAt: new Date().toISOString(),
+      ...fields,
+    };
+  }
+
+  /** Text whose JSON form is exactly the cap: as many copies of `unit` as fit, then ASCII padding. */
+  function textAtCap(unit: string): string {
+    const unitBytes = new TextEncoder().encode(JSON.stringify(unit)).length - 2;
+    const contentBytes = MAX_JOB_CAPTURE_TEXT_BYTES - 2;
+    const copies = Math.floor(contentBytes / unitBytes);
+    return unit.repeat(copies) + "a".repeat(contentBytes - copies * unitBytes);
+  }
+
+  it.each([
+    ["job-capture", MAX_JOB_CAPTURE_TEXT_BYTES],
+    ["job-snapshot", MAX_JOB_SNAPSHOT_TEXT_BYTES],
+  ])("%s.schema.json: text has maxLength = cap - 2 and a description of where the byte bound is enforced", (name, cap) => {
+    const text = JSON.parse(readFileSync(path.join(schemasDir, `${name}.schema.json`), "utf8")).properties.text;
+    expect(text.maxLength).toBe(cap - 2);
+    expect(text.description).toContain("zod");
+    expect(text.description).toContain("256 KB");
+  });
+
+  it.each([
+    ["U+0001", "\u0001"],
+    ["double quotes", '"'],
+    ["backslashes", "\\"],
+    ["newlines", "\n"],
+    ["4-byte emoji", "\u{1F600}"],
+    ["3-byte CJK", "字"],
+  ])("text of %s filling exactly the byte cap: zod accepts it, and so does ajv", (_label, unit) => {
+    const body = capture({ text: textAtCap(unit) });
+    expect(jobCaptureSchema.safeParse(body).success).toBe(true);
+    expect(validateCapture(body), JSON.stringify(validateCapture.errors)).toBe(true);
+    expect(validateEvents(body), JSON.stringify(validateEvents.errors)).toBe(true);
+  });
+
+  it("ASCII text: ajv and zod both accept exactly the cap and both reject one more character", () => {
+    const atCap = capture({ text: "a".repeat(MAX_JOB_CAPTURE_TEXT_BYTES - 2) });
+    const over = capture({ text: "a".repeat(MAX_JOB_CAPTURE_TEXT_BYTES - 1) });
+    expect(jobCaptureSchema.safeParse(atCap).success).toBe(true);
+    expect(validateCapture(atCap)).toBe(true);
+    expect(jobCaptureSchema.safeParse(over).success).toBe(false);
+    expect(validateCapture(over)).toBe(false);
+  });
+
+  const STRING_CAPS: Array<[field: string, cap: number, ofLength: (n: number) => string]> = [
+    ["url", MAX_JOB_CAPTURE_URL_LENGTH, (n) => VALID_URL + "a".repeat(n - VALID_URL.length)],
+    ["extractorVersion", MAX_EXTRACTOR_VERSION_LENGTH, (n) => "e".repeat(n)],
+    ["contentHash", MAX_CONTENT_HASH_LENGTH, (n) => "f".repeat(n)],
+    ["occurredAt", MAX_OCCURRED_AT_LENGTH, occurredAtOfLength],
+  ];
+
+  it.each(STRING_CAPS)("%s: ajv and zod both accept %i characters and both reject one more", (field, cap, ofLength) => {
+    const atCap = capture({ [field]: ofLength(cap) });
+    const over = capture({ [field]: ofLength(cap + 1) });
+    expect(jobCaptureSchema.safeParse(atCap).success).toBe(true);
+    expect(validateCapture(atCap), JSON.stringify(validateCapture.errors)).toBe(true);
+    expect(jobCaptureSchema.safeParse(over).success).toBe(false);
+    expect(validateCapture(over)).toBe(false);
+  });
+
+  it("browser_command_result.items: ajv and zod both reject one more than MAX_APPLICATION_GROUP_SIZE", () => {
+    const body = (count: number) => ({
+      protocol: 1,
+      type: "browser_command_result",
+      eventId: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      commandId: "0d3a4b0e-58cc-4372-a567-0e02b2c3d479",
+      status: "completed",
+      items: Array.from({ length: count }, () => ({ taskId: "1b1b1b1b-58cc-4372-a567-0e02b2c3d479", status: "opened" })),
+      occurredAt: new Date().toISOString(),
+    });
+    expect(browserCommandResultSchema.safeParse(body(MAX_APPLICATION_GROUP_SIZE)).success).toBe(true);
+    expect(validateResult(body(MAX_APPLICATION_GROUP_SIZE))).toBe(true);
+    expect(browserCommandResultSchema.safeParse(body(MAX_APPLICATION_GROUP_SIZE + 1)).success).toBe(false);
+    expect(validateResult(body(MAX_APPLICATION_GROUP_SIZE + 1))).toBe(false);
+  });
 });

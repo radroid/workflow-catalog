@@ -17,22 +17,28 @@
     },
     "url": {
       "type": "string",
+      "maxLength": 2048,
       "pattern": "^https?:\\/\\/"
     },
     "text": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 199998,
+      "description": "At most 200000 bytes as UTF-8 JSON: new TextEncoder().encode(JSON.stringify(text)).length, the two quote marks included. JSON Schema cannot express that bound, so maxLength is only a looser code-point limit (every code point serializes to at least 1 byte). The byte bound is enforced exactly by the zod schema in @workflow-catalog/contracts, and on the wire by the bridge's raw 256 KB (262144-byte) request body cap."
     },
     "extractorVersion": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 128
     },
     "contentHash": {
       "type": "string",
+      "maxLength": 128,
       "pattern": "^[0-9a-fA-F]{8,}$"
     },
     "occurredAt": {
       "type": "string",
+      "maxLength": 64,
       "format": "date-time",
       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
     }

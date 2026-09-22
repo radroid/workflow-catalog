@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_JOB_CAPTURE_TEXT_BYTES } from "./bridge-envelopes";
 import { jobSnapshotSchema, jobStructuredSchema, MAX_JOB_SNAPSHOT_TEXT_BYTES } from "./job-snapshot";
 
 function validSnapshot() {
@@ -82,6 +83,18 @@ describe("jobSnapshotSchema", () => {
     const multiByteText = "字".repeat(100);
     const snapshot = { ...validSnapshot(), text: multiByteText };
     expect(jobSnapshotSchema.safeParse(snapshot).success).toBe(true);
+  });
+
+  // Revision 2, fix A: the cap counts text as JSON, where U+0001 is 6 bytes.
+  it("measures text as UTF-8 JSON: U+0001 filling exactly the cap is valid, one byte more is not", () => {
+    const atCap = "\u0001".repeat((MAX_JOB_SNAPSHOT_TEXT_BYTES - 2) / 6);
+    expect(new TextEncoder().encode(JSON.stringify(atCap)).length).toBe(MAX_JOB_SNAPSHOT_TEXT_BYTES);
+    expect(jobSnapshotSchema.safeParse({ ...validSnapshot(), text: atCap }).success).toBe(true);
+    expect(jobSnapshotSchema.safeParse({ ...validSnapshot(), text: `${atCap}a` }).success).toBe(false);
+  });
+
+  it("has the same text cap as JobCapture, so text from a valid capture always fits a snapshot", () => {
+    expect(MAX_JOB_SNAPSHOT_TEXT_BYTES).toBe(MAX_JOB_CAPTURE_TEXT_BYTES);
   });
 
   it("rejects a non-http(s) url", () => {

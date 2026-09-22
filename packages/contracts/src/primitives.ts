@@ -42,6 +42,26 @@ export const uuidSchema = z.uuid();
 export const httpUrlSchema = z.url({ protocol: /^https?$/ }).regex(/^https?:\/\//);
 
 /**
+ * `httpUrlSchema` with a length cap on the raw input. The cap has to run
+ * before the URL check. zod's URL check hands later checks a rewritten value:
+ * it trims surrounding whitespace and deletes every tab, CR and LF (zod 4.5.4,
+ * `$ZodURL`). So `httpUrlSchema.max(n)` would measure the rewritten string and
+ * accept a URL padded with any amount of whitespace. Here `z.string().max(n)`
+ * sees the raw input first, then the same two checks as `httpUrlSchema` run in
+ * the same order. The emitted JSON Schema is `httpUrlSchema`'s plus
+ * `maxLength`. zod's `.max()` counts UTF-16 code units and JSON Schema's
+ * `maxLength` counts code points, so the JSON Schema bound is never the
+ * stricter one.
+ */
+export function boundedHttpUrlSchema(maxLength: number) {
+  return z
+    .string()
+    .max(maxLength)
+    .check(z.url({ protocol: /^https?$/ }))
+    .regex(/^https?:\/\//);
+}
+
+/**
  * An ISO-8601 datetime string with an explicit timezone — either the `Z`
  * suffix `Date#toISOString()` produces, or a numeric offset. Never a
  * timezone-less "local" datetime, which would be ambiguous across the
@@ -84,28 +104,45 @@ export const nonEmptyStringSchema = z.string().min(1);
 export const MAX_APPLICATION_GROUP_SIZE = 20;
 
 /**
- * A non-empty string bounded by UTF-8 *byte* length, not JS string
- * `.length` (UTF-16 code units, which is what `z.string().max(n)` counts).
- * For multi-byte text (CJK, emoji, accented Latin, ...) `.length` undercounts
- * real wire size by up to 3x — one UTF-16 code unit can be up to 3 UTF-8
- * bytes, and a surrogate pair is 2 units but only 4 bytes (2x). A cap sized
- * purely off `.max()` (e.g. a "200,000 character" limit) can admit a
- * payload of 600 KB-1.2 MB of actual UTF-8 bytes despite passing the
- * schema — comfortably over the bridge's 256 KB HTTP body cap (mvp-spec
- * §5). This check counts real bytes instead.
+ * mvp-spec §5: every bridge request has a "body size cap 256 KB", taken here
+ * as 256 KiB. The bridge rejects a larger body before parsing it. The
+ * `POST /events` bodies are capped so that every body zod accepts also
+ * serializes within this (see the caps in bridge-envelopes.ts and
+ * `bridge-body-size.test.ts`).
+ */
+export const MAX_BRIDGE_BODY_BYTES = 262_144;
+
+/**
+ * A non-empty string capped by its size as JSON: the UTF-8 byte length of
+ * `JSON.stringify(value)`, the two quote marks included. That is exactly what
+ * the field adds to a serialized envelope, so caps measured this way add up to
+ * a real bound on the envelope.
  *
- * No JSON Schema keyword counts UTF-8 bytes (`maxLength` counts Unicode
- * codepoints), so — like the extra `.regex()` on `httpUrlSchema` is
- * JSON-Schema-*visible* — this bound is necessarily JSON-Schema-*invisible*:
- * a `.refine()`, enforced by the zod runtime (the bridge server and any
- * other real parser) but not expressible as an ajv-checkable keyword in the
- * emitted `.schema.json`. The bridge's own HTTP body-size cap is the actual
- * wire-level backstop; this is a fail-fast, precisely-worded error for
- * in-process producers (the runner) before a payload ever reaches the wire.
+ * Neither simpler measure is enough. `z.string().max(n)` counts UTF-16 code
+ * units, and one code unit can take up to 3 bytes of UTF-8. Raw UTF-8 bytes
+ * miss JSON escaping: a newline, quote or backslash is 1 byte of text but 2
+ * bytes of JSON, and a control character such as U+0001 is 1 byte of text but
+ * 6 bytes of JSON (`\u0001`). Under a raw 200,000-byte cap, text can serialize
+ * to 1.2 MB.
+ *
+ * JSON Schema has no keyword for this bound. The emitted schema gets
+ * `maxLength: maxBytes - 2` instead. It is looser, so it never rejects a valid
+ * string: every code point serializes to at least 1 byte. The `.max()` that
+ * emits it is redundant at runtime, because the byte check implies it. The
+ * `description` says where the byte bound is enforced.
  */
 export function utf8BoundedTextSchema(maxBytes: number) {
-  return nonEmptyStringSchema.refine(
-    (value: string) => new TextEncoder().encode(value).length <= maxBytes,
-    `must be at most ${maxBytes} bytes when UTF-8 encoded`,
-  );
+  return nonEmptyStringSchema
+    .max(maxBytes - 2)
+    .refine(
+      (value: string) => new TextEncoder().encode(JSON.stringify(value)).length <= maxBytes,
+      `must be at most ${maxBytes} bytes as UTF-8 JSON (JSON.stringify, quotes included)`,
+    )
+    .describe(
+      `At most ${maxBytes} bytes as UTF-8 JSON: new TextEncoder().encode(JSON.stringify(text)).length, ` +
+        "the two quote marks included. JSON Schema cannot express that bound, so maxLength is only a looser " +
+        "code-point limit (every code point serializes to at least 1 byte). The byte bound is enforced exactly " +
+        "by the zod schema in @workflow-catalog/contracts, and on the wire by the bridge's raw 256 KB " +
+        `(${MAX_BRIDGE_BODY_BYTES}-byte) request body cap.`,
+    );
 }
