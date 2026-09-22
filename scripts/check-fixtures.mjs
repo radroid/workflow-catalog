@@ -3,20 +3,30 @@
 // docs/spec/implementation/fixtures-policy.md for the rules this enforces:
 //
 //   (a) any email address in a tracked file whose domain is not an example
-//       domain (`example`, `example.com`, `example.org`, `*.example`) or the
-//       fixed exception `noreply@anthropic.com`.
+//       domain (`example`, `example.com`, `example.org`, `*.example`).
 //   (b) any URL inside a `fixtures/` directory whose host is not `*.example`.
 //
-// Scans `git ls-files` (tracked files only). Prints one `path:line: message`
-// per offense and exits 1. Silent and exits 0 when the tree is clean.
+// One addition beyond the policy doc: `noreply@anthropic.com` is always
+// allowed. That's not a fixtures-policy.md rule — it's a scanner-level
+// allowance so this repo's own commit-attribution text
+// (`Co-Authored-By: ... <noreply@anthropic.com>`) never trips the scanner if
+// it ends up quoted inside a tracked file (e.g. this packet's own report).
+//
+// Scans `git ls-files -z` (tracked files only; -z so non-ASCII/space/quote
+// paths come back as raw bytes instead of `git ls-files`' default quoted-
+// and-escaped form — a plain readFileSync on the escaped form throws ENOENT
+// and must never be treated as "nothing to scan"). Prints one
+// `path:line: message` per offense and exits 1. Silent and exits 0 when the
+// tree is clean.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const URL_RE = /https?:\/\/[^\s"'<>()\\]+/g;
 
-// The one fixed, non-domain exception the policy allows outright.
+// The one fixed, non-domain exception — see the header comment above.
 const ALLOWED_EMAIL_EXACT = new Set(["noreply@anthropic.com"]);
 
 // Skipped so binary bytes are never decoded and pattern-matched as text.
@@ -25,6 +35,14 @@ const BINARY_EXTENSIONS = new Set([
   ".woff", ".woff2", ".ttf", ".otf", ".eot",
   ".pdf", ".zip", ".gz",
 ]);
+
+// readFileSync errors that mean "there is genuinely nothing to scan here"
+// (deleted from the worktree without `git rm`, or a submodule/gitlink
+// directory entry). Anything else — permission errors, encoding surprises,
+// a path git can see but Node can't for some other reason — is reported as
+// an offense instead of silently skipped; that silent skip is exactly how
+// this scanner used to miss non-ASCII fixture paths.
+const SKIPPABLE_READ_ERRORS = new Set(["ENOENT", "EISDIR"]);
 
 function isAllowedExampleHost(host) {
   const lower = host.toLowerCase();
@@ -36,10 +54,10 @@ function isAllowedExampleHost(host) {
   );
 }
 
-function isBinaryPath(path) {
-  const dot = path.lastIndexOf(".");
+function isBinaryPath(filePath) {
+  const dot = filePath.lastIndexOf(".");
   if (dot === -1) return false;
-  return BINARY_EXTENSIONS.has(path.slice(dot).toLowerCase());
+  return BINARY_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
 }
 
 function extractHost(url) {
@@ -50,18 +68,25 @@ function extractHost(url) {
   }
 }
 
-function listTrackedFiles() {
-  return execFileSync("git", ["ls-files"], { encoding: "utf8" })
-    .split("\n")
-    .filter((line) => line.length > 0);
+function listTrackedFiles(cwd) {
+  // -z: NUL-separated, unquoted paths. Without it, git ls-files renders
+  // non-ASCII (and space/quote-containing) paths as a quoted, octal-escaped
+  // string — e.g. "packages/x/fixtures/r\303\251sum\303\251.md" — which is
+  // not the real filesystem path and will never openable via readFileSync.
+  const output = execFileSync("git", ["ls-files", "-z"], { cwd, encoding: "utf8" });
+  return output.split("\0").filter((entry) => entry.length > 0);
 }
 
-function scanFile(file, offenses) {
+function scanFile(cwd, file, offenses) {
   let content;
   try {
-    content = readFileSync(file, "utf8");
-  } catch {
-    // Listed by git but unreadable here (e.g. a symlink) — nothing to scan.
+    content = readFileSync(path.join(cwd, file), "utf8");
+  } catch (error) {
+    if (error && SKIPPABLE_READ_ERRORS.has(error.code)) {
+      return;
+    }
+    const reason = error && error.code ? error.code : String(error);
+    offenses.push(`${file}: could not read this tracked file (${reason}) — treating as an offense rather than skipping it silently`);
     return;
   }
 
@@ -94,13 +119,23 @@ function scanFile(file, offenses) {
   });
 }
 
-function main() {
+// Exported (well, top-level — this is a script, not a package) so the
+// regression test in check-fixtures.test.mjs can run the same logic against
+// a throwaway repo without spawning a subprocess, and so nothing here
+// secretly depends on process.cwd() rather than the cwd it was asked about.
+export function checkFixtures(cwd) {
   const offenses = [];
 
-  for (const file of listTrackedFiles()) {
+  for (const file of listTrackedFiles(cwd)) {
     if (isBinaryPath(file)) continue;
-    scanFile(file, offenses);
+    scanFile(cwd, file, offenses);
   }
+
+  return offenses;
+}
+
+function main() {
+  const offenses = checkFixtures(process.cwd());
 
   if (offenses.length > 0) {
     for (const offense of offenses) {
