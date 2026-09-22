@@ -14,6 +14,7 @@ export default async function GatedLayout({ children }: { children: React.ReactN
     <>
       <nav className="top-nav">
         <div className="row">
+          <Link href="/templates/job-assistant">Template</Link>
           <Link href="/install">Install</Link>
           <Link href="/learn">Learn</Link>
         </div>

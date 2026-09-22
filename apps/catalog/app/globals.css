@@ -147,6 +147,14 @@ section + section {
   justify-content: space-between;
 }
 
+/* A row of pills (template page: required sources, connections) or buttons
+   (download + checksum link) that must never force horizontal scroll at
+   narrow viewports — same reasoning as pre.command-block's white-space:
+   pre-wrap fix in part A, applied to a flex row instead of text. */
+.row.wrap {
+  flex-wrap: wrap;
+}
+
 button,
 .button {
   font: inherit;
