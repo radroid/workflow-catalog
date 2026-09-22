@@ -394,18 +394,24 @@ function assertNoDevToolsLabelTopRight(png: Buffer, fileName: string): void {
  * before actually failing -- the same "retry the arrange, not the
  * assertion" shape as ensureColorScheme.
  *
- * A brightness mismatch gets the same treatment, not a different one:
- * `inTheme`'s own "before" verifyTheme call already proved the theme was
- * right immediately before this action started, so a wrong brightness here
- * means the same spurious drop ensureColorScheme documents recurred mid-
- * capture (or produced a stale frame), not a markup/CSS regression --
- * confirmed for real in CI (PR #12, P07A-popup-dark.png, mean RGB 252 where
- * dark was expected, on a 2-worker Linux runner that never reproduced
- * locally across 20+ 4-worker runs). This used to be left unretried on the
- * theory that it was always a real regression; that theory was wrong. Each
- * retry re-forces the colour scheme via ensureColorScheme (the same repair
- * verifyTheme itself uses) before retaking the shot, bounded by the same
- * maxAttempts as the label check below. */
+ * A brightness mismatch gets a bounded retry too, but only when it's
+ * actually the same quirk ensureColorScheme documents: `inTheme`'s own
+ * "before" verifyTheme call already proved matchMedia/data-theme/the CSS
+ * background all agreed with `theme` immediately before this action
+ * started, so a wrong brightness here is only that known spurious drop if
+ * matchMedia *itself* has gone back to disagreeing with `theme` right now
+ * too -- confirmed for real in CI (PR #12, P07A-popup-dark.png, mean RGB
+ * 252 where dark was expected, on a 2-worker Linux runner that never
+ * reproduced locally across 20+ 4-worker runs, where matchMedia had indeed
+ * dropped). Per ensureColorScheme's own rule ("any other failure... must
+ * fail the test at once, not be silently retried away by a broad catch-
+ * and-retry"), a brightness mismatch while matchMedia still agrees is a
+ * *different*, unexplained failure -- not this quirk -- and fails
+ * immediately instead of spending retries hoping a fresh capture differs.
+ * Each retry of the genuine quirk re-forces the colour scheme via
+ * ensureColorScheme (the same repair verifyTheme itself uses) before
+ * retaking the shot, bounded by the same maxAttempts as the label check
+ * below. */
 export async function captureInTheme(
   target: ThemeTarget,
   theme: Theme,
@@ -422,8 +428,19 @@ export async function captureInTheme(
       const brightness = topLeftBrightness(capture);
       const observed: Theme = brightness >= 128 ? "light" : "dark";
       if (observed !== theme) {
-        if (attempt === maxAttempts - 1) {
-          expect(observed, `${fileName}: captured background, mean RGB ${brightness}`).toBe(theme);
+        // Reviewer nit (P07-B revision 1): only retry when matchMedia
+        // itself still disagrees with `theme` right now -- that's the one
+        // quirk this retry exists for (see the doc comment above). If
+        // matchMedia already agrees, this isn't a spurious drop to wait
+        // out; fail now instead of burning the remaining attempts on a
+        // mismatch that quirk doesn't explain.
+        const stillMatches = await target.evaluate<boolean>(matchesColorSchemeExpr(theme));
+        if (stillMatches || attempt === maxAttempts - 1) {
+          expect(
+            observed,
+            `${fileName}: captured background, mean RGB ${brightness}` +
+              (stillMatches ? " (matchMedia already agrees with the requested theme -- not the known spurious-drop quirk)" : ""),
+          ).toBe(theme);
         }
         await ensureColorScheme(target, theme);
         continue;
