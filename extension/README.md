@@ -99,30 +99,55 @@ separate downloaded binaries based on the `headless` option alone, and the
 headless one (`chromium-headless-shell`) has no extensions subsystem at
 all; `channel: "chromium"` forces the full binary regardless of
 `headless`. `extension.spec.ts` checks: the extension loads and its
-service worker starts; the options page renders (headings, "Not paired
-yet.", the file-bridge placeholder, and that `theme.css` actually loaded
-by asserting a themed background color); the popup renders and shows the
-unsupported-page fallback on `chrome://newtab` (a URL `activeTab` doesn't
-apply to, so this path is reachable without a real user gesture); no CSP
-violations fire on install.
+service worker starts; the options, popup, and side panel pages each
+render with real fonts/theme applied (`document.fonts.check`, and body
+background compared against the live `--background` token, not just
+"non-empty"); none of the three produces a `securitypolicyviolation`,
+`pageerror`, or console error on load; the popup shows the
+no-readable-address fallback when opened without a genuine `activeTab`
+grant (direct navigation to the popup's URL isn't one).
 
-Chrome's `activeTab` grant — and so the popup's successful-extraction
-preview — requires a genuine user-gesture invocation of the extension
-(a real toolbar click, or a real key event reaching the browser's
-accelerator table). Neither is reachable from Playwright today:
-`chrome.action.openPopup()` called without a DOM gesture opens the popup
-window but does not grant `activeTab`, and CDP key events dispatched at a
-page target don't reach extension keyboard commands
+**`real-popup.spec.ts`: the popup's successful-extraction path, for
+real.** Chrome's `activeTab` grant requires a genuine user-gesture
+invocation of the extension (a real toolbar click, or a real key event
+reaching the browser's accelerator table) — `chrome.action.openPopup()`
+called without a DOM gesture opens the popup window but does not grant
+`activeTab`, and CDP key events dispatched at a page target don't reach
+extension keyboard commands
 ([playwright#22683](https://github.com/microsoft/playwright/issues/22683),
-open, no workaround). That path is exercised manually — see the checklist
-below — and by the acceptance screenshots' method noted in the P07 packet
-report.
+open, no workaround). Chrome's own `--enable-unsafe-extension-debugging`
+launch flag plus the CDP `Extensions.triggerAction` command *is* a
+genuine, first-party invocation of the action button, and does grant
+`activeTab` — `e2e/real-popup-cdp.ts` wraps it (launch with that flag,
+resolve the tab's "tab"-type CDP target, trigger the action, attach to
+the popup's own target via a raw non-flattened session, since neither
+Playwright's `context.pages()` nor its typed `CDPSession` cover a target
+reached only through `Target.sendMessageToTarget`). `e2e/fixture-server.ts`
+serves `extension/fixtures/*.html` over `http://127.0.0.1:3107` (capture
+needs an http(s) page; `file:` is refused outright — see `shared/url.ts`).
+`real-popup.spec.ts` drives real capture → preview → Save → download
+against the json-ld, hostile, and DOM-heuristics fixtures (including
+proving the hostile posting's injected instruction is fully visible, not
+clipped, and never fires a dialog or navigation), the SPA-mismatch
+refusal (`posting-spa-mismatch.html`'s `__simulateRouteChangeTo`, a
+deliberate, generous main-thread busy-wait so the tab's URL changes
+*between* the popup's `chrome.tabs.query` and the injected extractor's
+`location.href` read — deterministic because `chrome.tabs.query` is
+answered entirely by the browser process from cached tab state, unaffected
+by that tab's renderer being busy; not a timing race against real router
+latency), and axe (0 WCAG 2.x A/AA + best-practice violations) against
+every state above plus the options page, light and dark. The P07A
+acceptance screenshots are retaken here, from the real popup and options
+pages, not a stand-in.
 
 ## Manual smoke test (branded Chrome)
 
-Branded Chrome can still **load unpacked** through the UI (only the
-command-line flag was removed), so this is the way to check anything the
-e2e suite can't reach:
+`real-popup.spec.ts` now covers the happy path (steps 2-3 below) on
+Playwright's bundled Chromium; this checklist is still the only way to
+check it on your actual, branded browser. Branded Chrome can still
+**load unpacked** through the UI (only the command-line flag was
+removed), so it's also the way to check anything the e2e suite can't
+reach at all:
 
 1. Build, then load unpacked as above in your real Chrome.
 2. Open any real job posting page in a tab, click the toolbar icon →
