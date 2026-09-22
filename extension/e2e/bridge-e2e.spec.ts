@@ -196,7 +196,7 @@ async function readKvPairs(scope: Locator): Promise<Record<string, string>> {
 test("pairing: a real code pairs, shows a device id and flips Status to connected, and Un-pair forgets it", async () => {
   const page = await openFreshOptionsPage();
 
-  await expect(statusOk(page)).toHaveText("Pair a device above to see the runner's status.");
+  await expect(statusOk(page)).toHaveText("Pair this browser above to see the runner's status.");
 
   const { code } = await bridge.ctx.pairing.issue();
   await pairThroughTheRealForm(page, code);
@@ -210,7 +210,14 @@ test("pairing: a real code pairs, shows a device id and flips Status to connecte
   const kv = await readKvPairs(statusOk(page));
   expect(kv.Connected).toBe("Yes");
   expect(kv.Version).toBe("0.1.0-test");
-  expect(kv.Workspace).toBe(bridge.ctx.workspace.manifest.workspaceId);
+  // Polish (P07-B revision 1): the full workspace UUID crowded this row --
+  // abbreviateUuid shows only its first 8 characters plus an ellipsis, with
+  // the full value still reachable via the dd's own title attribute (same
+  // treatment Device's id already gets above).
+  const workspaceId = bridge.ctx.workspace.manifest.workspaceId;
+  expect(kv.Workspace).toBe(`${workspaceId.slice(0, 8)}…`);
+  const workspaceDd = statusOk(page).locator("dl.kv dd").nth(2);
+  await expect(workspaceDd).toHaveAttribute("title", workspaceId);
 
   await page.getByRole("button", { name: "Un-pair" }).click();
   await expect(pairingSection.locator('[role="status"]')).toHaveText("Un-paired. You can pair again below.");
@@ -219,7 +226,7 @@ test("pairing: a real code pairs, shows a device id and flips Status to connecte
     "http://127.0.0.1:4310/ui/status",
   );
   // Status flips back too -- the same GET /status is now unauthenticated.
-  await expect(statusOk(page)).toHaveText("Pair a device above to see the runner's status.");
+  await expect(statusOk(page)).toHaveText("Pair this browser above to see the runner's status.");
 
   await page.close();
 });
@@ -233,7 +240,7 @@ test("pairing: a wrong code shows the bridge's own error message and marks the f
   await page.getByRole("button", { name: "Pair", exact: true }).click();
 
   await expect(page.locator('[data-section="pairing"] [role="status"]')).toHaveText(
-    "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run `npm run pair` for a new one.",
+    "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run npm run pair for a new one.",
   );
   await expect(codeInput).toHaveAttribute("aria-invalid", "true");
   await expect(page.locator('[data-section="pairing"]')).toContainText("Not paired yet.");
@@ -291,7 +298,7 @@ test("status (gate 9): a clear state when the runner isn't running", async () =>
 
   await bridge.bridge.close();
   await page.reload();
-  await expect(statusAlert(page)).toHaveText("Can't reach the runner. Is it running? Start it with `npm run runner`.");
+  await expect(statusAlert(page)).toHaveText("Can't reach the runner. Is it running? Start it with npm run runner.");
 
   // Restart so afterEach's close() (already-closed is a needless risk) and
   // this file's other tests see a bridge in the state startBridgeHarness
@@ -321,15 +328,17 @@ test("job_capture (gate 1): Save shows a single success state, against the real 
   await focusSaveButton(popup);
   await pressEnter(popup);
 
+  // P07-B revision 1, E1: the bridge is tried first and accepts it, so
+  // Save downloads nothing here -- "Sent to the runner." is the whole
+  // status line, not a "Saved <file> and sent..." combination the way
+  // part A's always-download design used to word it.
   let statusText = "";
   for (let attempt = 0; attempt < 30; attempt += 1) {
     statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("sent it to the runner")) break;
+    if (statusText.includes("Sent to the runner")) break;
     await sleep(100);
   }
-  expect(statusText).toBe(
-    "Saved job-capture.json and sent it to the runner. If nothing downloaded, use the options page to export it.",
-  );
+  expect(statusText).toBe("Sent to the runner.");
   const buttonText = await popup.evaluate<string>(`document.querySelector("button.primary").textContent`);
   expect(buttonText).toBe("Saved ✓");
 
@@ -380,16 +389,16 @@ test("job_capture (gate 9, wrong extension id): Save still shows a clear recover
   let statusText = "";
   for (let attempt = 0; attempt < 30; attempt += 1) {
     statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("isn't reachable right now")) break;
+    if (statusText.includes("different install")) break;
     await sleep(100);
   }
-  // sendToBridge treats every postEvent failure other than not_paired the
-  // same safe way (queue it, say so) -- the real, wrong-extension-id 403
-  // from the real bridge lands here exactly like a network error would,
-  // never a stuck spinner, a silent loss, or a raw error dump.
-  expect(statusText).toBe(
-    "Saved job-capture.json. The runner isn't reachable right now — it'll be sent automatically once it's back. If nothing downloaded, use the options page to export it.",
-  );
+  // P07-B revision 1, B3: sendToBridge branches on status/code instead of
+  // one blanket "isn't reachable right now" for every failure -- a real,
+  // wrong-extension-id 403 from the real bridge gets its own specific
+  // message (and, like every queued outcome, offers "Open settings" --
+  // Settings is exactly what can fix a wrong pairing), not a generic
+  // network-error-shaped one.
+  expect(statusText).toBe("This pairing belongs to a different install. Pair again in Settings.");
 
   // And the bridge itself genuinely refused it -- the capture is queued
   // client-side, but never journaled: gate 9 is that a mismatched device
@@ -434,12 +443,20 @@ test("job_capture (gate 4): Save queues when the runner is unreachable, and the 
     if (statusText.includes("isn't reachable right now")) break;
     await sleep(100);
   }
-  expect(statusText).toBe(
-    "Saved job-capture.json. The runner isn't reachable right now — it'll be sent automatically once it's back. If nothing downloaded, use the options page to export it.",
-  );
+  expect(statusText).toBe("The runner isn't reachable right now — it'll be sent automatically once it's back.");
 
+  // P07-B revision 1, B2: the outbox moved from one array under a single
+  // "jobCaptureOutbox" key to one key per entry ("jobCaptureOutbox:
+  // <eventId>", shared/outbox.ts's OUTBOX_KEY_PREFIX) so concurrent writes
+  // from different contexts (popup vs. worker) never race each other --
+  // get(null) (chrome's own "everything" form, the same call readOutbox()
+  // itself makes) and a prefix filter is how anything outside that module
+  // has to enumerate it now.
   const queuedEventId = await popup.evaluate<string | undefined>(`
-    chrome.storage.session.get("jobCaptureOutbox").then((r) => r.jobCaptureOutbox?.[0]?.capture?.eventId)
+    chrome.storage.session.get(null).then((all) => {
+      const key = Object.keys(all).find((k) => k.startsWith("jobCaptureOutbox:"));
+      return key ? all[key]?.capture?.eventId : undefined;
+    })
   `);
   expect(queuedEventId).toBeTruthy();
 
@@ -471,8 +488,8 @@ test("job_capture (gate 4): Save queues when the runner is unreachable, and the 
   const checkPage = await harness.context.newPage();
   await checkPage.goto(optionsUrl());
   const stillQueued = await checkPage.evaluate(async () => {
-    const stored = await chrome.storage.session.get("jobCaptureOutbox");
-    return (stored.jobCaptureOutbox as unknown[] | undefined)?.length ?? 0;
+    const all = await chrome.storage.session.get(null);
+    return Object.keys(all).filter((key) => key.startsWith("jobCaptureOutbox:")).length;
   });
   expect(stillQueued, "the outbox should be empty once the alarm delivered it").toBe(0);
   await checkPage.close();
@@ -495,7 +512,7 @@ test("P07B screenshots: options page, pairing error (light and dark)", async () 
   await page.getByLabel("Code from npm run setup").fill("ZZZZZ-ZZZZZ");
   await page.getByRole("button", { name: "Pair", exact: true }).click();
   await expect(page.locator('[data-section="pairing"] [role="status"]')).toHaveText(
-    "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run `npm run pair` for a new one.",
+    "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run npm run pair for a new one.",
   );
 
   const optionsTheme = pageThemeTarget(page, "options-error");
@@ -525,10 +542,10 @@ test("P07B screenshots: popup, saved (light and dark)", async () => {
   let statusText = "";
   for (let attempt = 0; attempt < 30; attempt += 1) {
     statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("sent it to the runner")) break;
+    if (statusText.includes("Sent to the runner")) break;
     await sleep(100);
   }
-  expect(statusText).toContain("sent it to the runner");
+  expect(statusText).toBe("Sent to the runner.");
 
   const popupTheme = popupThemeTarget(popup);
   await captureInTheme(popupTheme, "light", "P07B-popup-saved-light.png", screenshotPath);

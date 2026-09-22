@@ -92,10 +92,16 @@ function setPairingStatus(text: string, problem: boolean): void {
  * `everPaired` (P07-B revision 1, E3/B12): the code field's own label
  * names the command that actually printed the code on screen -- `npm run
  * setup` runs once and prints the very first code; every code after that
- * (re-pairing after an Un-pair, or pairing a second browser) comes from
- * `npm run pair` instead. True whenever this browser has held a token at
- * any point up to now, including right after Un-pair (which always passes
- * `true` -- it just forgot one).
+ * (re-pairing while still paired, or right after an Un-pair) comes from
+ * `npm run pair` instead. `buildPairingSection` passes `current !== null`
+ * (a token is stored right now); the Un-pair handler below passes a
+ * hardcoded `true` instead of recomputing it, since it has just forgotten
+ * the token itself and `current` would otherwise read `null` a moment too
+ * early. Nothing here distinguishes "never paired" from "was paired, then
+ * silently lost the token some other way" (e.g. bridge-client.ts's
+ * onTokenInvalid hook clearing a dead one after a 401) -- that path's next
+ * Pairing re-render goes back through `buildPairingSection`, sees no
+ * current token, and shows "npm run setup" again, same as a fresh install.
  *
  * Polish: the code-entry form collapses to a single "Pair again" button
  * while already paired (`current !== null`), instead of always showing a
