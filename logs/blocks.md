@@ -525,3 +525,84 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - Squash-merged as 9a0c5b7; P02 is done.
 - The §5 amendment, `.runner/` in the §5 layout and ARCHITECTURE §4, the CLAUDE.md runner line (`npm run runner`) and the root README rows land in the iter-003 commit.
 - New packet P02.1 (runner follow-ups: both notes) is planned for iter-005.
+
+## 2026-09-22 — P02.1 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 004
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** Opus reviewer over PR #9 (HEAD must not spend the sign-in link; a unit test for an error in the `/pair` queue).
+**Verdict text / failure detail:** VERDICT: REVISE — 1 issue.
+- Both fixes are confirmed by mutation. HEAD never redeems the link, and the queue survives a failed `redeem` without an unhandled rejection. The integration merge is green (runner 155 tests, eval 20 gates).
+- Issue: the hand-built HEAD answer lacks the CSP and CORP headers that the GET answers carry.
+- Setup deviation: the harness refuses commands that set `HOME`. The reviewer did not reroute. Instead it checked that no test or eval path can reach the real workspace, keychain or model before running under the real HOME.
+
+**Action taken:**
+- One revision round to the same implementer: use the shared response helper, add header assertions and a mutation proof, and add a README line.
+- From now on prompts say "temp HOME where the harness allows it; otherwise confirm the code under test cannot reach the real HOME".
+
+## 2026-09-22 — P09.1 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 004
+**Source:** peer-review
+**Severity:** medium
+
+**Charter / context:** Opus reviewer and UI critic over PR #10 (catalog follow-ups: install guide synced to P02, drift test, nonce test, checksum cap, UI notes).
+**Verdict text / failure detail:**
+- Reviewer: VERDICT: REVISE — 3 issues.
+  1. Next 16.3.5's patched fetch splits cacheable bodies, so cancelling our reader at the 4 KB cap blocks until the 5 s timeout while Next's copy downloads everything. Stale entries are also refetched in the background with no cap or timeout.
+  2. The drift test misses step order, checklist labels, script names and the unpacked folder.
+  3. The doctor note says five checks; doctor prints seven.
+  - The install commands were walked on a fresh clone up to doctor.
+- UI critic: VERDICT: REVISE — 7 issues.
+  - Sources and Connections are not real lists (WCAG 1.3.1).
+  - Wrapped commands at 390 look like separate commands.
+  - The extension build step can't run as written.
+  - Prerequisites and the Codex sign-in are unclear.
+  - The doctor note is wrong.
+  - The changelog sentence is not plain.
+  - The screenshots are viewport-only.
+  - axe found 0 violations.
+- The UI critic also found:
+  - Node 25 and later no longer bundle Corepack, so the README's `corepack enable` fails there. Verified (nodejs/corepack#734).
+  - The guide has no pairing step.
+  - `next dev` listens on all network interfaces.
+
+**Action taken:**
+- One revision round with all ten issues.
+- Orchestrator decision: the release fetch leaves Next's data cache (`no-store`), and the parsed checksum is cached instead. The fetch aborts at the cap.
+- New install order: prerequisites → code → extension build → setup → runner → load → pair → doctor.
+- The catalog `dev` script binds localhost.
+- P02.1's revision adds the Corepack line to `runner/README.md`.
+
+## 2026-09-22 — P02.1 peer review, round 2 [APPROVE]
+
+**Iter:** 004
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** Opus reviewer re-checked PR #9 at a1a3ee6.
+**Verdict text / failure detail:** VERDICT: APPROVE.
+- HEAD and GET now send the same headers (checked over TCP), and HEAD never redeems the link.
+- All three mutations fail the HEAD test.
+- The Corepack line is accurate: Node's CHANGELOG_V25 says "stop distributing Corepack" (#57617). It sits outside the Install code block, and P09.1's drift test still passes stacked on top.
+- Integration plus #9 is green: runner 155 tests, eval 20 gates.
+
+**Action taken:** Squash-merged as d9454f2; P02.1 is done. The catalog guide gets the same Node 25 note in P09.1's revision.
+
+## 2026-09-22 — Provider session limit stopped three implementers [FAILURE]
+
+**Iter:** 004
+**Source:** smoke-failure (provider usage limit)
+**Severity:** medium
+
+**Charter / context:** At about 09:20 the P03, P07-B and P09.1 implementers (Sonnet) stopped with HTTP 429 "You've hit your session limit · resets 9:50am (America/Toronto)".
+**Verdict text / failure detail:** Nothing was lost; every worktree was intact.
+- P03: only its claim commit was pushed, and a large set of files was uncommitted.
+- P07-B: three commits, one unpushed (4555fa2), clean tree.
+- P09.1: revision round half done, six files uncommitted.
+
+**Action taken:**
+- The owner re-kicked at 09:52. All three agents resumed with SendMessage, keeping their context, and were told to commit and push each green slice at once.
+- P03's new helper files under `runner/agent/lib/` (onboarding-store, extract-claims-schema, ask-follow-up-schema) are approved as new files; P02's files there stay untouched.
