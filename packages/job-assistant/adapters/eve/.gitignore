@@ -2,3 +2,7 @@
 /extension/skills/
 # eve extension build output. The runner builds it before `eve build`.
 /dist/
+# pnpm's links for this package's own dependencies. Listed so that packing
+# packages/job-assistant (the release tarball) leaves them out: its
+# .bin/eve shim holds the packing machine's absolute paths.
+/node_modules/
