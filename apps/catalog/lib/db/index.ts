@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "./types";
@@ -41,7 +42,19 @@ declare global {
  */
 export function getDb(): Promise<Db> {
   if (!globalThis.__catalogDbPromise) {
-    globalThis.__catalogDbPromise = createDb();
+    // Cache the promise, not the resolved value — but a *rejected* promise
+    // left cached on globalThis is a permanent outage: every future
+    // getDb() call would keep returning that same dead promise, forever,
+    // even once whatever caused the rejection (e.g. a data directory that
+    // didn't exist yet) would no longer happen on retry. A P09-B revision
+    // round caught this on a fresh clone specifically, where the very first
+    // request's ENOENT (see defaultPgliteDataDir/mkdir below) got baked in
+    // permanently — only a process restart cleared it. Clearing the cache
+    // on failure lets the next call retry createDb() from scratch instead.
+    globalThis.__catalogDbPromise = createDb().catch((err: unknown) => {
+      globalThis.__catalogDbPromise = undefined;
+      throw err;
+    });
   }
   return globalThis.__catalogDbPromise;
 }
@@ -64,7 +77,15 @@ async function createDb(): Promise<Db> {
     import("./pglite-db"),
     import("./migrate"),
   ]);
-  const client = new PGlite(defaultPgliteDataDir());
+  const dataDir = defaultPgliteDataDir();
+  // { recursive: true }: on a fresh clone, neither apps/catalog/.data/ nor
+  // .data/pglite/ exist yet — a non-recursive mkdir (or PGlite's own,
+  // unhelped) only ever creates the final path segment, so the first
+  // request on a fresh checkout crashed with ENOENT (the parent .data/ was
+  // missing too). Also a no-op, not an error, when the directory already
+  // exists — safe to run on every createDb() call, not just the first.
+  await mkdir(dataDir, { recursive: true });
+  const client = new PGlite(dataDir);
   await migratePglite(client);
   return pgliteDb(client);
 }
