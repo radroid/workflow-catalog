@@ -8,6 +8,8 @@ import { ManualClock } from "../../lib/clock.ts";
 import { ProfileStore } from "../../store/profile.ts";
 import { Workspace } from "../../store/workspace.ts";
 import {
+  askFollowUpPrompt,
+  FIXTURE_FOLLOW_UP_QUESTION,
   FIXTURE_TARGET_METRIC_QUOTE,
   HOSTILE_EXTRACTION_CLAIMS,
   HOSTILE_RESUME_TEXT,
@@ -73,7 +75,7 @@ await store.accountSource("resume", "provided");
 
 export default defineEval({
   description:
-    "extract_claims persists candidate claims verified against the real resume.md fixture, including the metric left candidate with a question; a hostile 'resume' still yields only claims, with no other tool called; a fabricated (non-verbatim) evidence quote is rejected, not trusted (P03 revision 1, R5).",
+    "extract_claims persists candidate claims verified against the real resume.md fixture, including the metric left candidate with a question; a hostile 'resume' still yields only claims, with no other tool called; a fabricated (non-verbatim) evidence quote is rejected, not trusted (P03 revision 1, R5); ask_follow_up parks on a real HITL input request and both an explicit 'confirmed' answer and a freeform-only answer confirm the claim with statement evidence (P03 revision 1, R6).",
   async test(t) {
     // Fixture parity: the eval agent's hardcoded claim data (bundling-safety
     // reasons, see fixtures/onboarding.ts) must stay real substrings of the
@@ -140,6 +142,59 @@ export default defineEval({
         after.claims.some((claim) => claim.text === RESUME_FABRICATED_CLAIM.text),
         equals(false),
       ).label("the fabricated claim's text never landed in the profile");
+    }
+
+    // R6: ask_follow_up parks on a real eve HITL input request (ctx.ask),
+    // and answering "confirmed" — one of the two offered options — records
+    // the claim as confirmed with the person's own statement as evidence,
+    // never the superseded passage.
+    {
+      const seeded = await store.extractClaims("resume", [
+        { text: "Cut the sync job's runtime by an unverified amount.", kind: "metric", evidenceRef: "resume.md#follow-up-confirmed", evidenceQuote: "Cut the sync job's runtime" },
+      ]);
+      const claimId = seeded.profile.claims.find((claim) => claim.evidence.ref === "resume.md#follow-up-confirmed")!.id;
+      t.check(seeded.profile.claims.find((claim) => claim.id === claimId)?.status, equals("candidate")).label("the claim starts candidate, not pre-decided");
+
+      // Not `t.parked()`: that asserts the *whole run* is left parked when
+      // `test()` returns, which does not hold here — this scenario goes on
+      // to answer the request itself in the very next line. The pending
+      // request's own existence (the park actually happening) is what
+      // `requireInputRequest` below already asserts and returns.
+      const turn = await t.send(askFollowUpPrompt(claimId));
+      t.check(turn.status, equals("waiting")).label("the turn parks (session.waiting) instead of failing or guessing");
+      const request = turn.session.requireInputRequest({ toolName: "ask_follow_up" });
+      const answered = await turn.session.respond([{ requestId: request.requestId, optionId: "confirmed" }]);
+      answered.succeeded();
+      t.check(answered.message ?? "", includes('"isError":false')).label("ask_follow_up result is not an error");
+
+      const after = await store.read();
+      const claim = after.claims.find((c) => c.id === claimId);
+      t.check(claim?.question, equals(FIXTURE_FOLLOW_UP_QUESTION)).label("the model-drafted question was recorded");
+      t.check(claim?.status, equals("confirmed")).label("confirming records the claim as confirmed");
+      t.check(claim?.evidence.kind, equals("statement")).label("the evidence is the person's own statement, not the superseded passage");
+    }
+
+    // R6's exact bug: with `allowFreeform: true`, a text-only answer (no
+    // option picked) used to map to "no evidence" and silently exclude the
+    // claim. A non-blank freeform answer must confirm it instead.
+    {
+      const seeded = await store.extractClaims("resume", [
+        { text: "Founded a small internal tools team.", kind: "fact", evidenceRef: "resume.md#follow-up-freeform", evidenceQuote: "Founded a small internal tools team" },
+      ]);
+      const claimId = seeded.profile.claims.find((claim) => claim.evidence.ref === "resume.md#follow-up-freeform")!.id;
+
+      const turn = await t.send(askFollowUpPrompt(claimId));
+      t.check(turn.status, equals("waiting")).label("the turn parks (session.waiting) instead of failing or guessing");
+      const request = turn.session.requireInputRequest({ toolName: "ask_follow_up" });
+      const freeformStatement = "I ran this migration myself, verified against our deploy dashboard.";
+      const answered = await turn.session.respond([{ requestId: request.requestId, text: freeformStatement }]);
+      answered.succeeded();
+
+      const after = await store.read();
+      const claim = after.claims.find((c) => c.id === claimId);
+      t.check(claim?.status, equals("confirmed")).label("R6: a freeform-only answer confirms — it must never silently exclude the claim");
+      t.check(claim?.evidence.kind, equals("statement")).label("the freeform text is recorded as statement evidence");
+      t.check(claim?.evidence.quote, equals(freeformStatement)).label("the person's own words are the evidence quote, not a placeholder");
     }
   },
 });

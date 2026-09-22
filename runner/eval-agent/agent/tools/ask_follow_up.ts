@@ -1,9 +1,11 @@
 import { defineWorkflowTool } from "eve/tools";
+import { hasEvidenceFromAnswer } from "../../../agent/lib/ask-follow-up-logic.ts";
 import { askFollowUpInputSchema, askFollowUpOutputSchema, askFollowUpToolDescription } from "../../../agent/lib/ask-follow-up-schema.ts";
 import { openStore } from "../../../agent/lib/onboarding-store.ts";
 
-// The real behaviour, not a copy: schemas and the `openStore` helper are
-// imported from the shared runner/agent/lib module. See
+// The real behaviour, not a copy: schemas, the `openStore` helper, and the
+// evidence-from-answer logic (`hasEvidenceFromAnswer`, P03 revision 1, R6)
+// are imported from the shared runner/agent/lib module. See
 // extract_claims.ts (this directory) and agent/tools/ask_follow_up.ts for
 // why this tool's "use workflow" executor and "use step" helpers stay
 // inline and duplicated once per eve app root. The evals below still check
@@ -57,7 +59,7 @@ export default defineWorkflowTool({
       allowFreeform: true,
     });
 
-    const hasEvidence = answer.optionId === "confirmed";
+    const hasEvidence = hasEvidenceFromAnswer(answer); // R6 (P03 revision 1) — see ask-follow-up-logic.ts
     const status: "confirmed" | "excluded" = hasEvidence ? "confirmed" : "excluded";
     const message = await recordAnswer(claimId, hasEvidence, answer.text);
     return { claimId, status, message };

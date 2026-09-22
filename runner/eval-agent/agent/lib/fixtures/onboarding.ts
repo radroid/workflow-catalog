@@ -24,11 +24,21 @@ export const ONBOARDING_FIXTURE_PROMPTS = {
   extractResume: "fixture: extract claims from the resume",
   extractHostileResume: "fixture: extract claims from the hostile resume",
   extractFabricatedQuote: "fixture: extract a claim whose evidence quote is fabricated, not real",
+  /** A prefix, not a full prompt — see `askFollowUpPrompt` below (R6). */
   askFollowUp: "fixture: ask the follow-up question for the pending claim",
 } as const;
 
-/** A fictional, fixed claim id the follow-up eval seeds into its temp workspace before sending the prompt (fixtures policy). */
-export const FIXTURE_PENDING_CLAIM_ID = "8f1c2b3a-4d5e-4f60-9a1b-2c3d4e5f6071";
+/**
+ * `ask_follow_up`'s prompt for a specific claim id (P03 revision 1, R6).
+ * `claimId` is a real id the eval extracted moments earlier — `ProfileStore`
+ * generates it (`lib/crypto.ts`'s `newId`), so unlike every other fixture
+ * constant here it cannot be a fixed literal known ahead of time. `respond`
+ * below matches on the fixed prefix and reads the id back out of the
+ * prompt text itself, the same way a real drafted question would carry it.
+ */
+export function askFollowUpPrompt(claimId: string): string {
+  return `${ONBOARDING_FIXTURE_PROMPTS.askFollowUp} ${claimId}`;
+}
 
 export const FIXTURE_FOLLOW_UP_QUESTION = "What is this figure measured against, and over what period?";
 
@@ -135,8 +145,9 @@ export const respond: FixtureHandler = (request: MockModelRequest, prompt: strin
     return `extracted: ${JSON.stringify({ name: last?.name, isError: last?.isError, output: last?.output })}`;
   }
 
-  if (prompt === ONBOARDING_FIXTURE_PROMPTS.askFollowUp) {
-    if (!done) return toolCallResponse("ask_follow_up", { claimId: FIXTURE_PENDING_CLAIM_ID, question: FIXTURE_FOLLOW_UP_QUESTION });
+  if (prompt.startsWith(ONBOARDING_FIXTURE_PROMPTS.askFollowUp)) {
+    const claimId = prompt.slice(ONBOARDING_FIXTURE_PROMPTS.askFollowUp.length).trim();
+    if (!done) return toolCallResponse("ask_follow_up", { claimId, question: FIXTURE_FOLLOW_UP_QUESTION });
     const last = request.toolResults.at(-1);
     return `asked: ${JSON.stringify({ name: last?.name, isError: last?.isError })}`;
   }

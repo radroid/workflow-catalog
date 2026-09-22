@@ -1,4 +1,5 @@
 import { defineWorkflowTool } from "eve/tools";
+import { hasEvidenceFromAnswer } from "../lib/ask-follow-up-logic.ts";
 import { askFollowUpInputSchema, askFollowUpOutputSchema, askFollowUpToolDescription } from "../lib/ask-follow-up-schema.ts";
 import { openStore } from "../lib/onboarding-store.ts";
 
@@ -15,13 +16,15 @@ import { openStore } from "../lib/onboarding-store.ts";
  * (mvp-spec §5), and the superseded passage evidence is kept in
  * `revisions[]` (`profile-reducer.ts`'s `answerQuestion` action).
  *
- * The schemas live in `../lib/ask-follow-up-schema.ts`, freely shared with
- * `eval-agent/agent/tools/ask_follow_up.ts` (that file's header comment says
- * why: they carry no workflow/step directive). This file's own
- * `"use workflow"` executor and `"use step"` helpers stay inline and are
- * necessarily duplicated once per eve app root — see
- * `agent/tools/extract_claims.ts`'s header comment for why (confirmed
- * empirically against eve's own compiled source; see the P03 report).
+ * The schemas live in `../lib/ask-follow-up-schema.ts` and the
+ * evidence-from-answer logic in `../lib/ask-follow-up-logic.ts` (P03
+ * revision 1, R6), both freely shared with `eval-agent/agent/tools/ask_follow_up.ts`
+ * (that file's header comment says why: they carry no workflow/step
+ * directive). This file's own `"use workflow"` executor and `"use step"`
+ * helpers stay inline and are necessarily duplicated once per eve app
+ * root — see `agent/tools/extract_claims.ts`'s header comment for why
+ * (confirmed empirically against eve's own compiled source; see the P03
+ * report).
  */
 
 /** "use step": confirms the claim exists and still needs a decision, before anyone is asked anything. */
@@ -72,7 +75,7 @@ export default defineWorkflowTool({
       allowFreeform: true,
     });
 
-    const hasEvidence = answer.optionId === "confirmed";
+    const hasEvidence = hasEvidenceFromAnswer(answer); // R6 (P03 revision 1) — see ask-follow-up-logic.ts
     const status: "confirmed" | "excluded" = hasEvidence ? "confirmed" : "excluded";
     const message = await recordAnswer(claimId, hasEvidence, answer.text);
     return { claimId, status, message };
