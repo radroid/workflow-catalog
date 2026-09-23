@@ -43,10 +43,7 @@ All exit 0:
 - `pnpm -r lint` and `pnpm check:fixtures`. The tree is clean.
 - CI on e01017c, which includes the extension e2e, is checked at the next wake-up.
 
-## PRs
-#11, #12 and #13 merged. #2 updated.
-
-## Blocks
-Owner-gated: the catalog deploy, the first release tag, and the tag-push deny rule. Nothing blocks iter 006.
+## PRs and blocks
+#11, #12 and #13 merged; #2 updated. Owner-gated: the catalog deploy, the first release tag, and the tag-push deny rule. Nothing blocks iter 006.
 
 Next: P04 (Sonnet; prompt in `logs/handoff/P04-prompt.md`). Then P05 (Opus) ∥ P03.2 (Sonnet), then P03.1, then P08-B. P06 follows P05.
