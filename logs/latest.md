@@ -1,28 +1,30 @@
-Latest: iter-005 in progress (resumed again at 16:04 on 2026-09-23 after a weekly usage limit). The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
+Latest: iter-005 closed on 2026-09-23. P08-A, P03 and P07-B merged into overnight/integration (360ac69, 9821bee, e01017c). Log: `logs/iter-005.md`. In `.loop/state.json`, `iter` is 5.
 
-Running now: the P07-B round-5 pair and the P03 round-4 pair, one worktree each. P04's prompt is ready (`logs/handoff/P04-prompt.md`) and spawns when P03 merges. Reviewers' worktrees are removed once clean and pushed.
-- **P03 (#11):** revision 3 (J1–J8) reached fbb6444, with CI green; it already merges P08-A (keeping its readdir test). Round 4 is running as a narrow confirmation round: an Opus reviewer (4320 only if needed) and an Opus UI critic (4350, clone `/tmp/wc-ui8-p03`). A REVISE goes back to the same Opus implementer. APPROVE means merge, then start P04.
-- **P07-B (#12):** revision 4 (K1–K4) reached b8d0eaf, with CI green. Round 5 is running as a narrow confirmation round: an Opus reviewer (no 4310) and an Opus UI critic (4310, clone `/tmp/wc-ui9-p07b`). APPROVE from both means merge.
-- **P08-A (#13): merged** (squash 360ac69) after round 3: both reviewers APPROVED. Its nits and polish go to P08-B ("Carried into part B" in the P08 packet).
-- **Then:** P04 after P03; P05 (Opus) after P04; P03.1 after P03 and P04; P08-B after P05. The runner follow-up (P02's `checkModel` to reuse P08-A's `runTurn`, eve item 15) comes after P03 merges. After that, the wave plan continues.
+Next, iter 006: spawn P04 (Sonnet) from `logs/handoff/P04-prompt.md`, filling in the integration head and a fresh private code word. Its harness port is 4330.
+- **Then:**
+  - after P04: P05 (Opus) ∥ P03.2 (Sonnet), which needs P04's turn events. P03.1 follows P03.2, because they share files.
+  - after P05: P08-B, which carries P08-A's follow-ups, and P06.
+  - after P06: P07-C, which carries P07-B's follow-ups. Then P10.
+- **Reviews:** one Opus reviewer and one Opus UI critic per PR. After round 1, rounds are narrow and check only what changed. A REVISE goes back to the same implementer once; a second REVISE goes to a fresh Opus escalation.
 
 If this session dies: every agent pushes its branch at green steps. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
-**Usage:** a weekly limit stopped every agent at about 17:05 on 9/22, and all resumed at 16:04 on 9/23. Keep review rounds narrow.
+**Usage:** a weekly limit stopped every agent on 9/22. Keep review rounds narrow.
 
 Must-carry (see "Rules and lessons learned" in the pause handoff):
 - **Every prompt:**
-  - Branch from `origin/…`.
-  - Write only in the worktree or /tmp. MCP screenshot tools need absolute paths.
+  - Branch from `origin/…`. Write only in the worktree or /tmp, and open only the /tmp paths named. MCP screenshot tools need absolute paths.
   - No recursive deletes through node, find or python. Never test a guardrail.
-- **Orchestrator messages:** each agent's prompt has a private code word, kept in a private /tmp folder (no `wc-` prefix) and never committed. Prompts limit agents to the /tmp paths they name. Every mid-round message carries it. Use TaskStop for a real stop.
-- **Ports are exclusive:**
-  - owner 3000/3001;
-  - 4310 only for the P07-B round-5 UI critic;
-  - the P03 reviewer 4320;
-  - the UI critics 4340 and 4350; catalog 3106.
-- **Route modules:** P03's readdir-based test (D2) lands with P03. Until then, a packet adds its one name.
-- **eve:** directives compile per app root (§8 item 14). An aborted client turn ends quietly as `completed`, and `turn.cancelled` is not ok (§8 item 15). A provider 429 surfaces as `semanticErrorId "gateway-rate-limited"`.
+  - A command refused for complexity: split it, or use Edit/Write. Refused by a deny rule or permission: stop and report.
+- **Orchestrator messages:** each agent's prompt has a private code word, kept in a private /tmp folder (no `wc-` prefix) and never committed. Every mid-round message carries it. Use TaskStop for a real stop.
+- **Ports are exclusive:** owner 3000/3001; 4310 the extension bridge, one agent at a time; implementers 4320 and 4330; UI critics 4340 and 4350; catalog 3106.
+- **Route modules:** P03's readdir-based test (D2) means route packets never edit `route-modules.test.ts`.
+- **eve:**
+  - Directives compile per app root (§8 item 14).
+  - Turns are classified per §8 item 15: the quiet abort; `session.waiting` is ok; `turn.cancelled` is not; authorizations.
+  - Run model turns through P08-A's `runTurn`, and add no new classifiers.
+  - A provider 429 surfaces as `semanticErrorId "gateway-rate-limited"`.
+- **URLs:** captured and pasted URLs may be http, per the contract. Only the runner's own fetches are https-only, with the SSRF rules. Opening a stored URL must refuse loopback and private targets.
 
 Open blocks: owner-gated catalog deploy, first release tag, tag-push deny rule (GOALS Open dependencies).
-Last closed iteration: 004 (shipped P02.1 and P09.1). Log: logs/iter-004.md.
+Last closed iteration: 005 (merged P08-A, P03 and P07-B). Log: logs/iter-005.md.
 <!-- Tier 1: read every iter. Hard cap 30 lines. Overwrite each iter; this file IS the handoff. -->

@@ -1,6 +1,6 @@
 # P03 · Onboarding and the career profile
 
-Status: claimed
+Status: done (iter 005, PR #11, squash 9821bee)
 Assignee: iter-005 escalation implementer (Opus), revision 3 (J1–J8); revision 2 by the same implementer; previously the iter-004 implementer (Sonnet)
 Blocked by: P02
 Owns: runner/agent/skills/ (onboarding set), runner/agent/tools/ (extract_claims, ask_follow_up), runner/store/profile.ts, runner/server/routes/onboarding.ts, runner/ui/onboarding.html, runner/ui/profile.html, packages/job-assistant/fixtures/onboarding/

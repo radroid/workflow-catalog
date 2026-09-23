@@ -1,6 +1,6 @@
 # P07 · Chrome extension
 
-Status: claimed (part B)
+Status: open (part A done iter 003, PR #7, squash bc55bb3; part B done iter 005, PR #12, squash e01017c; part C not started)
 Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus); part B iter-004 implementer (Sonnet); part B revision 1 iter-004 implementer (Sonnet); part B revision 2 iter-005 escalation implementer (Opus); part B revision 3 iter-005 escalation implementer (Opus); part B revision 4 iter-005 escalation implementer (Opus)
 Blocked by: P02 (pairing and bridge), P06 (manifests and commands)
 Owns: extension/
@@ -24,6 +24,17 @@ The nine gates from browser-boundary.md as automated tests where possible (repla
 
 ## Out of scope
 Form filling, uploads, submission, cookies, native messaging.
+
+## Carried into part C (from the part-B reviews, iter 005)
+Findings: `logs/handoff/P07-B-round-4-review.md` and `logs/handoff/P07-B-round-5-review.md`.
+- **The Pairing card's expired notice** (round-5 reviewer's nit 2, and UI polish 1). `syncPairingSection` returns early when it compares only the device id (`options/main.ts:358`), so:
+  - a card that never showed the paired state misses the notice;
+  - a notice can outlive a later pair and un-pair in another tab.
+  Fix: re-derive the notice from `pairingExpired` on every sync, and set or clear it silently.
+- **A half-typed code survives a rebuild** (UI polish 2): when focus was in the code field, carry its value into the rebuilt card.
+- **The popup test for K4's second sentence** (reviewer nit 1): "This page couldn't be captured.".
+- **`forgetInvalidToken` window** (documented limitation): a pairing stored between the read and the remove is lost. Consider fixing it with the pause stamps.
+- **Opening stored URLs** (`logs/blocks.md`, "P04 URL rule"): captured URLs may be http. Before opening any stored URL in a tab, refuse loopback, private, link-local and metadata targets, and anything but http(s).
 
 ## Report
 

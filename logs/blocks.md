@@ -1104,3 +1104,46 @@ The orchestrator's own fallback wake-up couldn't run either, so the loop stalled
 - Nothing is weakened: no validator changes, and no fetch rule is relaxed.
 - The P04 packet's deliverable and acceptance lines were updated to match.
 - Follow-up: whichever packet first opens a stored URL in a tab (P06 or P07-C) must refuse loopback and private targets before opening it.
+
+## 2026-09-23 — P03 peer review, round 4 [APPROVED]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** a narrow confirmation round over revision 3 (bbfa00e..fbb6444; J1–J8). An Opus reviewer and an Opus UI critic reviewed PR #11. The findings are in `logs/handoff/P03-round-4-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: APPROVE** (no issues, 5 nits, 1 follow-up).
+  - `turn.cancelled` is not ok; queued writers get their 503s at about 5 s; hostile marker text round-trips.
+  - While the file is unreadable, every write route returns the one short line.
+  - The DOM test is deterministic and runs in CI.
+  - The chain is green at the head and on the merge.
+- **UI critic: VERDICT: APPROVE** (polish only).
+  - All three round-3 issues are fixed: over 75 actions, each outcome was announced once, and focus was never on `<body>`.
+  - The pinned line is 30 or 48 px at 390.
+  - Polish 1–11, J3–J6 and J8 hold; all 62 shots are accurate.
+
+**Action taken:**
+- PR #11 was squash-merged into overnight/integration as 9821bee. The remote branch and the worktrees are removed. The P03 packet and GOALS P2.A say done.
+- The nits, the polish, the happy-dom devDependency and the one-turn-classifier work (P03's extraction and P02's `checkModel` onto P08-A's `runTurn`) went into a new packet, **P03.2**. It is blocked by P04, which adds the turn events, and runs before P03.1, because they share files.
+
+## 2026-09-23 — P07-B peer review, round 5 [APPROVED]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** a narrow confirmation round over revision 4 (9529761..b8d0eaf; K1–K4). An Opus reviewer and an Opus UI critic reviewed PR #12. The findings are in `logs/handoff/P07-B-round-5-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: APPROVE** (2 nits).
+  - K1–K4 hold, and 8 plants were caught.
+  - CI's e2e passed 37/37.
+  - On a merge with P08-A, the extension parses the new `budget` in `/status`.
+- **UI critic: VERDICT: APPROVE** (2 polish items).
+  - A refused pairing is announced once on every path, in both themes, with focus inside or outside the card.
+  - The notice is not live, and 40 axe audits were clean.
+
+**Action taken:**
+- PR #12 was squash-merged into overnight/integration as e01017c, and the remote branch and worktrees are removed.
+- The P07 packet says parts A and B are done, and GOALS P2.E is ticked.
+- The nits and polish went into the P07 packet's new section, "Carried into part C", with the P04 URL-rule follow-up for opening stored URLs.
