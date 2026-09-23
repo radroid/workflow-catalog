@@ -882,6 +882,9 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
     it.each([
       ["a web page (200, text/html)", () => new Response("<!doctype html><title>Some other app</title>", { status: 200, headers: { "content-type": "text/html" } })],
       ["a 404 outside the runner's envelope", () => new Response("Not Found", { status: 404, headers: { "content-type": "text/plain" } })],
+      // Not "Your pairing has expired": a 401 page that isn't the
+      // runner's says nothing about this browser's token.
+      ["a 401 outside the runner's envelope", () => new Response("<!doctype html><title>Sign in</title>", { status: 401, headers: { "content-type": "text/html" } })],
       ["a JSON answer that isn't the runner's status", () => jsonResponse(200, { hello: "world" })],
     ])("H2: %s on the runner's port reads as one plain sentence with a next step -- no field names, no status codes -- and keeps the pairing", async (_name, answer) => {
       installFakeChrome({ deviceToken: PAIRED });
@@ -896,6 +899,39 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       expect(alert.textContent).not.toMatch(/HTTP|shape|\b[1-5]\d\d\b|invalid_response|unknown_error/);
       expect(alert.className).toBe("flash");
       expect(pairingSection().textContent, "not the runner refusing the token").toContain("8b0c6f0e");
+    });
+
+    it("H2: pairing while another program answers on the runner's port says so in the Pairing line -- the same sentence as Status, not the code's fault", async () => {
+      installFakeChrome();
+      stubFetch(() => new Response("<!doctype html><title>Some other app</title>", { status: 200, headers: { "content-type": "text/html" } }));
+      await import("./main");
+      await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull());
+      submitCode("7KQ2M-X9RTB");
+      await vi.waitFor(() =>
+        expect(pairingLine().textContent).toBe(
+          "Something other than the runner is answering on its port. Close that program, then start the runner with npm run runner.",
+        ),
+      );
+      expect(pairingLine().querySelector("code")?.textContent).toBe("npm run runner");
+      expect(pairingLine().className).toBe("flash");
+      expect(document.querySelector('input[type="text"]')?.getAttribute("aria-invalid"), "the code wasn't the problem").toBeNull();
+    });
+
+    it("H2: a status check that two re-pairings overtake says to check again -- not bridge-client's words about a capture being sent", async () => {
+      installFakeChrome({ deviceToken: { ...PAIRED, token: "token-one" } });
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const auth = (init?.headers as Record<string, string>).authorization;
+        if (auth === "Bearer token-one") await chrome.storage.session.set({ deviceToken: { ...OTHER_DEVICE, token: "token-two" } });
+        if (auth === "Bearer token-two") {
+          await chrome.storage.session.set({ deviceToken: { ...OTHER_DEVICE, deviceId: "0d2e8b20-4b3c-4e77-9f50-2c3d4e5f6071", token: "token-three" } });
+        }
+        return jsonResponse(401, TOKEN_INVALID);
+      }) as typeof fetch;
+      await import("./main");
+      await vi.waitFor(() =>
+        expect(statusSection().querySelector('[role="alert"]')?.textContent).toBe("This browser was just paired again. Check again in a moment."),
+      );
+      expect(statusSection().textContent).not.toContain("sent again");
     });
 
     it("H2: a real 5xx from the runner says it had a problem, with a next step", async () => {

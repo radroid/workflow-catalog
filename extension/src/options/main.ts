@@ -349,6 +349,8 @@ function statusFailureMessage(error: BridgeError): string {
   if (error.code === "not_paired") return "Pair this browser above to see the runner's status.";
   if (error.code === "network_error") return error.message;
   if (error.code === "invalid_response" || error.code === "unknown_error") return FOREIGN_SERVER_MESSAGE;
+  // bridge-client's own wording for this is about a capture being sent.
+  if (error.code === "token_replaced") return "This browser was just paired again. Check again in a moment.";
   if (error.status === 401) return "Your pairing has expired or was revoked. Pair again above.";
   if (error.status === 403) return "This pairing belongs to a different install. Pair again above.";
   if (error.status === 429) return tooManyTriesMessage(error.retryAfterSeconds);

@@ -23,30 +23,56 @@ remaining gates) is still ahead.
   builds a `JobCapture` envelope validated against
   `@workflow-catalog/contracts`.
 - `src/popup/` — action popup: preview (title/company/location/size/
-  excerpt) → "Save this job" (downloads `job-capture.json` via `Blob` +
-  `<a download>`, part A has no `downloads` permission; also writes to
-  `chrome.storage.session` so the options page's file-bridge export can
-  recover the same capture if the popup closed on focus loss first).
-  `render.ts` holds the three render states (`renderLoading`/
+  excerpt) → **Save this job**, which sends the capture to the runner
+  (`POST /events`). The status line then says which of four things
+  happened:
+  - **sent** — the runner has it;
+  - **queued for retry** — the runner isn't reachable, had a problem, or
+    something other than the runner answers on its port; the service
+    worker's retry alarm sends it;
+  - **queued until this browser is paired** — not paired yet, or the
+    pairing expired, was revoked, or belongs to another install; it's sent
+    after the next pairing;
+  - **refused** — the runner turned this capture down, so nothing kept it;
+    the line says why, in plain words.
+
+  Nothing downloads on its own. **Save as a file** (`job-capture.json`,
+  via `Blob` + `<a download>`; there's no `downloads` permission) is the
+  explicit fallback, offered whenever the capture isn't the runner's yet.
+  Save also writes the capture to `chrome.storage.session`, so Settings'
+  **Export last capture** can produce the same file after the popup has
+  closed. `render.ts` holds the three render states (`renderLoading`/
   `renderFallback`/`renderPreview`) as plain functions so they're unit-
   testable and screenshot-able in isolation from `main.ts`'s
   `chrome.tabs`/`chrome.scripting` orchestration.
-- `src/options/` — pairing UI (code input against the real `POST /pair`,
-  a short abbreviated device id once paired, Un-pair, and a link to the
-  runner's `/ui/status` page where actual revocation lives), a status
-  section (`GET /status`: connected/version/workspace, or a clear re-pair/
-  wait/offline state per failure), and the file-bridge fallback
-  (`SessionManifest` import validation with a read-only summary, JSON
-  export). Device token state lives in `chrome.storage.session`, never
+- `src/options/` — Settings:
+  - pairing: a code field that posts to the real `POST /pair`, a short
+    device id once paired, **Un-pair** and **Pair again**, and a link to
+    the runner's `/ui/status` page, where actual revocation lives;
+  - status: `GET /status` shows connected/version/workspace, or one plain
+    sentence per failure (not running, not responding, pairing expired or
+    revoked, another install, another program on the port, too many
+    tries), plus how many saved jobs are still waiting and why;
+  - the file bridge: **Export last capture** writes `job-capture.json`,
+    and importing an `application-session.json` validates it as a
+    `SessionManifest` and shows a read-only summary.
+
+  Device token state lives in `chrome.storage.session`, never
   `storage.local`.
 - `src/shared/bridge-client.ts` — `createBridgeClient()`, the real
   `fetch`-backed `BridgeClient` (pair/postEvent/getCommands/getStatus).
-  Every failure carries the bridge's own HTTP status and error code, not
-  just a message.
-- `src/shared/outbox.ts` — the `job_capture` outbox: when Save can't reach
-  the bridge, the capture is queued in `chrome.storage.session` and retried
-  with backoff via a `chrome.alarms` alarm the service worker owns, so it's
-  delivered exactly once.
+  Every failure carries the bridge's own HTTP status and error code; what
+  a person sees is worded from those in the popup and Settings, never
+  shown raw.
+- `src/shared/outbox.ts` — the `job_capture` outbox. A capture Save
+  couldn't deliver is queued in `chrome.storage.session`, one key per
+  capture, and retried with backoff via a `chrome.alarms` alarm the
+  service worker owns. A retry resends the same capture with the same
+  `eventId`, and the bridge answers a replay with `duplicate: true`, so a
+  queued capture is journaled exactly once. A capture waiting on a pairing
+  is held, not retried, until a new pairing; each such pause records the
+  pairing it was refused under, so one left from an older pairing never
+  holds a capture back under the current one.
 - `src/sidepanel/` — placeholder; content lands in part C.
 - `src/worker/` — service worker; imports the zod-jitless bootstrap first
   (see below), then registers the outbox's retry-alarm listener and arms it
@@ -85,8 +111,8 @@ never hand-edited.
 
 | Script | What it does |
 | --- | --- |
-| `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm test` | Vitest unit tests (happy-dom) — extractor fixtures (JSON-LD, DOM-heuristic, hostile posting), byte-cap truncation, URL refusals, `contentHash` format, `JobCapture`/`SessionManifest` validation, token storage against a fake `chrome.storage`, manifest exactness, popup render states, a static no-`eval` source scan |
+| `pnpm typecheck` | Two `tsc --noEmit` programs: `tsconfig.json` (src, scripts, e2e) and `tsconfig.real-bridge.json` (the three files that import the runner's bridge source, under the runner's own compiler options) |
+| `pnpm test` | Vitest unit tests (happy-dom) — extractor fixtures (JSON-LD, DOM-heuristic, hostile posting), byte-cap truncation, URL refusals, `contentHash` format, `JobCapture`/`SessionManifest` validation, token storage against a fake `chrome.storage`, the bridge client (also against the real bridge on an ephemeral port), the outbox and its races, the popup's and Settings' states, the screenshot guard, manifest exactness, a static no-`eval` source scan. Five tests read `dist/` and are skipped until it's built; `EXTENSION_DIST_REQUIRED=1` (CI) makes a missing `dist/` fail them instead |
 | `pnpm lint` | `eslint . --max-warnings 0` |
 | `pnpm build` | see above |
 | `pnpm test:e2e` | Playwright, see below |
@@ -139,8 +165,9 @@ the port is whatever free one the OS assigns (it listens on port 0, so it
 never collides with another harness); the specs read the origin from the
 server handle (capture needs an http(s) page; `file:` is refused outright —
 see `shared/url.ts`).
-`real-popup.spec.ts` drives real capture → preview → Save → download
-against the json-ld, hostile, and DOM-heuristics fixtures (including
+`real-popup.spec.ts` drives real capture → preview → Save (unpaired, so
+the capture is queued) → **Save as a file** → a real download, against
+the json-ld, hostile, and DOM-heuristics fixtures (including
 proving the hostile posting's injected instruction is fully visible, not
 clipped, and never fires a dialog or navigation), the SPA-mismatch
 refusal (`posting-spa-mismatch.html`'s `__simulateRouteChangeTo`, a
@@ -165,6 +192,26 @@ normal run writes these captures under `extension/test-results/`
 P07A_UPDATE_SCREENSHOTS=1 pnpm --filter @workflow-catalog/extension test:e2e
 ```
 
+**`bridge-e2e.spec.ts`: pairing and `job_capture` against the real
+bridge.** It starts the runner's real P02 bridge (fresh temp workspace,
+`e2e/real-bridge-harness.ts`) on `127.0.0.1:4310` — the one origin the
+manifest's host permission allows — so **nothing else may be listening on
+4310** while it runs. Through the real options page and popup it covers
+pairing and Un-pair, a wrong code, a revoked and an expired pairing, a
+stopped runner and a stuck one (a listener that never answers), Save
+sent, queued while the runner is down and
+delivered by the real retry alarm, and a wrong-install 403. For the states
+the real bridge can't be driven into from a real Save — a refusal (409),
+another program answering on the port, a re-pair landing mid-Save — a
+small stand-in listens on 4310 instead. Every state is checked (axe, empty
+message areas, `[hidden]`, commands kept on one line, inert buttons at
+4.5:1 or more) and captured light and dark (Settings at 1280 and 390 px
+wide) into `docs/screenshots/P07B-*.png` when opted in:
+
+```sh
+P07B_UPDATE_SCREENSHOTS=1 pnpm --filter @workflow-catalog/extension test:e2e
+```
+
 ## Manual smoke test (branded Chrome)
 
 `real-popup.spec.ts` now covers the happy path (steps 2-3 below) on
@@ -177,27 +224,47 @@ reach at all:
 1. Build, then load unpacked as above in your real Chrome.
 2. Open any real job posting page in a tab, click the toolbar icon →
    preview shows a plausible title/company/location/size/excerpt.
-3. Click **Save this job** → `job-capture.json` downloads.
+3. Before pairing, click **Save this job** → the button reads **Saved ✓**
+   and the status line says it's queued until you pair; nothing
+   downloads. **Save as a file** downloads `job-capture.json`.
 4. Switch to a tab you can't capture (`chrome://newtab`, a PDF, a
    `file://` page) and click the icon → fallback message, with a working
    link to `http://127.0.0.1:4310/ui/jobs`.
 5. With the runner running (`npm run runner` in `runner/`) and a pairing
-   code from `npm run pair`, open the options page → entering the code and
-   clicking **Pair** shows a short device id and the status section flips
-   to connected, with the runner's version and workspace. **Un-pair**
-   forgets the token, announces it, and the page still links to
-   `http://127.0.0.1:4310/ui/status` for actual revocation.
-6. Stop the runner, reload the options page → the status section shows a
-   clear "can't reach the runner" state, not a stuck spinner or a raw
-   error. Save a job from the popup while it's still stopped → the status
-   line says the runner isn't reachable; restart the runner and the queued
-   capture is delivered on the next retry alarm (or reopen the popup and
-   save again — either way, the same `eventId` reaches the bridge exactly
-   once).
-7. In the options page's **File bridge** section, import a
-   `job-capture.json` saved in step 3 → a read-only summary renders.
+   code (`npm run setup` prints the first one, `npm run pair` any later
+   one), open the options page → entering the code and clicking **Pair**
+   shows a short device id and the status section flips to connected, with
+   the runner's version and workspace. The capture queued in step 3 is
+   sent right after pairing. **Un-pair** forgets the token, announces it,
+   and the page still links to `http://127.0.0.1:4310/ui/status` for
+   actual revocation.
+6. Pair again, stop the runner, reload the options page → the status
+   section shows a clear "can't reach the runner" state, not a stuck
+   spinner or a raw error. Save a job from the popup while it's still
+   stopped → the status line says the runner isn't reachable; restart the
+   runner and the queued capture is delivered on the next retry alarm (the
+   first comes about 30 s after the Save; they back off while the runner
+   stays down), once: a retry resends the same capture with the same
+   `eventId`. Reopening the popup and saving again is a new capture with a
+   new `eventId` (the popup mints one each time it opens,
+   `build-job-capture.ts`), so the runner gets it as a second event.
+7. In the options page's **File bridge** section, **Export last capture**
+   downloads the last capture you saved as `job-capture.json`. Importing a
+   file takes an `application-session.json` (a session manifest, going the
+   other way: runner to extension) → a read-only summary renders; any
+   other file, a `job-capture.json` included, is refused with a plain
+   message.
 8. Toggle the OS between light/dark appearance and reopen the popup and
    options page → both follow it immediately (no stale theme).
+
+## Known limitations
+
+- **Pairing at the exact moment an old token is refused.** When the runner
+  refuses a token (expired or revoked), the extension forgets it — but only
+  if it's still the stored one. `chrome.storage` has no compare-and-set, so
+  a new pairing stored in the few milliseconds between that check and the
+  removal is forgotten with it. If you pair at the exact moment an old
+  token is refused, pair again.
 
 ## What part C still owes
 

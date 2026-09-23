@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BRIDGE_ORIGIN, createBridgeClient, type BridgeClient } from "./bridge-client";
+import { BRIDGE_ORIGIN, createBridgeClient, FOREIGN_SERVER_MESSAGE, type BridgeClient } from "./bridge-client";
 
 /** A fictional job_capture, contracts-shaped (see fixtures-policy.md). */
 const CAPTURE = {
@@ -316,6 +316,24 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
       expect(hookCalls, `HTTP ${status}`).toBe(0);
       expect(calls).toHaveLength(1);
     }
+  });
+
+  it("P07-B revision 3, H2: every answer that isn't the runner's carries one plain sentence with a next step -- no field names, no status codes", async () => {
+    const answers: Array<[string, () => Response, (client: BridgeClient) => Promise<{ ok: boolean; error?: { code: string; message: string } }>]> = [
+      ["pair, a web page", () => new Response("<html>another program</html>", { status: 200, headers: { "content-type": "text/html" } }), (client) => client.pair({ code: "7KQ2M-X9RTB" })],
+      ["postEvent, JSON that isn't the answer", () => jsonResponse(200, { unrelated: "shape" }), (client) => client.postEvent(CAPTURE)],
+      ["getStatus, a web page", () => new Response("<html>another program</html>", { status: 200, headers: { "content-type": "text/html" } }), (client) => client.getStatus()],
+      ["getCommands, a 404 outside the envelope", () => new Response("Not Found", { status: 404, headers: { "content-type": "text/plain" } }), (client) => client.getCommands()],
+      ["getStatus, a 500 outside the envelope", () => new Response("Internal Server Error", { status: 500, headers: { "content-type": "text/plain" } }), (client) => client.getStatus()],
+    ];
+    for (const [name, answer, send] of answers) {
+      stubFetch(() => answer());
+      const result = await send(pairedClient());
+      expect(result.ok, name).toBe(false);
+      expect(result.error?.code, name).toMatch(/^(invalid_response|unknown_error)$/);
+      expect(result.error?.message, name).toBe(FOREIGN_SERVER_MESSAGE);
+    }
+    expect(FOREIGN_SERVER_MESSAGE).not.toMatch(/HTTP|shape|\b[1-5]\d\d\b|invalid_response|unknown_error/);
   });
 
   it("getCommands appends ?since= only when given, and validates the response", async () => {

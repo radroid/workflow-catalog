@@ -313,8 +313,11 @@ with an empty `git diff --stat` or an equal `cmp`.
   `tsconfig.json` and `tsconfig.real-bridge.json`).
 - `pnpm test`: contracts 16 files / 235 tests, job-assistant 6 / 151,
   runner 14 / 155 (eval gates approval 4/4, tool-surface 4/4,
-  missing-tools 8/8, skills 4/4), catalog 26 / 168, extension 20 / 273,
-  `scripts/*.test.mjs` pass 2, fail 0, skipped 0.
+  missing-tools 8/8, skills 4/4), catalog 26 / 168, extension 20 / 273
+  (corrected in revision 3, round-3 nit 7: that count needs `dist/`, which
+  an earlier build had left in place; on a clean tree the same command
+  runs 268 and skips the 5 tests that read `dist/`), `scripts/*.test.mjs`
+  pass 2, fail 0, skipped 0.
 - `pnpm -r lint`: 6/6 clean. `pnpm check:fixtures`: clean.
 - `git status --porcelain`: empty.
 - Extension build, then `EXTENSION_DIST_REQUIRED=1 pnpm --filter
