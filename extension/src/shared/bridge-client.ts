@@ -99,8 +99,21 @@ const TOKEN_REPLACED: BridgeError = {
   message: "This browser was paired again while sending. It will be sent again shortly.",
 };
 
-function invalidResponse(what: string): BridgeError {
-  return { code: "invalid_response", message: `The runner's ${what} response didn't match the expected shape.` };
+/**
+ * P07-B revision 3, H2: what a person is told when whatever answers on the
+ * runner's port isn't the runner -- an error outside the bridge's own
+ * envelope (`unknown_error`), or a success that isn't the answer the
+ * request expects (`invalid_response`). The runner answers every request
+ * in its envelope, its own 404s and 500s included, so either one means
+ * another program holds the port. One sentence with a next step, the same
+ * wherever it shows (Status, Pairing); revision 2's wording ("didn't match
+ * the expected shape", "HTTP 404") blamed the runner, in jargon.
+ */
+export const FOREIGN_SERVER_MESSAGE =
+  "Something other than the runner is answering on its port. Close that program, then start the runner with `npm run runner`.";
+
+function invalidResponse(): BridgeError {
+  return { code: "invalid_response", message: FOREIGN_SERVER_MESSAGE };
 }
 
 interface WireErrorBody {
@@ -165,7 +178,7 @@ async function request(baseUrl: string, path: string, init: RequestInit): Promis
     error: {
       status: response.status,
       code: "unknown_error",
-      message: `The runner answered with an unexpected error (HTTP ${response.status}).`,
+      message: FOREIGN_SERVER_MESSAGE,
       retryAfterSeconds,
     },
   };
@@ -266,7 +279,7 @@ export function createBridgeClient(options: CreateBridgeClientOptions = {}): Bri
       });
       if (!result.ok) return result;
       const parsed = pairResponseSchema.safeParse(result.value);
-      if (!parsed.success) return { ok: false, error: invalidResponse("pairing") };
+      if (!parsed.success) return { ok: false, error: invalidResponse() };
       return { ok: true, value: parsed.data };
     },
 
@@ -287,7 +300,7 @@ export function createBridgeClient(options: CreateBridgeClientOptions = {}): Bri
       // for a different, unrelated request.
       const value = result.value as { ok?: unknown; eventId?: unknown; duplicate?: unknown } | undefined;
       if (value?.ok !== true || value.eventId !== event.eventId) {
-        return { ok: false, error: invalidResponse("events") };
+        return { ok: false, error: invalidResponse() };
       }
       return { ok: true, value: { duplicate: value.duplicate === true } };
     },
@@ -297,7 +310,7 @@ export function createBridgeClient(options: CreateBridgeClientOptions = {}): Bri
       const result = await authedRequest(`/commands${query}`, { method: "GET" });
       if (!result.ok) return result;
       const parsed = commandsResponseSchema.safeParse(result.value);
-      if (!parsed.success) return { ok: false, error: invalidResponse("commands") };
+      if (!parsed.success) return { ok: false, error: invalidResponse() };
       return { ok: true, value: parsed.data };
     },
 
@@ -305,7 +318,7 @@ export function createBridgeClient(options: CreateBridgeClientOptions = {}): Bri
       const result = await authedRequest("/status", { method: "GET" });
       if (!result.ok) return result;
       const parsed = statusResponseSchema.safeParse(result.value);
-      if (!parsed.success) return { ok: false, error: invalidResponse("status") };
+      if (!parsed.success) return { ok: false, error: invalidResponse() };
       return { ok: true, value: parsed.data };
     },
   };

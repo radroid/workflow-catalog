@@ -127,23 +127,35 @@ export async function attachRawSession(bs: CDPSession, targetId: string): Promis
     return typed.result?.value as T;
   };
 
-  /** Resolves with the params of the next `method` event on this session,
-   * or rejects after `timeoutMs`. Register it before sending the command
-   * that triggers the event, so a fast event can't slip past. */
-  const nextEvent = (method: string, timeoutMs: number): Promise<unknown> =>
-    new Promise((resolve, reject) => {
+  /** `promise` resolves with the params of the next `method` event on this
+   * session, or rejects after `timeoutMs`. Register it before sending the
+   * command that triggers the event, so a fast event can't slip past.
+   * `cancel` withdraws the wait -- timer and waiter both -- and leaves
+   * `promise` unsettled, for when that command itself failed. */
+  const nextEvent = (method: string, timeoutMs: number): { promise: Promise<unknown>; cancel: () => void } => {
+    let cancel = (): void => undefined;
+    const promise = new Promise((resolve, reject) => {
+      const withdraw = () => {
+        const waiters = eventWaiters.get(method)?.filter((candidate) => candidate !== waiter) ?? [];
+        if (waiters.length > 0) eventWaiters.set(method, waiters);
+        else eventWaiters.delete(method);
+      };
       const waiter = (params: unknown) => {
         clearTimeout(timer);
         resolve(params);
       };
       const timer = setTimeout(() => {
-        const waiters = eventWaiters.get(method)?.filter((candidate) => candidate !== waiter) ?? [];
-        if (waiters.length > 0) eventWaiters.set(method, waiters);
-        else eventWaiters.delete(method);
+        withdraw();
         reject(new Error(`no ${method} event within ${timeoutMs} ms`));
       }, timeoutMs);
+      cancel = () => {
+        clearTimeout(timer);
+        withdraw();
+      };
       eventWaiters.set(method, [...(eventWaiters.get(method) ?? []), waiter]);
     });
+    return { promise, cancel };
+  };
 
   /**
    * P07-B revision 2 (iter-005), the CI fix: one frame from a screencast,
@@ -171,12 +183,23 @@ export async function attachRawSession(bs: CDPSession, targetId: string): Promis
    * made two animation frames before the capture was in every frame
    * checked. `format: "png"` keeps it lossless (desktop screencasts use
    * ARGB frames), at the page's own size in CSS pixels at DPR 1.
+   *
+   * P07-B revision 3, nit 5: if `Page.startScreencast` itself is refused
+   * (the popup closed, the target detached), the frame wait is withdrawn
+   * and that refusal is what the caller sees. Before, the wait was left
+   * behind and rejected on its own 5 s later with nobody listening -- an
+   * unhandled rejection in the test worker.
    */
   const captureFrame = async (): Promise<Buffer> => {
     const frame = nextEvent("Page.screencastFrame", FIRST_FRAME_TIMEOUT_MS);
-    await call("Page.startScreencast", { format: "png" });
     try {
-      const params = (await frame) as { data: string; sessionId: number };
+      await call("Page.startScreencast", { format: "png" });
+    } catch (error) {
+      frame.cancel();
+      throw error;
+    }
+    try {
+      const params = (await frame.promise) as { data: string; sessionId: number };
       await call("Page.screencastFrameAck", { sessionId: params.sessionId });
       return Buffer.from(params.data, "base64");
     } finally {

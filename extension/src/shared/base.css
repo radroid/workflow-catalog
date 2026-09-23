@@ -145,12 +145,6 @@ button:hover {
   background: var(--muted);
 }
 
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
 button.primary {
   background: var(--primary);
   color: var(--primary-foreground);
@@ -171,14 +165,22 @@ button.ghost {
   box-shadow: none;
 }
 
-/* P07-B revision 2 polish: an inert button looks inert. The popup's
- * "Saved ✓" uses aria-disabled rather than the disabled attribute so it
- * keeps focus (see popup/render.ts); this gives it the disabled look, and
- * hovering it changes nothing. After button.primary:hover, which has the
- * same specificity. */
+/* An inert button looks inert: "Saved ✓", Save while "Saving…", Pair while
+ * "Pairing…" (aria-disabled, so each keeps focus -- see popup/render.ts and
+ * options/main.ts), and "No capture saved yet" (disabled). P07-B revision 3
+ * polish: a muted fill and muted text instead of revision 2's 50% opacity,
+ * which took "Saved ✓" down to 3.99:1 in light; muted-foreground on muted
+ * is about 7:1 in both themes. Hovering changes nothing. After every other
+ * button rule, several of which set the same properties at the same
+ * specificity. */
+button:disabled,
+button:disabled:hover,
 button[aria-disabled="true"],
 button[aria-disabled="true"]:hover {
-  opacity: 0.5;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  border-color: var(--border);
+  opacity: 1;
   cursor: default;
   box-shadow: none;
 }
@@ -281,10 +283,25 @@ input[type="text"][aria-invalid="true"] {
 }
 
 /* P07-B revision 2 polish: a success ("Paired.", "Sent to the runner.")
- * is the reference's neutral .flash.ok, not the amber that means
- * "waiting". */
+ * is the reference's neutral .flash.ok. */
 .flash.ok {
   border-left-color: var(--foreground);
+}
+
+/* P07-B revision 3, H1 (shared/tone.ts): progress and automatic retries
+ * ("Pairing…", "it'll be sent automatically") have nothing for the person
+ * to do, so a neutral edge. Plain amber .flash is left for "you need to
+ * act", and .flash.bad for "refused, not kept". */
+.flash.info {
+  border-left-color: var(--muted-foreground);
+}
+
+/* P07-B revision 3, H2: the reason under a refusal's lead sentence (the
+ * popup's "The runner refused this capture…"), on its own line. */
+.flash .detail {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted-foreground);
 }
 
 /* P07-B revision 2, C1: an empty message area takes no room and draws

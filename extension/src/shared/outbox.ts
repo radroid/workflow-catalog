@@ -48,14 +48,26 @@
  *   queued mid-flush always keeps an alarm.
  * - B2: a successful pairing lifts every pause first, arms the alarm, then
  *   flushes (`resumeAfterPairing`), and an entry that fails with a
- *   retryable error loses its pause; a pause can no longer outlive the
- *   pairing that ended it.
+ *   retryable error loses its pause.
  * - An entry is only ever written back if it is still queued
  *   (`rewriteIfStillQueued`), so a flush can't resurrect a capture another
  *   context delivered and removed while this one's request was in flight.
+ *
+ * Revision 2 claimed B2 meant a pause could no longer outlive the pairing
+ * that ended it. It could (the round-3 reviewer's "LIFT race"): a worker
+ * flush's 401 for the old token could write its pause after the new
+ * pairing's `resumeAfterPairing` had already read the queue, leaving the
+ * capture paused under a valid pairing, with no alarm. P07-B revision 3:
+ * each pause records the pairing (device id) its request was refused under
+ * (`pausedFor`), and a pause only holds while that pairing is still the
+ * current one, or while nothing is paired at all (`pauseInEffect`). A pause
+ * left from an older pairing counts as active everywhere -- the flush
+ * sends it, the alarm is armed for it -- so however the writes interleave,
+ * the next flush under the new pairing delivers it.
  */
 import type { JobCapture } from "@workflow-catalog/contracts";
 import type { BridgeClient, BridgeError } from "./bridge-client";
+import { getDeviceToken } from "./storage";
 
 const OUTBOX_KEY_PREFIX = "jobCaptureOutbox:";
 export const JOB_CAPTURE_RETRY_ALARM = "job-capture-retry";
@@ -98,11 +110,17 @@ export interface OutboxEntry {
    * that only a person can fix has been seen for this entry -- see
    * `failureAction`. A paused entry stays queued (nothing here ever
    * silently drops a capture just because the token/origin was wrong) but
-   * is skipped by `flushOutbox` until a fresh pairing lifts the pause
-   * (`resumeAfterPairing`) -- retrying the exact same request against the
-   * exact same dead token/origin could only ever repeat the same refusal.
+   * is skipped by `flushOutbox` while the pause holds -- until a new
+   * pairing replaces the one it was refused under (`pauseInEffect`;
+   * `resumeAfterPairing` lifts it right away) -- since retrying the exact
+   * same request against the exact same dead token/origin could only ever
+   * repeat the same refusal.
    */
   readonly pausedReason?: string;
+  /** P07-B revision 3: with `pausedReason`, the device id of the pairing
+   * the refused request was sent under; absent when nothing was paired
+   * (`not_paired`). See `pauseInEffect`. */
+  readonly pausedFor?: string;
   /** P07-B revision 2, B3: the code of the most recent failed attempt that
    * left this entry queued, so the options page can say why it's waiting
    * (e.g. `invalid_response`: something other than the runner answered on
@@ -150,6 +168,25 @@ export function failureAction(error: BridgeError): FailureAction {
   return "drop";
 }
 
+/**
+ * P07-B revision 3: whether `entry`'s pause still holds, given the pairing
+ * this browser holds now (`pairedDeviceId`, null when unpaired). It holds
+ * while nothing is paired -- there is nothing to send with -- and while
+ * the pairing its request was refused under is still the current one (a
+ * 403 keeps the token; only a new pairing fixes it). Once a different
+ * pairing exists, the pause is left over from before it and no longer
+ * applies: the entry is active again, whether or not
+ * `resumeAfterPairing` got to it first.
+ */
+export function pauseInEffect(entry: OutboxEntry, pairedDeviceId: string | null): boolean {
+  if (!entry.pausedReason) return false;
+  return pairedDeviceId === null || entry.pausedFor === pairedDeviceId;
+}
+
+async function currentDeviceId(): Promise<string | null> {
+  return (await getDeviceToken())?.deviceId ?? null;
+}
+
 /** Oldest first: by `queuedAt`, then by when the capture itself was made
  * (`occurredAt`), then by `eventId` -- so captures queued in the same
  * millisecond still flush in one fixed order (P07-B revision 2 nit). */
@@ -182,12 +219,15 @@ function makeEntry(fields: {
   attempts: number;
   queuedAt: string;
   pausedReason?: string | undefined;
+  pausedFor?: string | null | undefined;
   lastErrorCode?: string | undefined;
 }): OutboxEntry {
-  const { pausedReason, lastErrorCode, ...required } = fields;
+  const { pausedReason, pausedFor, lastErrorCode, ...required } = fields;
   return {
     ...required,
     ...(pausedReason !== undefined ? { pausedReason } : {}),
+    // Only a pause has a pairing to belong to.
+    ...(pausedReason !== undefined && pausedFor !== undefined && pausedFor !== null ? { pausedFor } : {}),
     ...(lastErrorCode !== undefined ? { lastErrorCode } : {}),
   };
 }
@@ -243,8 +283,13 @@ async function scheduleRetry(attemptsAlreadyMade: number): Promise<void> {
   await chrome.alarms.create(JOB_CAPTURE_RETRY_ALARM, { delayInMinutes: delayForAttempt(attemptsAlreadyMade) });
 }
 
-function activeEntries(entries: readonly OutboxEntry[]): OutboxEntry[] {
-  return entries.filter((entry) => !entry.pausedReason);
+/** Every queued entry, and the ones waiting on nothing but the retry alarm:
+ * not paused, or paused under a pairing that has since been replaced
+ * (`pauseInEffect`). */
+async function readQueue(): Promise<{ entries: OutboxEntry[]; active: OutboxEntry[] }> {
+  const pairedDeviceId = await currentDeviceId();
+  const entries = await readOutbox();
+  return { entries, active: entries.filter((entry) => !pauseInEffect(entry, pairedDeviceId)) };
 }
 
 function mostAttempts(entries: readonly OutboxEntry[]): number {
@@ -261,22 +306,21 @@ function mostAttempts(entries: readonly OutboxEntry[]): number {
  * Chrome quit (the outbox lives in storage.session).
  *
  * The clear is followed by one more read: `enqueueCapture` writes its entry
- * before it arms the alarm, so any alarm this clear could have removed
+ * before it arms the alarm (tested -- the round-3 reviewer's R6-race probe,
+ * adopted in revision 3), so any alarm this clear could have removed
  * belongs to an entry the second read sees, and gets re-armed. Returns the
  * number of entries still queued (active or paused).
  */
 async function rearmOrClearRetryAlarm(): Promise<number> {
-  const entries = await readOutbox();
-  const active = activeEntries(entries);
-  if (active.length > 0) {
-    await scheduleRetry(mostAttempts(active));
-    return entries.length;
+  const first = await readQueue();
+  if (first.active.length > 0) {
+    await scheduleRetry(mostAttempts(first.active));
+    return first.entries.length;
   }
   await chrome.alarms.clear(JOB_CAPTURE_RETRY_ALARM);
-  const late = await readOutbox();
-  const lateActive = activeEntries(late);
-  if (lateActive.length > 0) await scheduleRetry(mostAttempts(lateActive));
-  return late.length;
+  const late = await readQueue();
+  if (late.active.length > 0) await scheduleRetry(mostAttempts(late.active));
+  return late.entries.length;
 }
 
 /**
@@ -292,15 +336,30 @@ async function rearmOrClearRetryAlarm(): Promise<number> {
  * P07-B revision 1, E2: a capture made while not paired is queued here too
  * (paused, the same as a 401/403) and delivered automatically once pairing
  * succeeds (`resumeAfterPairing`).
+ *
+ * `sentUnder` (P07-B revision 3) is the device id of the pairing the failed
+ * attempt was made under, read before it was sent (null or absent: not
+ * paired). A pause is stamped with it (`pausedFor`), and if a new pairing
+ * has replaced that one by the time the entry is written, the pause no
+ * longer holds and the alarm is armed for it after all.
+ *
+ * The entry is written before the alarm is armed; `rearmOrClearRetryAlarm`
+ * depends on that order.
  */
-export async function enqueueCapture(capture: JobCapture, initialError?: BridgeError): Promise<void> {
+export async function enqueueCapture(capture: JobCapture, initialError?: BridgeError, sentUnder?: string | null): Promise<void> {
   await chrome.storage.session.set({ [OUTBOX_USED_KEY]: true });
   if (await isQueued(capture.eventId)) return;
   const pausedReason = initialError && failureAction(initialError) === "pause" ? initialError.code : undefined;
-  await writeEntry(
-    makeEntry({ capture, attempts: 0, queuedAt: new Date().toISOString(), pausedReason, lastErrorCode: initialError?.code }),
-  );
-  if (!pausedReason) await scheduleRetry(1);
+  const entry = makeEntry({
+    capture,
+    attempts: 0,
+    queuedAt: new Date().toISOString(),
+    pausedReason,
+    pausedFor: sentUnder,
+    lastErrorCode: initialError?.code,
+  });
+  await writeEntry(entry);
+  if (!pauseInEffect(entry, await currentDeviceId())) await scheduleRetry(1);
 }
 
 export interface FlushSummary {
@@ -311,8 +370,9 @@ export interface FlushSummary {
 }
 
 /**
- * Attempts every queued, not-paused capture once, in order, against
- * `client`. A capture the bridge accepts -- including a replay it reports
+ * Attempts every queued capture whose pause doesn't hold (`pauseInEffect`:
+ * not paused, or paused under a pairing that has since been replaced) once,
+ * in order, against `client`. A capture the bridge accepts -- including a replay it reports
  * `duplicate: true` for (runner/README.md: "Replay ... gets the stored
  * outcome back with duplicate: true") -- is removed from the queue. What
  * happens after a failure is `failureAction`'s call: `retry` keeps it
@@ -332,7 +392,11 @@ export async function flushOutbox(client: BridgeClient): Promise<FlushSummary> {
   const delivered: string[] = [];
 
   for (const entry of entries) {
-    if (entry.pausedReason) continue;
+    // Read before the attempt, per entry (a pairing can land mid-flush):
+    // the pairing this attempt is made under, which any pause it earns is
+    // stamped with.
+    const pairedDeviceId = await currentDeviceId();
+    if (pauseInEffect(entry, pairedDeviceId)) continue;
     const eventId = entry.capture.eventId;
     const result = await client.postEvent(entry.capture);
     if (result.ok) {
@@ -353,6 +417,7 @@ export async function flushOutbox(client: BridgeClient): Promise<FlushSummary> {
         // B2 (revision 2): a retryable failure clears any pause -- a
         // pause carried forward here outlived the pairing that lifted it.
         pausedReason: action === "pause" ? result.error.code : undefined,
+        pausedFor: pairedDeviceId,
         lastErrorCode: result.error.code,
       }),
     );
@@ -375,17 +440,26 @@ export async function flushOutbox(client: BridgeClient): Promise<FlushSummary> {
  * option instead: the pause only lifted in memory for that one pass, so
  * one transient failure in it left the entry paused again, and closing the
  * page mid-flush left every entry after it paused until the next pairing.
+ *
+ * P07-B revision 3: step 1 lifts every pause except one earned under this
+ * very pairing (its own token refused too). A pause another context writes
+ * after step 1's read -- the LIFT race -- is stamped with the older
+ * pairing, so step 3's flush sends it anyway (`pauseInEffect`).
  */
 export async function resumeAfterPairing(client: BridgeClient): Promise<FlushSummary> {
+  const pairedDeviceId = await currentDeviceId();
+  const earnedUnderThisPairing = (entry: OutboxEntry) => pairedDeviceId !== null && entry.pausedFor === pairedDeviceId;
   for (const entry of await readOutbox()) {
-    if (!entry.pausedReason) continue;
+    if (!entry.pausedReason || earnedUnderThisPairing(entry)) continue;
     await rewriteIfStillQueued(entry.capture.eventId, (current) =>
-      makeEntry({
-        capture: current.capture,
-        queuedAt: current.queuedAt,
-        attempts: current.attempts,
-        lastErrorCode: current.lastErrorCode,
-      }),
+      current.pausedReason && earnedUnderThisPairing(current)
+        ? current
+        : makeEntry({
+            capture: current.capture,
+            queuedAt: current.queuedAt,
+            attempts: current.attempts,
+            lastErrorCode: current.lastErrorCode,
+          }),
     );
   }
   if ((await readOutbox()).length > 0) await scheduleRetry(1);
@@ -401,11 +475,12 @@ export async function resumeAfterPairing(client: BridgeClient): Promise<FlushSum
  * supported versions").
  */
 export async function ensureRetryAlarmIfQueued(): Promise<void> {
-  const entries = await readOutbox();
-  // A worker restart with nothing but paused entries queued needs no
-  // alarm at all: flushOutbox skips every one of them anyway, so arming one
-  // here would just fire and immediately clear itself for no reason.
-  if (activeEntries(entries).length === 0) return;
+  const { active } = await readQueue();
+  // A worker restart with nothing but paused entries queued (pauses that
+  // still hold) needs no alarm at all: flushOutbox skips every one of them
+  // anyway, so arming one here would just fire and immediately clear
+  // itself for no reason.
+  if (active.length === 0) return;
   const existing = await chrome.alarms.get(JOB_CAPTURE_RETRY_ALARM);
   if (!existing) await scheduleRetry(1);
 }

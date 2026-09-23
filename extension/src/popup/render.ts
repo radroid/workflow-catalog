@@ -13,7 +13,8 @@ import { bridgeClient, type BridgeError } from "../shared/bridge-client";
 import { el, mount } from "../shared/dom";
 import { downloadJson } from "../shared/download";
 import { enqueueCapture, failureAction } from "../shared/outbox";
-import { setLastJobCapture } from "../shared/storage";
+import { getDeviceToken, getPairedBefore, setLastJobCapture } from "../shared/storage";
+import { FLASH_CLASS, type Tone } from "../shared/tone";
 
 // P02's local UI serves /ui/<name> (runner/server/local-ui.ts: `<uiDir>/<page>.html`
 // mounted at /ui/<page>, no literal ".html" in the URL) -- P07-B syncs this
@@ -52,35 +53,68 @@ export function formatBytes(byteLength: number): string {
 
 /** What `sendToBridge` tells the caller to show: whether the capture is
  * now the runner's (`sent`), safely queued in this browser (`queued`), or
- * neither (`not_sent`); the status sentence and its tone; and whether the
- * two secondary actions (manual file export, jump to Settings) should be
+ * neither (`not_sent`); the status sentence, its tone (shared/tone.ts),
+ * and for a refusal the reason on a line of its own; and whether the two
+ * secondary actions (manual file export, jump to Settings) should be
  * offered for this outcome. */
 interface SendOutcome {
   readonly kind: "sent" | "queued" | "not_sent";
   readonly message: string;
-  /** `.flash.ok` (neutral), `.flash` (amber: waiting, nothing to do) or
-   * `.flash.bad` (needs the person). */
-  readonly tone: "ok" | "wait" | "bad";
+  readonly detail?: string;
+  readonly tone: Tone;
   readonly offerFileSave: boolean;
   readonly offerSettings: boolean;
 }
 
-const FLASH_CLASS: Record<SendOutcome["tone"], string> = { ok: "flash ok", wait: "flash", bad: "flash bad" };
+/** P07-B revision 3, H2: every refusal leads with what happened to the
+ * capture and what the person can do next. Revision 2 showed the bridge's
+ * own message alone ("This eventId was already used for a different
+ * event. Use a new eventId for a new event."): a field name, and an
+ * instruction nobody can carry out from the popup. */
+export const REFUSED_MESSAGE =
+  "The runner refused this capture, so it wasn't saved. Save it as a file, or reopen the popup to capture it again.";
+
+/** Plain reasons for the bridge's own refusals of `POST /events`
+ * (runner/server/http.ts, events.ts, app.ts). Any other code comes from a
+ * route handler's `EventRejectedError` (runner/server/route-modules.ts),
+ * whose message is written for people and is shown as it is. */
+const REFUSAL_REASONS: Readonly<Record<string, string>> = {
+  event_id_conflict: "It clashes with a different capture the runner already has.",
+  body_too_large: "It's larger than the runner accepts.",
+  invalid_body: "The runner couldn't read it.",
+  invalid_json: "The runner couldn't read it.",
+  unsupported_media_type: "The runner couldn't read it.",
+  not_found: "This version of the runner doesn't take captures.",
+};
+
+function refusalReason(error: BridgeError): string {
+  return REFUSAL_REASONS[error.code] ?? error.message;
+}
+
+/** P07-B revision 3, nit 4: the browser couldn't store the capture (e.g.
+ * storage.session's quota), so it isn't queued either; the file export is
+ * the one way left to keep it, and is offered. */
+export const NOT_STORED_MESSAGE = "Couldn't save this capture: the browser wouldn't store it. Save it as a file instead.";
 
 /** Why a capture was queued paused -- only a person can fix these (see
- * shared/outbox.ts's `failureAction`). */
-function pausedMessage(error: BridgeError): string {
+ * shared/outbox.ts's `failureAction`). Revision 3 polish: "Not paired yet"
+ * only for a browser that has never paired. */
+function pausedMessage(error: BridgeError, pairedBefore: boolean): string {
   if (error.status === 401) return "Your pairing expired or was revoked. Pair again in Settings and it's sent.";
   if (error.status === 403) return "This pairing belongs to a different install. Pair again in Settings.";
+  if (pairedBefore) return "Not paired — queued. It'll be sent automatically once you pair the extension again in Settings.";
   return "Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.";
 }
 
 /** Why a capture was queued for the worker's automatic retry. */
 function retryMessage(error: BridgeError): string {
   if (error.code === "invalid_response" || error.code === "unknown_error") {
-    return "Something other than the runner answered on its port — queued. It'll be sent once the runner answers.";
+    return "Something other than the runner is answering on its port — queued. It'll be sent once the runner answers.";
   }
   if (error.code === "token_replaced") return "Queued — this browser was just paired again. It'll be sent shortly.";
+  // Revision 3 polish: a real 5xx is the runner answering, not "isn't
+  // reachable".
+  if (error.status !== undefined && error.status >= 500) return "The runner had a problem; trying again.";
   return "The runner isn't reachable right now — it'll be sent automatically once it's back.";
 }
 
@@ -105,10 +139,17 @@ function retryMessage(error: BridgeError): string {
  *   because the runner wasn't there for a moment.
  * - `drop` (the bridge itself refused this exact request: 400, 409, 413,
  *   ...): not queued -- resending it can never succeed -- and not "saved"
- *   either (revision 2, C3): shows the bridge's own specific message and
- *   offers the file export.
+ *   either (revision 2, C3): says so in plain words, with the reason on its
+ *   own line (revision 3, H2), and offers the file export.
+ *
+ * Tones (revision 3, H1): sent is `ok`; a retry the worker makes on its own
+ * is `info`; a pause, which waits on the person pairing (again), is `act`;
+ * a refusal is `bad`.
  */
 async function sendToBridge(capture: JobCapture): Promise<SendOutcome> {
+  // The pairing this attempt is made under, read before it: a pause is
+  // stamped with it (shared/outbox.ts's `pausedFor`, revision 3).
+  const pairing = await getDeviceToken();
   const result = await bridgeClient.postEvent(capture);
   if (result.ok) {
     return { kind: "sent", message: "Sent to the runner.", tone: "ok", offerFileSave: false, offerSettings: false };
@@ -116,13 +157,13 @@ async function sendToBridge(capture: JobCapture): Promise<SendOutcome> {
   const error: BridgeError = result.error;
   const action = failureAction(error);
   if (action === "drop") {
-    return { kind: "not_sent", message: error.message, tone: "bad", offerFileSave: true, offerSettings: false };
+    return { kind: "not_sent", message: REFUSED_MESSAGE, detail: refusalReason(error), tone: "bad", offerFileSave: true, offerSettings: false };
   }
-  await enqueueCapture(capture, error);
+  await enqueueCapture(capture, error, pairing?.deviceId ?? null);
   if (action === "pause") {
-    return { kind: "queued", message: pausedMessage(error), tone: "bad", offerFileSave: true, offerSettings: true };
+    return { kind: "queued", message: pausedMessage(error, await getPairedBefore()), tone: "act", offerFileSave: true, offerSettings: true };
   }
-  return { kind: "queued", message: retryMessage(error), tone: "wait", offerFileSave: true, offerSettings: false };
+  return { kind: "queued", message: retryMessage(error), tone: "info", offerFileSave: true, offerSettings: false };
 }
 
 export function renderPreview(
@@ -170,19 +211,28 @@ export function renderPreview(
   // part A's design, re-download the file) every time -- guarded here
   // instead of via the native `disabled` attribute, because disabling a
   // currently-focused button forces focus to <body>, which the existing
-  // no-focus-loss rule below (B7 carry-forward) already forbids. A plain
+  // no-focus-loss rule (B7 carry-forward) already forbids. A plain
   // in-closure guard makes a repeat click an inert no-op without touching
   // focus at all; `aria-disabled` (unlike `disabled`) still tells a screen
   // reader it's inert without removing it from the tab order, and
-  // base.css makes it look inert (revision 2 polish). Only once the
-  // capture really is the runner's or queued: a `not_sent` outcome leaves
-  // the button as it was (revision 2, C3).
+  // base.css makes it look inert. Only once the capture really is the
+  // runner's or queued: a `not_sent` outcome leaves the button live
+  // (revision 2, C3). P07-B revision 3 polish: "Saving…" works the same
+  // way -- revision 2 set `disabled` for it, which dropped focus to <body>
+  // for as long as the runner took to answer (up to the 5 s timeout).
   let saved = false;
+  let saving = false;
+
+  function showOutcome(message: string, tone: Tone, detail?: string): void {
+    status.replaceChildren(message, ...(detail === undefined ? [] : [el("span", { className: "detail", text: detail })]));
+    status.className = FLASH_CLASS[tone];
+  }
 
   saveButton.addEventListener("click", () => {
     void (async () => {
-      if (saved) return;
-      saveButton.disabled = true;
+      if (saved || saving) return;
+      saving = true;
+      saveButton.setAttribute("aria-disabled", "true");
       saveButton.textContent = "Saving…";
       try {
         // Storage first, always: whatever sendToBridge below decides,
@@ -192,29 +242,30 @@ export function renderPreview(
         // view").
         await setLastJobCapture(capture);
         const outcome = await sendToBridge(capture);
-        status.textContent = outcome.message;
-        status.className = FLASH_CLASS[outcome.tone];
+        showOutcome(outcome.message, outcome.tone, outcome.detail);
         fileButton.hidden = !outcome.offerFileSave;
         settingsButton.hidden = !outcome.offerSettings;
         if (outcome.kind === "not_sent") {
           saveButton.textContent = "Save this job";
+          saveButton.removeAttribute("aria-disabled");
         } else {
           saveButton.textContent = "Saved ✓";
-          saveButton.setAttribute("aria-disabled", "true");
           saved = true;
         }
-      } catch (error) {
-        status.textContent = `Couldn't save: ${error instanceof Error ? error.message : String(error)}`;
-        status.className = "flash bad";
+      } catch {
+        // Storage refused it (revision 3, nit 4): not queued, not the
+        // runner's -- the file export is what's left.
+        showOutcome(NOT_STORED_MESSAGE, "bad");
+        fileButton.hidden = false;
+        settingsButton.hidden = true;
         saveButton.textContent = "Save this job";
+        saveButton.removeAttribute("aria-disabled");
       } finally {
-        // Disabling the focused button while "Saving…" moves focus to
-        // <body> (a disabled element can't hold it) -- re-enable and
-        // reclaim focus on both the success and failure path, so a
-        // keyboard/screen-reader user isn't dropped back to the top of
-        // the page after a click.
-        saveButton.disabled = false;
-        saveButton.focus();
+        saving = false;
+        // Focus never left the button (aria-disabled, not disabled); only
+        // put it back if it was dropped, never take it from wherever the
+        // person moved it meanwhile.
+        if (document.activeElement === null || document.activeElement === document.body) saveButton.focus();
       }
     })();
   });

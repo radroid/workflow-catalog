@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildJobCapture } from "../capture/build-job-capture";
 import { BRIDGE_ORIGIN } from "../shared/bridge-client";
 import { listQueuedCaptures } from "../shared/outbox";
-import { formatBytes, renderFallback, renderLoading, renderPreview } from "./render";
+import { formatBytes, NOT_STORED_MESSAGE, REFUSED_MESSAGE, renderFallback, renderLoading, renderPreview } from "./render";
 
 interface FakeChromeHandle {
   alarms: Map<string, { delayInMinutes?: number }>;
@@ -57,6 +57,19 @@ function installFakeChrome(seed: { deviceToken?: unknown } = {}): FakeChromeHand
   } as unknown as typeof chrome;
   return { alarms, sessionData };
 }
+
+/** Save's handler is async. P07-B revision 3 keeps the button focusable
+ * while it runs (aria-disabled, not disabled), so `disabled` is no longer
+ * the signal that it finished: the label leaving "Saving…" is. */
+async function saveFinished(button: HTMLButtonElement): Promise<void> {
+  await vi.waitFor(() => expect(button.textContent).not.toBe("Saving…"));
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+const PAIRED = { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T00:00:00.000Z" };
 
 describe("popup render states (extracted from main.ts so they're unit-testable in isolation)", () => {
   it("renderLoading shows a reading-this-page message under an h1 inside a main landmark", () => {
@@ -186,7 +199,7 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
       globalThis.fetch = originalFetch;
     });
 
-    it("resets to an enabled, re-focused, success-labelled button after a successful save -- not stuck disabled", async () => {
+    it("ends on a focused, success-labelled button after a successful save -- not stuck on 'Saving…'", async () => {
       const built = await buildJobCapture({
         url: "https://jobs.example/postings/1",
         rawText: "Staff Software Engineer — Fernwood, a role with enough real content to pass the length floor.",
@@ -201,12 +214,9 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
       const status = app.querySelector('[role="status"]');
 
       button.click();
-      // Microtask-flush: the click handler's async IIFE needs a tick to
-      // reach its `finally`.
-      await vi.waitFor(() => {
-        expect(button.disabled).toBe(false);
-      });
+      await saveFinished(button);
 
+      expect(button.disabled, "never the native disabled attribute").toBe(false);
       expect(button.textContent).toBe("Saved ✓");
       // No deviceToken is seeded in this describe's outer beforeEach, so
       // this is the not-paired path -- still a real status message, not
@@ -243,7 +253,7 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
       expect(button.textContent).toBe("Saved ✓");
     });
 
-    it("resets to an enabled 'Save this job' button and re-focuses it after a failed save", async () => {
+    it("resets to a live 'Save this job' button and re-focuses it after a failed save, offering the file export (P07-B revision 3, nit 4)", async () => {
       // No fake chrome.storage at all this time -- setLastJobCapture
       // throws, exercising the catch branch instead of the try branch.
       // @ts-expect-error -- deliberately removing the stub installed by
@@ -262,14 +272,81 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
       renderPreview(app, built.capture, {});
       const button = app.querySelector("button.primary") as HTMLButtonElement;
       const status = app.querySelector('[role="status"]');
+      const fileButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Save as a file") as HTMLButtonElement;
 
       button.click();
-      await vi.waitFor(() => {
-        expect(button.disabled).toBe(false);
-      });
+      await saveFinished(button);
 
       expect(button.textContent).toBe("Save this job");
-      expect(status?.textContent).toContain("Couldn't save");
+      expect(button.hasAttribute("aria-disabled"), "live again").toBe(false);
+      expect(status?.textContent).toBe(NOT_STORED_MESSAGE);
+      expect(status?.className).toBe("flash bad");
+      expect(fileButton.hidden, "the file export is the one way left to keep it").toBe(false);
+      expect(document.activeElement).toBe(button);
+    });
+
+    it("P07-B revision 3, nit 4 (the round-3 reviewer's quota probe): the outbox can't take the capture -- storage.session over its quota -- so 'Save as a file' is offered", async () => {
+      const fake = installFakeChrome({ deviceToken: PAIRED });
+      const realSet = chrome.storage.session.set.bind(chrome.storage.session);
+      chrome.storage.session.set = (async (items: Record<string, unknown>) => {
+        if (Object.keys(items).some((key) => key.startsWith("jobCaptureOutbox:"))) {
+          throw new Error("Session storage quota bytes exceeded. Values were not stored.");
+        }
+        await realSet(items);
+      }) as typeof chrome.storage.session.set;
+      globalThis.fetch = (() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
+
+      const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+      if (!built.ok) throw new Error("fixture");
+      const app = document.createElement("div");
+      document.body.append(app);
+      renderPreview(app, built.capture, {});
+      const button = app.querySelector("button.primary") as HTMLButtonElement;
+      const status = app.querySelector('[role="status"]');
+      const fileButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Save as a file") as HTMLButtonElement;
+
+      button.click();
+      await saveFinished(button);
+
+      expect(status?.textContent).toBe(NOT_STORED_MESSAGE);
+      expect(fileButton.hidden, "revision 2 left the file export hidden here").toBe(false);
+      expect(button.textContent).toBe("Save this job");
+      expect(Object.keys(fake.sessionData).some((key) => key.startsWith("jobCaptureOutbox:")), "nothing queued").toBe(false);
+    });
+
+    it("P07-B revision 3 polish: 'Saving…' keeps focus and ignores a second press (aria-disabled plus a guard, never disabled)", async () => {
+      installFakeChrome({ deviceToken: PAIRED });
+      const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+      if (!built.ok) throw new Error("fixture");
+      let posts = 0;
+      let answer: (response: Response) => void = () => undefined;
+      globalThis.fetch = (() => {
+        posts += 1;
+        return new Promise<Response>((resolve) => {
+          answer = resolve;
+        });
+      }) as typeof fetch;
+
+      const app = document.createElement("div");
+      document.body.append(app);
+      renderPreview(app, built.capture, {});
+      const button = app.querySelector("button.primary") as HTMLButtonElement;
+      button.focus();
+
+      button.click();
+      await vi.waitFor(() => expect(posts).toBe(1));
+      expect(button.textContent).toBe("Saving…");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect(button.disabled, "disabled would drop focus to <body>").toBe(false);
+      expect(document.activeElement, "revision 2 dropped focus to <body> while saving").toBe(button);
+
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(posts, "a second press while saving sends nothing").toBe(1);
+
+      answer(jsonResponse(200, { ok: true, eventId: built.capture.eventId, type: "job_capture", duplicate: false, outcome: "journaled" }));
+      await saveFinished(button);
+      expect(button.textContent).toBe("Saved ✓");
       expect(document.activeElement).toBe(button);
     });
 
@@ -293,16 +370,40 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         const settingsButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Open settings") as HTMLButtonElement;
 
         button.click();
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
         expect(button.textContent).toBe("Saved ✓");
         expect(status?.textContent).toBe("Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.");
+        // P07-B revision 3, H1: waiting on the person to pair -- amber.
+        expect(status?.className).toBe("flash");
         expect(fileButton.hidden).toBe(false);
         expect(settingsButton.hidden).toBe(false);
 
         const queued = await listQueuedCaptures();
         expect(queued.map((entry) => entry.capture.eventId)).toEqual([built.capture.eventId]);
         expect(queued[0]?.pausedReason).toBe("not_paired");
+        expect(queued[0]?.pausedFor, "nothing was paired to stamp it with").toBeUndefined();
+      });
+
+      it("P07-B revision 3 polish: not paired any more (paired before in this session) -- 'Not paired', not 'Not paired yet'", async () => {
+        const fake = installFakeChrome();
+        fake.sessionData.pairedBeforeThisSession = true;
+        globalThis.fetch = (() => {
+          throw new Error("must not call fetch when there is no stored device token");
+        }) as typeof fetch;
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        if (!built.ok) throw new Error("fixture");
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        button.click();
+        await saveFinished(button);
+
+        expect(app.querySelector('[role="status"]')?.textContent).toBe(
+          "Not paired — queued. It'll be sent automatically once you pair the extension again in Settings.",
+        );
       });
 
       it("paired and reachable: posts job_capture with Authorization, says it was sent, and offers neither secondary action", async () => {
@@ -330,7 +431,7 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         const fileButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Save as a file") as HTMLButtonElement;
 
         button.click();
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
         expect(status?.textContent).toBe("Sent to the runner.");
         // P07-B revision 2 polish: a success is the neutral .flash.ok, not
@@ -359,10 +460,12 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         const settingsButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Open settings") as HTMLButtonElement;
 
         button.click();
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
         expect(button.textContent).toBe("Saved ✓");
         expect(status?.textContent).toBe("The runner isn't reachable right now — it'll be sent automatically once it's back.");
+        // P07-B revision 3, H1: an automatic retry, nothing to do -- neutral.
+        expect(status?.className).toBe("flash info");
         expect(fileButton.hidden).toBe(false);
         expect(settingsButton.hidden, "Settings can't fix a down runner").toBe(true);
 
@@ -395,13 +498,19 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         const settingsButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Open settings") as HTMLButtonElement;
 
         button.click();
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
         expect(status?.textContent).toBe("Your pairing expired or was revoked. Pair again in Settings and it's sent.");
-        expect(status?.className).toBe("flash bad");
+        // P07-B revision 3, H1: a re-pair is the person's to do -- amber,
+        // not revision 2's red.
+        expect(status?.className).toBe("flash");
         expect(fileButton.hidden).toBe(false);
         expect(settingsButton.hidden).toBe(false);
-        expect((await listQueuedCaptures())[0]?.pausedReason).toBe("token_invalid");
+        const [entry] = await listQueuedCaptures();
+        expect(entry?.pausedReason).toBe("token_invalid");
+        // Revision 3, nit 1: stamped with the pairing the refused request
+        // was sent under.
+        expect(entry?.pausedFor).toBe(PAIRED.deviceId);
       });
 
       it("403 origin_not_allowed: queues paused and says this pairing belongs to a different install (B3)", async () => {
@@ -425,13 +534,16 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         const status = app.querySelector('[role="status"]');
 
         button.click();
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
         expect(status?.textContent).toBe("This pairing belongs to a different install. Pair again in Settings.");
-        expect((await listQueuedCaptures())[0]?.pausedReason).toBe("origin_not_allowed");
+        expect(status?.className, "amber: the person pairs again").toBe("flash");
+        const [entry] = await listQueuedCaptures();
+        expect(entry?.pausedReason).toBe("origin_not_allowed");
+        expect(entry?.pausedFor).toBe("8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f");
       });
 
-      it("a 413 (too large) shows the bridge's specific message, offers only the file-export fallback, and is never queued (B3: 'any other 4xx')", async () => {
+      it("a 413 (too large) says plainly it was refused and why, offers only the file-export fallback, and is never queued (B3: 'any other 4xx'; revision 3, H2)", async () => {
         installFakeChrome({ deviceToken: { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T00:00:00.000Z" } });
         globalThis.fetch = (() =>
           Promise.resolve(
@@ -454,9 +566,12 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         const settingsButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Open settings") as HTMLButtonElement;
 
         button.click();
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
-        expect(status?.textContent).toBe("Request body is larger than 262144 bytes.");
+        expect(status?.firstChild?.textContent).toBe(REFUSED_MESSAGE);
+        expect(status?.querySelector(".detail")?.textContent).toBe("It's larger than the runner accepts.");
+        expect(status?.textContent, "no developer text").not.toContain("Request body");
+        expect(status?.className).toBe("flash bad");
         expect(fileButton.hidden).toBe(false);
         expect(settingsButton.hidden).toBe(true);
         expect(await listQueuedCaptures()).toEqual([]);
@@ -466,16 +581,22 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         expect(button.hasAttribute("aria-disabled")).toBe(false);
       });
 
-      it("P07-B revision 2, C3: a real 409 is not 'Saved ✓' -- the bridge's message as a problem, the file export offered, the button still live, nothing queued", async () => {
+      it("P07-B revision 2, C3, and revision 3, H2: a real 409 is not 'Saved ✓' -- a plain refusal with a next step and the reason (no field names), the file export offered, the button still live, nothing queued", async () => {
         const fake = installFakeChrome({ deviceToken: { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "device-token", pairedAt: "2026-09-22T00:00:00.000Z" } });
         let posts = 0;
         globalThis.fetch = (() => {
           posts += 1;
           return Promise.resolve(
-            new Response(JSON.stringify({ ok: false, error: { code: "event_id_conflict", message: "This eventId was already used for a different event." } }), {
-              status: 409,
-              headers: { "content-type": "application/json" },
-            }),
+            new Response(
+              JSON.stringify({
+                ok: false,
+                error: { code: "event_id_conflict", message: "This eventId was already used for a different event. Use a new eventId for a new event." },
+              }),
+              {
+                status: 409,
+                headers: { "content-type": "application/json" },
+              },
+            ),
           );
         }) as typeof fetch;
 
@@ -491,11 +612,14 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         const fileButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Save as a file") as HTMLButtonElement;
 
         button.click();
-        await vi.waitFor(() => expect(status?.textContent).not.toBe(""));
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
-        expect(status?.textContent).toBe("This eventId was already used for a different event.");
-        expect(status?.className).toBe("flash bad");
+        expect(status?.firstChild?.textContent).toBe(
+          "The runner refused this capture, so it wasn't saved. Save it as a file, or reopen the popup to capture it again.",
+        );
+        expect(status?.querySelector(".detail")?.textContent).toBe("It clashes with a different capture the runner already has.");
+        expect(status?.textContent, "revision 2 showed the bridge's developer text").not.toContain("eventId");
+        expect(status?.className, "red: refused, and nothing kept it").toBe("flash bad");
         expect(button.textContent).toBe("Save this job");
         expect(button.hasAttribute("aria-disabled")).toBe(false);
         expect(fileButton.hidden).toBe(false);
@@ -526,13 +650,88 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         button.click();
         await vi.waitFor(() => expect(button.textContent).toBe("Saved ✓"));
 
-        expect(status?.textContent).toBe("Something other than the runner answered on its port — queued. It'll be sent once the runner answers.");
-        expect(status?.className, "amber: waiting on the runner, nothing for the person to fix").toBe("flash");
+        expect(status?.textContent).toBe("Something other than the runner is answering on its port — queued. It'll be sent once the runner answers.");
+        expect(status?.className, "neutral (revision 3, H1): the worker retries it on its own").toBe("flash info");
         expect(settingsButton.hidden).toBe(true);
         const queued = await listQueuedCaptures();
         expect(queued.map((entry) => entry.capture.eventId)).toEqual([built.capture.eventId]);
         expect(queued[0]?.pausedReason).toBeUndefined();
         expect(queued[0]?.lastErrorCode).toBe("invalid_response");
+        expect(fake.alarms.has("job-capture-retry")).toBe(true);
+      });
+
+      it("P07-B revision 3 polish: a real 500 says the runner had a problem and it's being retried -- not 'isn't reachable'", async () => {
+        const fake = installFakeChrome({ deviceToken: PAIRED });
+        globalThis.fetch = (() =>
+          Promise.resolve(
+            jsonResponse(500, { ok: false, error: { code: "handler_failed", message: "The runner saved this event but could not process it. Send it again to retry." } }),
+          )) as typeof fetch;
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        if (!built.ok) throw new Error("fixture");
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+        button.click();
+        await saveFinished(button);
+
+        expect(status?.textContent).toBe("The runner had a problem; trying again.");
+        expect(status?.className).toBe("flash info");
+        expect(button.textContent).toBe("Saved ✓");
+        expect((await listQueuedCaptures())[0]?.lastErrorCode).toBe("handler_failed");
+        expect(fake.alarms.has("job-capture-retry")).toBe(true);
+      });
+
+      it("P07-B revision 3, H2: a route handler's own refusal message is kept as it is, under the plain lead sentence", async () => {
+        installFakeChrome({ deviceToken: PAIRED });
+        const handlerMessage = "This posting is from a job board the runner doesn't read yet.";
+        globalThis.fetch = (() =>
+          Promise.resolve(jsonResponse(422, { ok: false, error: { code: "unsupported_job_board", message: handlerMessage } }))) as typeof fetch;
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        if (!built.ok) throw new Error("fixture");
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+        button.click();
+        await saveFinished(button);
+
+        expect(status?.firstChild?.textContent).toBe(REFUSED_MESSAGE);
+        expect(status?.querySelector(".detail")?.textContent).toBe(handlerMessage);
+        expect(button.textContent).toBe("Save this job");
+        expect(await listQueuedCaptures()).toEqual([]);
+      });
+
+      it("P07-B revision 3, H4: a Save that two re-pairings overtake (token_replaced) is queued for retry, in the neutral tone", async () => {
+        const fake = installFakeChrome({ deviceToken: { ...PAIRED, token: "token-one" } });
+        globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+          const auth = (init?.headers as Record<string, string>).authorization;
+          // Each request's token is replaced by a new pairing while it is
+          // in flight, so both it and the client's one retry come back 401.
+          if (auth === "Bearer token-one") fake.sessionData.deviceToken = { ...PAIRED, deviceId: "9c1d7a1f-3a2b-4d66-8e4f-1b2c3d4e5f60", token: "token-two" };
+          if (auth === "Bearer token-two") fake.sessionData.deviceToken = { ...PAIRED, deviceId: "0d2e8b20-4b3c-4e77-9f50-2c3d4e5f6071", token: "token-three" };
+          return jsonResponse(401, { ok: false, error: { code: "token_invalid", message: "This device token is not valid (unknown, revoked or expired). Pair the extension again." } });
+        }) as typeof fetch;
+        const built = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Backend Engineer — Quill, long enough to pass the floor." });
+        if (!built.ok) throw new Error("fixture");
+
+        const app = document.createElement("div");
+        document.body.append(app);
+        renderPreview(app, built.capture, {});
+        const button = app.querySelector("button.primary") as HTMLButtonElement;
+        const status = app.querySelector('[role="status"]');
+        button.click();
+        await saveFinished(button);
+
+        expect(status?.textContent).toBe("Queued — this browser was just paired again. It'll be sent shortly.");
+        expect(status?.className).toBe("flash info");
+        const [entry] = await listQueuedCaptures();
+        expect(entry?.lastErrorCode).toBe("token_replaced");
+        expect(entry?.pausedReason).toBeUndefined();
         expect(fake.alarms.has("job-capture-retry")).toBe(true);
       });
 
@@ -559,7 +758,7 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
         renderPreview(app, built.capture, {});
         const button = app.querySelector("button.primary") as HTMLButtonElement;
         button.click();
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
+        await saveFinished(button);
 
         const fileButton = [...app.querySelectorAll("button")].find((b) => b.textContent === "Save as a file") as HTMLButtonElement;
         expect(clicks).toEqual([]);
