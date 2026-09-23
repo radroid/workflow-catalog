@@ -40,3 +40,40 @@ The clone is `/tmp/wc-ui7-p08a`, at 2c02190. Everything the critic started has s
   - The "records or folders" check looks only at the first 10 listed entries, so an unreadable day-folder can hide inside "and 3 more.".
   - Fix: list folders first, or have the server flag them.
 - **P-c. The run-log note.** "Resume can't clear this pause." names a hidden button and doesn't say what to do. Suggested: "Runs restart on their own once the runner can read this folder again; check its permissions." With a stored pause on top, usage reads "unknown" with no reason until Resume is pressed.
+
+## Reviewer (Opus): APPROVE (no issues, 6 nits)
+
+Scratch: `/tmp/p08a-r3-review/`:
+- the probes `probe-i1.txt`, `probe-prebody.txt` and `probe-extra.txt`, with their sources in `probes/`;
+- the time-zone runs, `mut/` (`summary.txt`), and the chain logs;
+- the clones `merge-clone/` and `p03-trial-clone/`.
+
+**What holds:**
+- **I1**, probed with the real `Client`:
+  - the spike's normal sequence and the task-mode sequence are ok, with 0 cancels; through `withRun` the record is `success` and the key is done;
+  - `turn.cancelled` gives a failure that is not done;
+  - a non-empty `input.requested` parks, with 1 session cancel;
+  - an empty list is ok.
+  - All three I1 plants are killed.
+- **I2**, the pre-body probe, with 0 unhandled rejections:
+  - chmod 000 on today's folder, or on `runs/`: `withRun` resolves with an in-memory failure, and `/status`, the budget route and the runs route all stay 200;
+  - chmod 300 on today's folder writes a `paused` record;
+  - empty, whitespace, undefined or non-string keys get the fixed failure, and the body never runs.
+- **I3:** nits 1–8 all met, 129/129 under both Kiritimati and Pago Pago.
+- **I4, the code side:**
+  - messages come from the server's state;
+  - the JSON view equals the file on disk;
+  - `absolutePath` appears only in the local runs API;
+  - skipped names are capped at 10 and never reach an HTML sink.
+- **Mutations:** 9 of the implementer's plants re-run and killed; the reviewer's own 4 of 5 killed (R1 is nit 1).
+- **Chain:** green at 2c02190 and on the merge onto 09f8bbe. CI 35922498349 passed.
+- **P03 trial merge** (5612d69): only `route-modules.test.ts` conflicts. With P03's readdir version, the runner passes 560/560.
+- **Scope:** the Owns list, G7's two `runner.css` edits, and the `"runs"` line. No dependency changes.
+
+**Nits, carried as follow-ups:**
+1. Nothing tests a body that returns `{ turns: [] }`, the `n/a` side of nit 8 (`run-harness.ts:372`).
+2. "eve is not running" is recorded as model `unknown` with 0/0 tokens. Keep `n/a` when no turn reached eve (`:151`, `:372`).
+3. `hasSucceededWithIdempotencyKey` (`runs.ts:314-330`) rejects when a folder can't be listed, and doesn't document it. A rejection means "unknown", never "not done"; P05 and P08-B must not write `.catch(() => false)` around it.
+4. `GET /api/runs/:runId` returns 500 when `runs/` is unreadable (`runs.ts:286`). Catch it as `listRuns` does.
+5. An `authorization.required` with no `webhookUrl`, followed by `session.waiting`, reads as ok. It isn't reachable in P08-A (no connections). It goes into `eve-runtime.md` item 15 as a note for P05.
+6. For information: `pauseBudget` (`run-harness.ts:205`) can reject if `runs/budget.json` can't be written; `withRun`'s body catch contains it.
