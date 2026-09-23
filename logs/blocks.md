@@ -996,3 +996,28 @@ The orchestrator's own fallback wake-up couldn't run either, so the loop stalled
   - A weekly limit can stall the loop for up to a week, and no wake-up can recover from it.
   - Total consumption drives it, not parallelism. So confirmation rounds from now on check only the items that changed.
   - Moving UI critics to Sonnet is the owner's call, because the overnight prompt specifies Opus for every reviewer.
+
+## 2026-09-23 — P08-A peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** high
+
+**Charter / context:** an Opus reviewer and an Opus UI critic reviewed PR #13 at 371cd63 (the Sonnet implementer's revision 1). The findings are in `logs/handoff/P08-A-round-2-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: REVISE — 2 issues.** Round 1's abort points, usage, races and idempotency are all fixed.
+  1. G1's fix reads eve's normal `session.waiting` boundary as "parked", so every real run would record a failure and idempotency would never say done. At eve@0.63.0, conversation turns end `turn.completed → session.waiting`.
+  2. `withRun`, `/status` and the budget route still reject or return 500 when today's run folder can't be read.
+- **UI critic: VERDICT: REVISE — 3 issues.** Round 1's contrast, focus, bounds, overflow, empty state and amber issues are fixed, and G7 regresses no page.
+  1. The skipped-file note shows full UUID paths.
+  2. The corrupt-budget recovery messages are untrue after a Save.
+  3. Copy path has no visible feedback below the first screen.
+
+**Action taken:**
+- The Sonnet implementer's one revision round was spent, so a fresh **Opus escalation implementer** took the combined list, with decisions I1–I4:
+  - **I1:** ok is a `session.waiting` or `session.completed` boundary with no failure, no cancel and no abort. A turn waits on the person only with a non-empty `input.requested`.
+  - **I2:** nothing before the body can reject. An unreadable run folder becomes a synthetic pause, and `/status` stays 200.
+  - **I3:** nits 1–8.
+  - **I4:** the UI issues and polish.
+- `eve-runtime.md` §8 item 15 now spells out which boundary means what.
+- The P03 round-3 reviewer was asked to check that P03's extraction route classifies a normal turn as ok.
