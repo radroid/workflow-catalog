@@ -42,9 +42,12 @@ the claim (`566c64b`). Work:
   screenshots;
 - `23199d4`: the README, the remaining H2 test gaps, and nit 7.
 
-This report is the next commit. Integration has since moved to `a2326c8`
-(logs only); that isn't merged. Files touched: `extension/**`,
-`docs/screenshots/P07A-*.png` and `P07B-*.png`, and this file.
+This report comes in the commits after those. Integration has since moved
+to `30607ca`, which isn't merged. It changes `logs/` and item 15 of
+`docs/spec/research/eve-runtime.md`, nothing the extension uses.
+
+Files touched: `extension/**`, `docs/screenshots/P07A-*.png` and
+`P07B-*.png`, and this file.
 `.github/workflows/ci.yml` needed no change, and nothing in `packages/`,
 `runner/` or `apps/` changed. Two orchestrator messages arrived during the
 round, the revision 3 brief and a resume after the weekly usage limit
@@ -302,8 +305,8 @@ from 46 to 66.
   revision 2's raw message; its update came in the next commit. I had
   pushed at a unit-green step without running e2e first.
 - 35915946218 on `555d87f`: success (4m25s).
-- `23199d4` and this report's commit: the runs are in the reply to the
-  orchestrator.
+- 35917905879 on `23199d4`, the head the chain above ran on: success.
+- The report commits: their runs are in the reply to the orchestrator.
 
 **Skipped, and why.**
 - There was no real screen reader, as before. Announcements are checked in
@@ -314,8 +317,8 @@ from 46 to 66.
   - another program on the port;
   - a re-pair landing mid-Save. Here the stand-in swaps tokens from the side
     panel page, which runs no status check of its own.
-- Integration's newest commits, up to `a2326c8` (logs only), are not
-  merged.
+- Integration's newest commits, up to `30607ca`, are not merged. They
+  change `logs/` and eve-runtime item 15, nothing the extension uses.
 
 **Assumptions and judgment calls.**
 - **Another program on the port** is neutral in the popup. It is an
