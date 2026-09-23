@@ -1147,3 +1147,22 @@ The orchestrator's own fallback wake-up couldn't run either, so the loop stalled
 - PR #12 was squash-merged into overnight/integration as e01017c, and the remote branch and worktrees are removed.
 - The P07 packet says parts A and B are done, and GOALS P2.E is ticked.
 - The nits and polish went into the P07 packet's new section, "Carried into part C", with the P04 URL-rule follow-up for opening stored URLs.
+
+## 2026-09-23 — `runner/package.json` has one owner at a time [DECISION]
+
+**Iter:** 006
+**Source:** orchestrator
+**Severity:** low
+
+**Charter / context:** the next three runner packets all planned to edit `runner/package.json` and `pnpm-lock.yaml`:
+- P05's DOCX and PDF export needs writer libraries, but its Owns list lacked those files;
+- P03.2 planned to add happy-dom;
+- P03.1 adds document and archive readers.
+
+P05 and P03.2 are meant to run in parallel, and two implementers never share a path.
+**Decision:**
+- P05 owns both files for its export dependencies only, under P03.1's library rules: maintained, no native build, no install scripts, no network, pinned exact versions.
+- P03.2 edits no dependencies, so it can still run alongside P05.
+- The happy-dom devDependency, and the direct import in `ui-pages.test.ts`, move to P03.1.
+- P03.1 now also waits for P05, as well as P04 and P03.2.
+- The P05, P03.2, P03.1 and README tables, and GOALS, are updated to match.

@@ -3,7 +3,7 @@
 Status: open
 Assignee: none
 Blocked by: P04
-Owns: runner/agent/skills/ (preparation set), runner/agent/tools/prepare_application.ts, runner/validate/, runner/export/, runner/store/applications.ts, runner/ui/application.html, packages/job-assistant/fixtures/preparation/
+Owns: runner/agent/skills/ (preparation set), runner/agent/tools/prepare_application.ts, runner/validate/, runner/export/, runner/store/applications.ts, runner/ui/application.html, packages/job-assistant/fixtures/preparation/, and `runner/package.json` + `pnpm-lock.yaml` for the DOCX and PDF export dependencies only. Those libraries must be maintained, with no native build step, no install scripts and no network access; pin exact versions, and report the choice and the reason. While P05 runs, no other packet edits these two files (iter 006 decision).
 Spec: F7, hard-problems #2 and #3
 
 ## Goal
