@@ -10,7 +10,10 @@ Spec: F6, hard-problems #3
 A job posting becomes a versioned snapshot from any of three paths, and the snapshot is data.
 
 ## Deliverables
-- `POST /events` handling of `job_capture` from the extension: bounded text, extractor version, content hash, URL validation (https only, no privileged schemes), dedupe by URL into revisions.
+- `POST /events` handling of `job_capture` from the extension: bounded text, extractor version, content hash, dedupe by URL into revisions.
+  - URL validation follows the contract's `httpUrlSchema`: http or https, and no other scheme.
+  - A captured or pasted URL is provenance only; nothing on those paths fetches it.
+  - Only the URL-fetch path is https-only (decision, iter 005: `logs/blocks.md`, "P04 URL rule").
 - Paste path in the local UI. The URL path is a local-UI route in `routes/captures.ts`, not a model tool: model tools take IDs only (iter-003 decision).
   - It fetches through `runner/lib/safe-fetch.ts`: https only; no loopback, private, link-local or metadata addresses, checked after DNS resolution and on every redirect; a redirect limit, a size cap and a timeout; `text/html` or `text/plain` only.
   - It extracts the text with `runner/lib/readable-text.ts`.
@@ -23,7 +26,7 @@ A job posting becomes a versioned snapshot from any of three paths, and the snap
 - Same URL captured twice with changed text → revision 2; revision 1 retained.
 - Hostile posting fixture: extraction returns fields only; no action tool called; profile unchanged (assert store hash before/after).
 - Rejected inputs:
-  - `javascript:`, `file:` and `http:` URLs;
+  - `javascript:` and `file:` URLs on every path, and `http:` on the URL-fetch path;
   - loopback, RFC 1918, link-local and `169.254.169.254` targets, including after a redirect or a DNS answer;
   - bodies over the cap, and text over 200 KB.
 - `job_capture` gets its handler here: today the bridge journals it as `no_handler`. The route module declares the event, and `route-modules.test.ts` needs no edit after P03's revision (D2).

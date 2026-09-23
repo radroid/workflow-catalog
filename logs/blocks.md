@@ -1086,3 +1086,21 @@ The orchestrator's own fallback wake-up couldn't run either, so the loop stalled
 - The nits and polish go to P08-B (the P08 packet's new section, "Carried into part B").
 - The authorization case (nit 5) is now in `eve-runtime.md` §8 item 15, as a note for P05.
 - The P03 implementer was told to merge integration and keep its readdir-based `route-modules.test.ts`.
+
+## 2026-09-23 — P04 URL rule: https-only applies to the fetch path [DECISION]
+
+**Iter:** 005
+**Source:** orchestrator
+**Severity:** medium
+
+**Charter / context:** P04's packet said the `job_capture` handler validates URLs as "https only", and its acceptance rejected `http:` URLs.
+- The contract (`packages/contracts`, P01, reviewed) defines `jobCaptureSchema.url` and `JobSnapshot.url` with `httpUrlSchema`, which allows http and https.
+- `mvp-spec.md` F6 and `hard-problems.md` say nothing about the scheme.
+- P07-B's e2e captures a fixture page served over `http://127.0.0.1` and expects "Sent to the runner." A literal https-only handler would turn that e2e red as soon as P04 lands.
+
+**Decision:**
+- Captured and pasted URLs follow the contract: http or https, and no other scheme. On those paths a URL is provenance and is never fetched.
+- The URL-fetch path, where the runner itself goes to the network, stays https-only, with every SSRF rule: loopback, private, link-local and metadata addresses refused after DNS and on every redirect.
+- Nothing is weakened: no validator changes, and no fetch rule is relaxed.
+- The P04 packet's deliverable and acceptance lines were updated to match.
+- Follow-up: whichever packet first opens a stored URL in a tab (P06 or P07-C) must refuse loopback and private targets before opening it.
