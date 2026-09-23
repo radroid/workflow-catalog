@@ -273,6 +273,10 @@ export default eveChannel({
     - `open-stream.js` `followStreamIterable`: when the `signal` aborts while the client is opening or reopening the event stream, or while it backs off between attempts, the stream returns without throwing (`catch … if (signal.aborted) return`, and the `aborted` checks after the read loop and after `sleep`). An abort while an open stream is being read does throw.
     - `session-utils.js` `summarizeTurnEvents`: `status` is `waiting` or `failed` only when a boundary event (`session.waiting`, `session.failed`) was seen. With no boundary it defaults to `completed`. So `response.result()` resolves `completed` for a turn that never finished.
     - The client reconnects an idle stream after 15 s (`streamReadIdleTimeoutMs`, default 15e3). A turn that goes silent more than about 15 s before its deadline therefore hits the quiet path.
+    - **Silence without an abort** (checked 2026-09-23, P03 round-3 review):
+      - A turn response (`MessageResponse`, whether through `result()` or by iterating it) follows its stream with `keepAlive`, so eve reopens a silent stream without limit.
+      - If that stream ends before the turn boundary without an abort, eve throws "The response stream ended before the accepted message reached its turn boundary." (`session.js`, when the send reported a delivery id). So on a turn response, the only quiet end is the abort.
+      - A manually opened `session.stream()` stops quietly after five reopens in a row that bring no event (idle policy `maxAttempts: 5`, each reopen after 15 s of silence). eve's docs say it "eventually stops after repeated empty streams" (`guides/client/streaming.mdx:154`).
     - `MessageResponse.cancel()` sends nothing until the client has seen the turn start, and nothing once the turn is parked. `ClientSession.cancel()` (`POST …/session/:id/cancel`) is the reliable cancel.
     - Pattern for every caller that sets a timeout:
       - After `result()` resolves, check `signal.aborted`.

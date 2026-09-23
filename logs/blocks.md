@@ -1021,3 +1021,30 @@ The orchestrator's own fallback wake-up couldn't run either, so the loop stalled
   - **I4:** the UI issues and polish.
 - `eve-runtime.md` §8 item 15 now spells out which boundary means what.
 - The P03 round-3 reviewer was asked to check that P03's extraction route classifies a normal turn as ok.
+
+## 2026-09-23 — P03 peer review, round 3 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** medium
+
+**Charter / context:** an Opus reviewer and an Opus UI critic reviewed PR #11 at bbfa00e, the Opus escalation's revision 2. The findings are in `logs/handoff/P03-round-3-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: REVISE — 1 issue.** The chain is green at the head and on the merge. V1–V6, VN1–VN11 and D8–D16 hold. The normal `turn.completed → session.waiting` turn is read as finished.
+  1. A `turn.cancelled` extraction turn counts as a success: the route records the content hash, so the same text is never extracted again.
+  - Nits: N1 (the D8 wait compounds for queued writers), N2–N4 (untested guards), N5, N6 (marker-shaped claim text breaks the runner's own file) and N7 (`GET /readiness` doesn't reconcile).
+- **UI critic: VERDICT: REVISE — 3 issues.** Round-2 issues 1 and 4–9 hold, as do D11, D13 and D16, and axe is clean across 98 variants.
+  1. D9 refusals are a 313-character paragraph with a marker's UUID, shown three times, with a false "Nothing was saved" after Save & extract.
+  2. Screen readers hear some outcomes twice, and the focused control is rebuilt after every action.
+  3. The pinned line reaches 7 lines at 390 and can cover the focused editor.
+
+**Action taken:**
+- Revision 3 went to the same Opus implementer, with decisions J1–J8:
+  - **J1:** `turn.cancelled` is not ok.
+  - **J3–J6:** the UI issues and polish.
+  - **J7:** nits N1–N4, N6 and N7.
+  - **J8:** screenshots.
+- **J2 dropped N5.**
+  - A turn response follows with `keepAlive`, so eve never gives up on a silent stream.
+  - If the stream ends early without an abort, eve throws. Only a manually opened `session.stream()` stops quietly.
+  - `eve-runtime.md` §8 item 15 now says so.
