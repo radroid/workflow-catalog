@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { budgetStatusSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { ManualClock } from "../lib/clock.ts";
@@ -10,13 +10,18 @@ import {
   getBudgetState,
   getBudgetStatus,
   pauseBudget,
+  REPAIRED_BUDGET_REASON,
   resumeBudget,
+  runLogUnreadableReason,
   setBudgetLimits,
   withBudgetLock,
 } from "../store/budget.ts";
-import { finishRun, startRun, writePausedRun } from "../store/runs.ts";
+import { finishRun, localDateString, startRun, writePausedRun } from "../store/runs.ts";
 import { Workspace } from "../store/workspace.ts";
 import { newWorkspace } from "./helpers.ts";
+
+/** chmod can only deny access to a non-root user on a POSIX filesystem; CI (ubuntu, non-root) and macOS qualify. */
+const canDenyAccess = process.platform !== "win32" && process.getuid?.() !== 0;
 
 describe("store/budget.ts: defaults and limits", () => {
   it("a missing file gives the defaults, unpaused", async () => {
@@ -125,39 +130,129 @@ describe("store/budget.ts: decision 2 — corrupt runs/budget.json fails closed,
     expect(state.paused).toBe(true);
   });
 
-  it("Resume rewrites a valid file with the default limits, unpaused (a corrupt file has nothing to restore)", async () => {
+  it("Resume rewrites a valid file with the default limits, unpaused (a corrupt file has nothing to restore), and says so", async () => {
     const clock = new ManualClock();
     const workspace = await newWorkspace(clock);
     await writeFile(workspace.resolve("runs", "budget.json"), "{ broken", "utf8");
-    await resumeBudget(workspace);
+    expect((await getBudgetState(workspace, clock)).pauseKind).toBe("budget_unreadable");
+    expect(await resumeBudget(workspace)).toEqual({ restoredDefaults: true });
     const state = await getBudgetState(workspace, clock);
     expect(state).toMatchObject({ paused: false, dailyRunLimit: DEFAULT_DAILY_RUN_LIMIT, itemCap: DEFAULT_ITEM_CAP, corrupt: false });
+    expect(state.pauseKind).toBeUndefined();
   });
 
-  it("Save repairs a corrupt file with the submitted limits but keeps it paused until Resume", async () => {
+  it("Save repairs a corrupt file with the submitted limits but keeps it paused until Resume, with a reason that is true once the file is readable (I4)", async () => {
     const clock = new ManualClock();
     const workspace = await newWorkspace(clock);
     await writeFile(workspace.resolve("runs", "budget.json"), "{ broken", "utf8");
     await setBudgetLimits(workspace, { dailyRunLimit: 12, itemCap: 4 });
     const state = await getBudgetState(workspace, clock);
-    expect(state).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, dailyRunLimit: 12, itemCap: 4, corrupt: false });
+    expect(state).toMatchObject({ paused: true, pausedReason: REPAIRED_BUDGET_REASON, pauseKind: "budget_repaired", dailyRunLimit: 12, itemCap: 4, corrupt: false });
+    const raw = JSON.parse(await readFile(workspace.resolve("runs", "budget.json"), "utf8")) as Record<string, unknown>;
+    expect(raw).toEqual({ dailyRunLimit: 12, itemCap: 4, paused: true, pausedReason: REPAIRED_BUDGET_REASON });
+
+    // Resume after the repairing Save keeps the person's limits: the file was readable at that moment.
+    expect(await resumeBudget(workspace)).toEqual({ restoredDefaults: false });
+    expect(await getBudgetState(workspace, clock)).toMatchObject({ paused: false, dailyRunLimit: 12, itemCap: 4 });
+  });
+
+  it("a file an earlier version repaired (stored reason still the 'unreadable' one) reads as repaired, not as unreadable now", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await workspace.writeJson(["runs", "budget.json"], { dailyRunLimit: 8, itemCap: 4, paused: true, pausedReason: CORRUPT_BUDGET_REASON });
+    expect(await getBudgetState(workspace, clock)).toMatchObject({ paused: true, pauseKind: "budget_repaired", corrupt: false, dailyRunLimit: 8, itemCap: 4 });
+  });
+
+  it("a normal Resume reports restoredDefaults false", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await pauseBudget(workspace, clock, "provider limit");
+    expect(await resumeBudget(workspace)).toEqual({ restoredDefaults: false });
+  });
+});
+
+describe("store/budget.ts: I2 — getBudgetState never throws", () => {
+  it.skipIf(!canDenyAccess)("today's run folder can't be listed (chmod 000): a synthetic pause naming the folder, never thrown, and it clears once the folder is readable", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await setBudgetLimits(workspace, { dailyRunLimit: 7, itemCap: 3 });
+    const date = localDateString(clock.now());
+    const today = workspace.resolve("runs", date);
+    await mkdir(today, { recursive: true });
+    await chmod(today, 0o000);
+    try {
+      const state = await getBudgetState(workspace, clock);
+      expect(state).toMatchObject({
+        dailyRunLimit: 7,
+        itemCap: 3,
+        runsUsedToday: 0,
+        paused: true,
+        pausedReason: runLogUnreadableReason(date),
+        pauseKind: "run_log_unreadable",
+        corrupt: false,
+        runLogUnreadable: true,
+      });
+      expect(state.pausedReason).toBe(`run log unreadable (runs/${date}/)`);
+      const status = await getBudgetStatus(workspace, clock);
+      expect(budgetStatusSchema.safeParse(status).success).toBe(true);
+      expect(status).toEqual({ dailyRunLimit: 7, runsUsedToday: 0, paused: true, pausedReason: runLogUnreadableReason(date) });
+
+      // Resume can't clear it: the pause is derived from the folder on every read, never stored.
+      await resumeBudget(workspace);
+      expect((await getBudgetState(workspace, clock)).pauseKind).toBe("run_log_unreadable");
+    } finally {
+      await chmod(today, 0o700);
+    }
+    expect(await getBudgetState(workspace, clock)).toMatchObject({ paused: false, runLogUnreadable: false });
+  });
+
+  it.skipIf(!canDenyAccess)("precedence: a stored pause is reported ahead of the run-log pause, and the run log stays flagged", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await pauseBudget(workspace, clock, "provider limit");
+    const today = workspace.resolve("runs", localDateString(clock.now()));
+    await mkdir(today, { recursive: true });
+    await chmod(today, 0o000);
+    try {
+      expect(await getBudgetState(workspace, clock)).toMatchObject({ paused: true, pausedReason: "provider limit", pauseKind: "stored", runLogUnreadable: true });
+    } finally {
+      await chmod(today, 0o700);
+    }
+  });
+
+  it.skipIf(!canDenyAccess)("all of runs/ unreadable (chmod 000): the budget file can't be read either, so it fails closed as unreadable, never thrown", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await setBudgetLimits(workspace, { dailyRunLimit: 7, itemCap: 3 });
+    const runs = workspace.resolve("runs");
+    await chmod(runs, 0o000);
+    try {
+      const state = await getBudgetState(workspace, clock);
+      expect(state).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, pauseKind: "budget_unreadable", corrupt: true, runLogUnreadable: true });
+      expect(budgetStatusSchema.safeParse(await getBudgetStatus(workspace, clock)).success).toBe(true);
+    } finally {
+      await chmod(runs, 0o700);
+    }
   });
 });
 
 describe("store/budget.ts: G4 (round-1 revision, reviewer issue 5) — serialized writes", () => {
-  it("a Save racing a provider-limit pause keeps both, every time (mutation target: un-serialize the writes)", async () => {
+  it("a Save racing a provider-limit pause keeps both writes, every time (mutation target: un-serialize the writes)", async () => {
     const clock = new ManualClock();
     const workspace = await newWorkspace(clock);
-    let lost = 0;
+    let pausesLost = 0;
+    let limitsLost = 0;
     const trials = 40;
     for (let i = 0; i < trials; i += 1) {
       await setBudgetLimits(workspace, { dailyRunLimit: 10, itemCap: 5 });
       await resumeBudget(workspace); // a clean, unpaused starting state each trial
       await Promise.all([setBudgetLimits(workspace, { dailyRunLimit: 12, itemCap: 4 }), pauseBudget(workspace, clock, "provider limit")]);
       const state = await getBudgetState(workspace, clock);
-      if (!state.paused) lost += 1;
+      if (!state.paused || state.pausedReason !== "provider limit") pausesLost += 1;
+      if (state.dailyRunLimit !== 12 || state.itemCap !== 4) limitsLost += 1;
     }
-    expect(lost).toBe(0);
+    // Nit 5 (round 2): assert both writes, not just the pause.
+    expect({ pausesLost, limitsLost }).toEqual({ pausesLost: 0, limitsLost: 0 });
   });
 
   it("withBudgetLock runs callers strictly one at a time per workspace", async () => {

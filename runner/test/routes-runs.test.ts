@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { statusResponseSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
-import { CORRUPT_BUDGET_REASON, pauseBudget, setBudgetLimits } from "../store/budget.ts";
+import { CORRUPT_BUDGET_REASON, pauseBudget, REPAIRED_BUDGET_REASON, runLogUnreadableReason, setBudgetLimits } from "../store/budget.ts";
 import { finishRun, localDateString, startRun, writePausedRun } from "../store/runs.ts";
-import { BRIDGE, UI_TOKEN, makeBridge, pairDevice } from "./helpers.ts";
+import { BRIDGE, EXTENSION_ORIGIN, UI_TOKEN, makeBridge, pairDevice } from "./helpers.ts";
+
+/** chmod can only deny access to a non-root user on a POSIX filesystem; CI (ubuntu, non-root) and macOS qualify. */
+const canDenyAccess = process.platform !== "win32" && process.getuid?.() !== 0;
 
 const COOKIE = `wc_runner_ui=${UI_TOKEN}`;
 const SAME_ORIGIN = { cookie: COOKIE, origin: BRIDGE, "content-type": "application/json", "sec-fetch-site": "same-origin" };
@@ -98,19 +101,27 @@ describe("routes/runs.ts: GET/POST /api/runs/budget", () => {
     expect(body).toMatchObject({ dailyRunLimit: 10, itemCap: 5, runsUsedToday: 0, paused: false, pausedReason: null, pausedSince: null, corrupt: false, corruptOrigin: false });
   });
 
-  it("G9: a corrupt file reports corrupt and corruptOrigin true; a Save-repair keeps corruptOrigin true with corrupt now false", async () => {
+  it("G9/I4: a corrupt file reports corrupt and corruptOrigin true; a Save-repair keeps the pause with a reason that's true now, and the Resume that follows keeps the saved limits", async () => {
     const bridge = await realBridge();
     await writeFile(bridge.workspace.resolve("runs", "budget.json"), "{ broken", "utf8");
     const corrupt = await bridge.request("/api/runs/budget", { headers: READ });
-    expect(await corrupt.json()).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, corrupt: true, corruptOrigin: true, dailyRunLimit: 10, itemCap: 5 });
+    expect(await corrupt.json()).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, pauseKind: "budget_unreadable", corrupt: true, corruptOrigin: true, dailyRunLimit: 10, itemCap: 5 });
 
     const saved = await bridge.request("/api/runs/budget", { method: "POST", headers: SAME_ORIGIN, body: JSON.stringify({ dailyRunLimit: 12, itemCap: 4 }) });
-    // Decision 2: Save repairs the file (now schema-valid) but keeps the pause until Resume; the UI still needs
-    // to know this pause came from a corrupt file, so corruptOrigin survives even though corrupt itself flips.
-    expect(await saved.json()).toMatchObject({ paused: true, pausedReason: CORRUPT_BUDGET_REASON, corrupt: false, corruptOrigin: true, dailyRunLimit: 12, itemCap: 4 });
+    // Decision 2: Save repairs the file (now schema-valid) but keeps the pause until Resume. The file is readable
+    // now, so the reason says it *was* unreadable (I4), and pauseKind tells Settings which notice to show.
+    expect(await saved.json()).toMatchObject({ paused: true, pausedReason: REPAIRED_BUDGET_REASON, pauseKind: "budget_repaired", corrupt: false, corruptOrigin: true, dailyRunLimit: 12, itemCap: 4 });
 
     const resumed = await bridge.request("/api/runs/budget/resume", { method: "POST", headers: SAME_ORIGIN, body: "{}" });
-    expect(await resumed.json()).toMatchObject({ paused: false, corrupt: false, corruptOrigin: false });
+    // The file was readable when Resume ran, so no defaults were written: the saved 12 and 4 stand (I4).
+    expect(await resumed.json()).toMatchObject({ paused: false, pauseKind: null, corrupt: false, corruptOrigin: false, restoredDefaults: false, dailyRunLimit: 12, itemCap: 4 });
+  });
+
+  it("I4: Resume on a file that is unreadable at that moment writes the defaults and reports restoredDefaults", async () => {
+    const bridge = await realBridge();
+    await writeFile(bridge.workspace.resolve("runs", "budget.json"), "{ broken", "utf8");
+    const resumed = await bridge.request("/api/runs/budget/resume", { method: "POST", headers: SAME_ORIGIN, body: "{}" });
+    expect(await resumed.json()).toMatchObject({ paused: false, restoredDefaults: true, dailyRunLimit: 10, itemCap: 5 });
   });
 
   it("POST saves new limits within bounds", async () => {
@@ -171,6 +182,49 @@ describe("routes/runs.ts: status(ctx) contributes budget to GET /status", () => 
     const parsed = statusResponseSchema.safeParse(body);
     expect(parsed.success, parsed.success ? "" : JSON.stringify((parsed as { error: { issues: unknown } }).error.issues)).toBe(true);
     expect((body as { budget: { dailyRunLimit: number; itemCap?: number } }).budget).toMatchObject({ dailyRunLimit: 17, runsUsedToday: 0, paused: false });
+  });
+
+  it.skipIf(!canDenyAccess)("I2: with today's run folder unreadable, /status stays 200 and reports the pause; the budget and list routes stay 200", async () => {
+    const bridge = await realBridge();
+    const { token } = await pairDevice(bridge);
+    const date = localDateString(bridge.clock.now());
+    const today = bridge.workspace.resolve("runs", date);
+    await mkdir(today, { recursive: true });
+    await chmod(today, 0o000);
+    try {
+      const status = await bridge.request("/status", { headers: { authorization: `Bearer ${token}`, origin: EXTENSION_ORIGIN } });
+      expect(status.status).toBe(200);
+      const body = await status.json();
+      expect(statusResponseSchema.safeParse(body).success).toBe(true);
+      expect((body as { budget: unknown }).budget).toEqual({ dailyRunLimit: 10, runsUsedToday: 0, paused: true, pausedReason: runLogUnreadableReason(date) });
+
+      const budget = await bridge.request("/api/runs/budget", { headers: READ });
+      expect(budget.status).toBe(200);
+      expect(await budget.json()).toMatchObject({ paused: true, pauseKind: "run_log_unreadable", runLogUnreadable: true, pausedReason: `run log unreadable (runs/${date}/)` });
+
+      const list = await bridge.request("/api/runs", { headers: READ });
+      expect(list.status).toBe(200);
+      expect(await list.json()).toEqual({ runs: [], invalidCount: 1, skippedFiles: [`runs/${date}/`] });
+    } finally {
+      await chmod(today, 0o700);
+    }
+  });
+
+  it.skipIf(!canDenyAccess)("I2: with all of runs/ unreadable, /status and the run list both stay 200", async () => {
+    const bridge = await realBridge();
+    const { token } = await pairDevice(bridge);
+    const runs = bridge.workspace.resolve("runs");
+    await chmod(runs, 0o000);
+    try {
+      const status = await bridge.request("/status", { headers: { authorization: `Bearer ${token}`, origin: EXTENSION_ORIGIN } });
+      expect(status.status).toBe(200);
+      expect(statusResponseSchema.safeParse(await status.json()).success).toBe(true);
+      const list = await bridge.request("/api/runs", { headers: READ });
+      expect(list.status).toBe(200);
+      expect(await list.json()).toEqual({ runs: [], invalidCount: 1, skippedFiles: ["runs/"] });
+    } finally {
+      await chmod(runs, 0o700);
+    }
   });
 
   it("G8: /status's budget never carries corrupt/corruptOrigin/absolutePath — statusResponseSchema is .strict()", async () => {

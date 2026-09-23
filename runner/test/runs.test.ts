@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { chmod, writeFile } from "node:fs/promises";
 import { runRecordSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ManualClock, DAY_MS } from "../lib/clock.ts";
 import { countCountableRuns, finishRun, getRun, hasSucceededWithIdempotencyKey, listRuns, localDateString, startRun, writePausedRun } from "../store/runs.ts";
 import { newWorkspace } from "./helpers.ts";
+
+/** chmod can only deny access to a non-root user on a POSIX filesystem; CI (ubuntu, non-root) and macOS qualify. */
+const canDenyAccess = process.platform !== "win32" && process.getuid?.() !== 0;
 
 describe("store/runs.ts: localDateString", () => {
   it("uses the local calendar date, not UTC — a local-time constructor either side of local midnight lands on the two different days", () => {
@@ -38,6 +41,39 @@ describe("store/runs.ts: localDateString under an explicit TZ=UTC (nit: this is 
     await withTz("UTC", () => {
       expect(localDateString(new Date("2026-09-22T23:59:59.000Z"))).toBe("2026-09-22");
       expect(localDateString(new Date("2026-09-23T00:00:01.000Z"))).toBe("2026-09-23");
+    });
+  });
+});
+
+// Nit 1 (round 2): the TZ=UTC case above passes even with UTC getters, so on its own it can't pin decision 4 under
+// CI's zone. These switch the zone at run time (probe-tz.txt showed that takes effect inside vitest's worker), to
+// zones where the local and UTC calendar dates differ for the same instant, whatever zone the suite runs in.
+describe("store/runs.ts: decision 4 pinned under zones whose date differs from UTC (I3, nit 1)", () => {
+  it("Pacific/Kiritimati (UTC+14): an instant that is still 22 Sep in UTC is already 23 Sep locally", async () => {
+    await withTz("Pacific/Kiritimati", () => {
+      expect(localDateString(new Date("2026-09-22T12:00:00.000Z"))).toBe("2026-09-23");
+      expect(localDateString(new Date("2026-09-22T09:59:59.000Z"))).toBe("2026-09-22");
+    });
+  });
+
+  it("Pacific/Pago_Pago (UTC−11): an instant that is already 22 Sep in UTC is still 21 Sep locally", async () => {
+    await withTz("Pacific/Pago_Pago", () => {
+      expect(localDateString(new Date("2026-09-22T05:00:00.000Z"))).toBe("2026-09-21");
+      expect(localDateString(new Date("2026-09-22T11:00:00.000Z"))).toBe("2026-09-22");
+    });
+  });
+
+  it("under Pacific/Kiritimati a run files under its local date, and today's budget count finds it there", async () => {
+    await withTz("Pacific/Kiritimati", async () => {
+      const clock = new ManualClock("2026-09-22T12:00:00.000Z"); // 02:00 on 23 Sep in Kiritimati
+      const workspace = await newWorkspace(clock);
+      const runId = randomUUID();
+      const { startedAt } = await startRun(workspace, clock, { runId, kind: "manual", isCatchUp: false, idempotencyKey: "kiritimati", inputs: {} });
+      await finishRun(workspace, clock, { runId, kind: "manual", isCatchUp: false, idempotencyKey: "kiritimati", inputs: {}, startedAt, outcome: "success", model: "m", tokens: { input: 0, output: 0 } });
+      expect(await workspace.list("runs", "2026-09-23")).toEqual([`${runId}.json`]);
+      expect(await workspace.list("runs", "2026-09-22")).toEqual([]);
+      expect(await countCountableRuns(workspace, localDateString(clock.now()))).toBe(1);
+      expect((await getRun(workspace, runId))?.path).toBe(`runs/2026-09-23/${runId}.json`);
     });
   });
 });
@@ -268,6 +304,19 @@ describe("store/runs.ts: listing and reading", () => {
     for (const path of skippedFiles) expect(badPaths).toContain(path);
   });
 
+  it.skipIf(!canDenyAccess)("I2: runs/ itself unreadable (chmod 000) is reported as one skipped entry, never thrown", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    await writePausedRun(workspace, clock, { runId: randomUUID(), kind: "manual", isCatchUp: false, idempotencyKey: "hidden", inputs: {}, reason: "r" });
+    const runs = workspace.resolve("runs");
+    await chmod(runs, 0o000);
+    try {
+      expect(await listRuns(workspace, clock)).toEqual({ records: [], invalidCount: 1, skippedFiles: ["runs/"] });
+    } finally {
+      await chmod(runs, 0o700);
+    }
+  });
+
   it("nit: an error listing one date directory skips just that directory with a note, not a 500", async () => {
     const clock = new ManualClock();
     const workspace = await newWorkspace(clock);
@@ -349,15 +398,19 @@ describe("store/runs.ts: G3 (round-1 revision, reviewer issue 4) — the idempot
     const { startedAt } = await startRun(workspace, clock, { runId: oldId, kind: "prepare_newly_saved_jobs", isCatchUp: false, idempotencyKey: key, inputs: {} });
     await finishRun(workspace, clock, { runId: oldId, kind: "prepare_newly_saved_jobs", isCatchUp: false, idempotencyKey: key, inputs: {}, startedAt, outcome: "success", model: "m", tokens: { input: 1, output: 1 } });
     clock.advance(DAY_MS);
+    const perDay = 51;
     for (let day = 0; day < 4; day += 1) {
-      for (let i = 0; i < 50; i += 1) {
+      for (let i = 0; i < perDay; i += 1) {
         await writePausedRun(workspace, clock, { runId: randomUUID(), kind: "manual", isCatchUp: false, idempotencyKey: `other-${day}-${i}`, inputs: {}, reason: "daily run limit reached (50)" });
         clock.advance(60_000);
       }
-      clock.advance(DAY_MS - 50 * 60_000);
+      clock.advance(DAY_MS - perDay * 60_000);
     }
-    // 200 newer records now sit strictly ahead of the 5-day-old success in the window; listRuns's own 200-record
-    // page would never reach it.
+    // 204 newer records (4 days × 51) now sit strictly ahead of the 5-day-old success in the window; listRuns's own
+    // 200-record page never reaches it.
+    const page = await listRuns(workspace, clock);
+    expect(page.records.length).toBe(200);
+    expect(page.records.some((record) => record.runId === oldId)).toBe(false);
     expect(await hasSucceededWithIdempotencyKey(workspace, clock, key)).toBe(true);
   });
 

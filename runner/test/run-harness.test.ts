@@ -1,12 +1,23 @@
-import { writeFile } from "node:fs/promises";
-import type { Client, ClientSession, MessageResponse, MessageStreamEvent } from "eve/client";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import type { Client, ClientSession, InputRequest, MessageResponse, MessageStreamEvent } from "eve/client";
+import { runRecordSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { ManualClock } from "../lib/clock.ts";
-import { createRunnerContext } from "../server/context.ts";
+import { createRunnerContext, silentLogger, type RunnerLogger } from "../server/context.ts";
 import type { EveGateway } from "../server/eve-gateway.ts";
-import { EMPTY_ERROR_FALLBACK, PROVIDER_LIMIT_REASON, runTurn, withRun, type RunBodyResult, type TurnResult } from "../server/run-harness.ts";
-import { getBudgetState, pauseBudget, resumeBudget, setBudgetLimits } from "../store/budget.ts";
-import { getRun } from "../store/runs.ts";
+import {
+  EMPTY_ERROR_FALLBACK,
+  EMPTY_IDEMPOTENCY_KEY_ERROR,
+  MINIMAL_FINISH_ERROR,
+  PROVIDER_LIMIT_REASON,
+  RUN_NOT_STARTED_ERROR,
+  runTurn,
+  withRun,
+  type RunBodyResult,
+  type TurnResult,
+} from "../server/run-harness.ts";
+import { getBudgetState, pauseBudget, resumeBudget, runLogUnreadableReason, setBudgetLimits } from "../store/budget.ts";
+import { getRun, hasSucceededWithIdempotencyKey, localDateString, NO_MODEL, UNKNOWN_MODEL } from "../store/runs.ts";
 import { newWorkspace } from "./helpers.ts";
 
 const META = { at: "2026-09-22T09:00:00.000Z", id: "evt-0" };
@@ -23,14 +34,42 @@ function turnFailed(code: string, message: string, details?: Record<string, stri
   return { type: "turn.failed", data: { code, message, ...(details ? { details } : {}), sequence: 9, turnId: "t1" }, meta: META };
 }
 
-/** A terminal boundary event (`isCurrentTurnBoundaryEvent`): without one, `runTurn` never calls a turn "ok" (G1). */
+function turnCompleted(): MessageStreamEvent {
+  return { type: "turn.completed", data: { sequence: 8, turnId: "t1" }, meta: META };
+}
+
+function turnCancelled(): MessageStreamEvent {
+  return { type: "turn.cancelled", data: { sequence: 8, turnId: "t1" }, meta: META };
+}
+
+/** A realistic `ask_question` request (eve's InputRequest shape). Fictional content only. */
+const QUESTION: InputRequest = {
+  action: { callId: "call-1", input: {}, kind: "tool-call", toolName: "ask_question" },
+  kind: "question",
+  prompt: "Which saved Northwind Labs job should I prepare first?",
+  requestId: "req-1",
+};
+
+function inputRequested(requests: readonly InputRequest[] = [QUESTION]): MessageStreamEvent {
+  return { type: "input.requested", data: { requests, sequence: 7, stepIndex: 0, turnId: "t1" }, meta: META };
+}
+
+/**
+ * The boundary every conversation turn ends with (eve-runtime.md §8 item 15): `turn.completed → session.waiting`
+ * is a normal, finished turn. eve's docs call it "parked and ready for the next message" — idle, not waiting on
+ * the person.
+ */
+function sessionWaiting(): MessageStreamEvent {
+  return { type: "session.waiting", data: { continuationToken: "s1", wait: "next-user-message" }, meta: META };
+}
+
+/** The boundary a task-mode session (a schedule firing, say) ends with. */
 function sessionCompleted(): MessageStreamEvent {
   return { type: "session.completed", meta: META } as MessageStreamEvent;
 }
 
-/** The other boundary that matters here: a parked turn (G1's "parked" detection is keyed off this event's type). */
-function sessionWaiting(): MessageStreamEvent {
-  return { type: "session.waiting", data: { continuationToken: "s1", wait: "next-user-message" }, meta: META };
+function sessionFailed(code: string, message: string): MessageStreamEvent {
+  return { type: "session.failed", data: { code, message, sessionId: "s1" }, meta: META };
 }
 
 interface FakeCall {
@@ -40,9 +79,9 @@ interface FakeCall {
 /**
  * A fake EveGateway whose client.sessions.create is scripted per call, event
  * by event — matching how the real eve client streams (G1: `runTurn` no
- * longer trusts a single aggregated `result()`). `session.cancel()` (not
- * `response.cancel()`, which round-1's `runTurn` no longer calls) is counted
- * so "parked"/"timeout" cancellation can be asserted.
+ * longer trusts a single aggregated `result()`). Only `session.cancel()` is
+ * counted (G1: "fakes count only real cancel requests"); `runTurn` never
+ * calls `response.cancel()`, and this fake's response has no `cancel` at all.
  */
 function fakeEve(script: (call: FakeCall, signal: AbortSignal) => Promise<readonly MessageStreamEvent[]> | "hang"): { eve: EveGateway; calls: FakeCall[]; cancelCount: () => number } {
   const calls: FakeCall[] = [];
@@ -81,26 +120,79 @@ function fakeEve(script: (call: FakeCall, signal: AbortSignal) => Promise<readon
   return { eve, calls, cancelCount: () => cancelCount };
 }
 
-async function contextWith(eve?: EveGateway, clock = new ManualClock()) {
+/** Collects error lines, so a test can assert that `withRun` logged what it caught (I2: "logs it"). */
+function capturingLogger(): { log: RunnerLogger; errors: string[] } {
+  const errors: string[] = [];
+  return { log: { ...silentLogger, error: (message) => errors.push(message) }, errors };
+}
+
+async function contextWith(eve?: EveGateway, clock = new ManualClock(), log: RunnerLogger = silentLogger) {
   const workspace = await newWorkspace(clock);
-  const ctx = createRunnerContext({ workspace, clock, packageVersion: "0.1.0", eve });
+  const ctx = createRunnerContext({ workspace, clock, packageVersion: "0.1.0", eve, log });
   return { ctx, workspace, clock };
 }
 
-describe("run-harness.ts: runTurn", () => {
-  it("an ok turn sums tokens and takes the model id from the last step.started", async () => {
-    const { eve } = fakeEve(async () => [started("gpt-5.6-luna"), completed({ inputTokens: 100, outputTokens: 20 }), sessionCompleted()]);
+/** chmod can only deny access to a non-root user on a POSIX filesystem; CI (ubuntu, non-root) and macOS qualify. */
+const canDenyAccess = process.platform !== "win32" && process.getuid?.() !== 0;
+
+describe("run-harness.ts: runTurn — turn classification (I1, eve-runtime.md §8 item 15)", () => {
+  it("a normal conversation turn (turn.completed → session.waiting) is ok, sums tokens, takes the last step.started model, and sends no cancel", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("gpt-5.6-luna"), completed({ inputTokens: 100, outputTokens: 20 }), turnCompleted(), sessionWaiting()]);
     const { ctx } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
-    expect(result).toMatchObject({ status: "ok", tokens: { input: 100, output: 20 }, model: "gpt-5.6-luna" });
+    expect(result).toEqual({ status: "ok", tokens: { input: 100, output: 20 }, model: "gpt-5.6-luna" });
+    expect(cancelCount()).toBe(0);
+  });
+
+  it("a task-mode turn (turn.completed → session.completed) is ok too", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("gpt-5.6-luna"), completed({ inputTokens: 9, outputTokens: 3 }), turnCompleted(), sessionCompleted()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result).toEqual({ status: "ok", tokens: { input: 9, output: 3 }, model: "gpt-5.6-luna" });
+    expect(cancelCount()).toBe(0);
   });
 
   it("sums usage across more than one step", async () => {
-    const { eve } = fakeEve(async () => [started("m1", 0), completed({ inputTokens: 10, outputTokens: 2 }, 0), started("m2", 1), completed({ inputTokens: 5, outputTokens: 1 }, 1), sessionCompleted()]);
+    const { eve } = fakeEve(async () => [started("m1", 0), completed({ inputTokens: 10, outputTokens: 2 }, 0), started("m2", 1), completed({ inputTokens: 5, outputTokens: 1 }, 1), turnCompleted(), sessionWaiting()]);
     const { ctx } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
+    expect(result.status).toBe("ok");
     expect(result.tokens).toEqual({ input: 15, output: 3 });
     expect(result.model).toBe("m2");
+  });
+
+  it("waiting on the person: a non-empty input.requested list, then session.waiting, parks and cancels once through session.cancel()", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("m1"), completed({ inputTokens: 4, outputTokens: 2 }), inputRequested(), sessionWaiting()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result).toMatchObject({ status: "parked", tokens: { input: 4, output: 2 }, model: "m1" });
+    expect(result.detail).toContain("asked for input");
+    expect(cancelCount()).toBe(1);
+  });
+
+  it("an input.requested event with an empty list is not a park", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("m1"), inputRequested([]), turnCompleted(), sessionWaiting()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result.status).toBe("ok");
+    expect(cancelCount()).toBe(0);
+  });
+
+  it("turn.cancelled (then session.waiting) is not ok: 'cancelled', with no cancel of our own", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("m1"), completed({ inputTokens: 2, outputTokens: 1 }), turnCancelled(), sessionWaiting()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result).toMatchObject({ status: "cancelled", tokens: { input: 2, output: 1 }, model: "m1" });
+    expect(result.detail).toContain("cancelled");
+    expect(cancelCount()).toBe(0);
+  });
+
+  it("a session.failed boundary is not ok", async () => {
+    const { eve } = fakeEve(async () => [started("m1"), sessionFailed("SESSION_FAILED", "The session failed.")]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result.status).toBe("failed");
+    expect(result.providerLimit).toBeFalsy();
   });
 
   it("no boundary event at all (never aborted, no failure): never called 'ok' (mutation target)", async () => {
@@ -111,8 +203,34 @@ describe("run-harness.ts: runTurn", () => {
     expect(result.tokens).toEqual({ input: 1, output: 1 }); // partial usage still kept
   });
 
-  it("an ordinary failure fails the turn without pausing the budget (negative case)", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "The model declined to answer.")]);
+  it("create() itself hangs until the deadline: the turn times out", async () => {
+    const { eve } = fakeEve(() => "hang");
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go", timeoutMs: 20 });
+    expect(result.status).toBe("timeout");
+    expect(result.detail).toContain("No answer within");
+  });
+
+  it("a stream error that carries no message fails the turn with the fixed sentence (G2, I3)", async () => {
+    const { eve } = fakeEve(async () => {
+      throw new Error("   ");
+    });
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result).toMatchObject({ status: "failed", detail: EMPTY_ERROR_FALLBACK });
+  });
+
+  it("without eve running, a turn fails immediately", async () => {
+    const { ctx } = await contextWith(undefined);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain("eve is not running");
+  });
+});
+
+describe("run-harness.ts: runTurn — provider limit (decision 1, G5)", () => {
+  it("an ordinary failure (step.failed → turn.failed → session.waiting, as eve ends a failed conversation turn) fails the turn without pausing the budget", async () => {
+    const { eve } = fakeEve(async () => [started("m1"), turnFailed("MODEL_CALL_FAILED", "The model declined to answer."), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.status).toBe("failed");
@@ -121,7 +239,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("primary signal: details.semanticErrorId gateway-rate-limited pauses the budget with reason 'provider limit'", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "AI Gateway rate-limited the request.", { semanticErrorId: "gateway-rate-limited" })]);
+    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "AI Gateway rate-limited the request.", { semanticErrorId: "gateway-rate-limited" }), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.status).toBe("failed");
@@ -133,7 +251,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("primary signal: details.semanticErrorId gateway-free-tier-rate-limited also pauses", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "Free tier requests on this model are rate-limited.", { semanticErrorId: "gateway-free-tier-rate-limited" })]);
+    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "Free tier requests on this model are rate-limited.", { semanticErrorId: "gateway-free-tier-rate-limited" }), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBe(true);
@@ -141,7 +259,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("a semanticErrorId for an unrelated gateway rule does not count as a provider limit", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "The requested model is not available.", { semanticErrorId: "model-not-found" })]);
+    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "The requested model is not available.", { semanticErrorId: "model-not-found" }), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBeFalsy();
@@ -149,7 +267,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("fallback signal (no semanticErrorId): a bare 429 in the message pauses the budget", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("UPSTREAM_ERROR", "HTTP 429 Too Many Requests from the provider.")]);
+    const { eve } = fakeEve(async () => [turnFailed("UPSTREAM_ERROR", "HTTP 429 Too Many Requests from the provider."), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBe(true);
@@ -157,7 +275,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("fallback signal (no semanticErrorId): 'rate limit' wording in the code pauses the budget", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("rate_limited", "Too many requests right now.")]);
+    const { eve } = fakeEve(async () => [turnFailed("rate_limited", "Too many requests right now."), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBe(true);
@@ -165,7 +283,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("negative case: no semanticErrorId and no 429/rate-limit wording never pauses", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("VALIDATION_ERROR", "Invalid request: missing field 'foo'.")]);
+    const { eve } = fakeEve(async () => [turnFailed("VALIDATION_ERROR", "Invalid request: missing field 'foo'."), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBeFalsy();
@@ -174,7 +292,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("G5: details.statusCode 429 with no semanticErrorId pauses the budget", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("UPSTREAM_ERROR", "Too many requests.", { statusCode: 429 })]);
+    const { eve } = fakeEve(async () => [turnFailed("UPSTREAM_ERROR", "Too many requests.", { statusCode: 429 }), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBe(true);
@@ -182,7 +300,7 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("G5: details.upstreamStatusCode 429 with no semanticErrorId pauses the budget", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("UPSTREAM_ERROR", "Too many requests.", { upstreamStatusCode: 429 })]);
+    const { eve } = fakeEve(async () => [turnFailed("UPSTREAM_ERROR", "Too many requests.", { upstreamStatusCode: 429 }), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBe(true);
@@ -190,34 +308,11 @@ describe("run-harness.ts: runTurn", () => {
   });
 
   it("G5 precedence: an unrelated semanticErrorId plus a 429 statusCode and rate-limit wording is NOT a provider limit", async () => {
-    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "429 rate limited (but really just not-found)", { semanticErrorId: "model-not-found", statusCode: 429 })]);
+    const { eve } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "429 rate limited (but really just not-found)", { semanticErrorId: "model-not-found", statusCode: 429 }), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
     const result = await runTurn(ctx, { message: "go" });
     expect(result.providerLimit).toBeFalsy();
     expect((await getBudgetState(workspace, clock)).paused).toBe(false);
-  });
-
-  it("a turn with a session.waiting boundary parks and cancels through session.cancel()", async () => {
-    const { eve, cancelCount } = fakeEve(async () => [started("m1"), sessionWaiting()]);
-    const { ctx } = await contextWith(eve);
-    const result = await runTurn(ctx, { message: "go" });
-    expect(result.status).toBe("parked");
-    expect(cancelCount()).toBe(1);
-  });
-
-  it("create() itself hangs until the deadline: the turn times out", async () => {
-    const { eve } = fakeEve(() => "hang");
-    const { ctx } = await contextWith(eve);
-    const result = await runTurn(ctx, { message: "go", timeoutMs: 20 });
-    expect(result.status).toBe("timeout");
-    expect(result.detail).toContain("No answer within");
-  });
-
-  it("without eve running, a turn fails immediately", async () => {
-    const { ctx } = await contextWith(undefined);
-    const result = await runTurn(ctx, { message: "go" });
-    expect(result.status).toBe("failed");
-    expect(result.detail).toContain("eve is not running");
   });
 });
 
@@ -274,6 +369,97 @@ describe("run-harness.ts: withRun — refusal", () => {
   });
 });
 
+describe("run-harness.ts: withRun — nothing before the body can reject (I2)", () => {
+  it("an empty idempotencyKey resolves with an in-memory failure record with a fixed message: logged, body never called, nothing written", async () => {
+    const { log, errors } = capturingLogger();
+    const { ctx, workspace, clock } = await contextWith(undefined, new ManualClock(), log);
+    let called = 0;
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "", isCatchUp: false }, async () => {
+      called += 1;
+      return { turns: [] };
+    });
+    expect(record).toMatchObject({ outcome: "failure", error: EMPTY_IDEMPOTENCY_KEY_ERROR, model: NO_MODEL, tokens: { input: 0, output: 0 }, durationMs: 0 });
+    expect(called).toBe(0);
+    expect(errors.some((line) => line.includes("empty idempotencyKey"))).toBe(true);
+    expect(await getRun(workspace, record.runId)).toBeUndefined();
+    expect(await workspace.list("runs", localDateString(clock.now()))).toEqual([]);
+  });
+
+  it("a whitespace-only idempotencyKey is refused the same way", async () => {
+    const { ctx } = await contextWith(undefined);
+    let called = 0;
+    const record = await withRun(ctx, { kind: "manual", idempotencyKey: "   ", isCatchUp: false }, async () => {
+      called += 1;
+      return { turns: [] };
+    });
+    expect(record).toMatchObject({ outcome: "failure", error: EMPTY_IDEMPOTENCY_KEY_ERROR });
+    expect(called).toBe(0);
+  });
+
+  it.skipIf(!canDenyAccess)("today's run folder unreadable and unwritable (chmod 000): resolves with an in-memory failure record, logged, body never called", async () => {
+    const { log, errors } = capturingLogger();
+    const { ctx, workspace, clock } = await contextWith(undefined, new ManualClock(), log);
+    const date = localDateString(clock.now());
+    const today = workspace.resolve("runs", date);
+    await mkdir(today, { recursive: true });
+    await chmod(today, 0o000);
+    let called = 0;
+    try {
+      // The store layer reports the synthetic pause instead of throwing...
+      const state = await getBudgetState(workspace, clock);
+      expect(state).toMatchObject({ paused: true, pausedReason: runLogUnreadableReason(date), pauseKind: "run_log_unreadable", runLogUnreadable: true });
+      // ...and withRun, which can't write the refusal record into that folder, resolves anyway.
+      const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "catch-up-ada-quill", isCatchUp: true }, async () => {
+        called += 1;
+        return { turns: [] };
+      });
+      expect(record).toMatchObject({ outcome: "failure", error: RUN_NOT_STARTED_ERROR, idempotencyKey: "catch-up-ada-quill", isCatchUp: true });
+      expect(runRecordSchema.safeParse(record).success).toBe(true);
+    } finally {
+      await chmod(today, 0o700);
+    }
+    expect(called).toBe(0);
+    expect(errors.some((line) => line.includes("did not start"))).toBe(true);
+  });
+
+  it.skipIf(!canDenyAccess)("today's run folder unlistable but writable (chmod 300): refused with a paused record naming the folder, written to disk", async () => {
+    const { ctx, workspace, clock } = await contextWith(undefined);
+    const date = localDateString(clock.now());
+    const today = workspace.resolve("runs", date);
+    await mkdir(today, { recursive: true });
+    await chmod(today, 0o300);
+    let called = 0;
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "northwind-labs", isCatchUp: false }, async () => {
+      called += 1;
+      return { turns: [] };
+    }).finally(() => chmod(today, 0o700));
+    expect(record).toMatchObject({ outcome: "paused", error: runLogUnreadableReason(date) });
+    expect(called).toBe(0);
+    const onDisk = await getRun(workspace, record.runId);
+    expect(onDisk).toMatchObject({ outcome: "paused", error: `run log unreadable (runs/${date}/)` });
+  });
+
+  it.skipIf(!canDenyAccess)("an unwritable runs/ (chmod 500): the start placeholder can't be written, so withRun resolves with an in-memory failure record", async () => {
+    const { log, errors } = capturingLogger();
+    const { ctx, workspace } = await contextWith(undefined, new ManualClock(), log);
+    const runs = workspace.resolve("runs");
+    await chmod(runs, 0o500);
+    let called = 0;
+    try {
+      const record = await withRun(ctx, { kind: "manual", idempotencyKey: "ada-quill-manual", isCatchUp: false }, async () => {
+        called += 1;
+        return { turns: [] };
+      });
+      expect(record).toMatchObject({ outcome: "failure", error: RUN_NOT_STARTED_ERROR });
+      expect(runRecordSchema.safeParse(record).success).toBe(true);
+    } finally {
+      await chmod(runs, 0o700);
+    }
+    expect(called).toBe(0);
+    expect(errors.some((line) => line.includes("did not start"))).toBe(true);
+  });
+});
+
 describe("run-harness.ts: withRun — item cap", () => {
   it("caps items at itemCap and records processed/remaining ids in inputs", async () => {
     const { ctx, workspace } = await contextWith(undefined);
@@ -325,6 +511,15 @@ describe("run-harness.ts: withRun — crash safety and outcome (decision 3, hard
     expect(onDisk?.error).toBe(EMPTY_ERROR_FALLBACK);
   });
 
+  it("G2/I3: `throw undefined` gets the fixed sentence, not the text 'undefined'", async () => {
+    const { ctx, workspace } = await contextWith(undefined);
+    const record = await withRun(ctx, { kind: "manual", idempotencyKey: "throw-undefined", isCatchUp: false }, async () => {
+      throw undefined;
+    });
+    expect(record.error).toBe(EMPTY_ERROR_FALLBACK);
+    expect((await getRun(workspace, record.runId))?.error).toBe(EMPTY_ERROR_FALLBACK);
+  });
+
   it("G2: a failed turn whose detail is an empty string resolves with the fixed fallback sentence, never rejects", async () => {
     const { ctx } = await contextWith(undefined);
     const record = await withRun(ctx, { kind: "manual", idempotencyKey: "empty-detail", isCatchUp: false }, async () => ({
@@ -332,6 +527,46 @@ describe("run-harness.ts: withRun — crash safety and outcome (decision 3, hard
     }));
     expect(record.outcome).toBe("failure");
     expect(record.error).toBe(EMPTY_ERROR_FALLBACK);
+  });
+
+  it("G2/I3: a whitespace-only turn detail gets the fixed sentence, not the blanks", async () => {
+    const { ctx, workspace } = await contextWith(undefined);
+    const record = await withRun(ctx, { kind: "manual", idempotencyKey: "blank-detail", isCatchUp: false }, async () => ({
+      turns: [{ status: "failed" as const, tokens: { input: 1, output: 1 }, detail: " \n\t " }],
+    }));
+    expect(record.error).toBe(EMPTY_ERROR_FALLBACK);
+    expect((await getRun(workspace, record.runId))?.error).toBe(EMPTY_ERROR_FALLBACK);
+  });
+
+  it("G2 fallback 1: when the full record fails validation, a minimal fixed-text failure record is written instead, and logged", async () => {
+    const { log, errors } = capturingLogger();
+    const { ctx, workspace } = await contextWith(undefined, new ManualClock(), log);
+    const record = await withRun(ctx, { kind: "manual", idempotencyKey: "bad-tokens", isCatchUp: false }, async () => ({
+      turns: [{ status: "ok" as const, tokens: { input: 1.5, output: -1 }, model: "m" }],
+    }));
+    expect(record).toMatchObject({ outcome: "failure", error: MINIMAL_FINISH_ERROR, model: NO_MODEL, tokens: { input: 0, output: 0 } });
+    const onDisk = await getRun(workspace, record.runId);
+    expect(onDisk).toMatchObject({ outcome: "failure", error: MINIMAL_FINISH_ERROR });
+    expect(onDisk?.finishedAt).toBeDefined();
+    expect(errors.some((line) => line.includes("writing a minimal failure record"))).toBe(true);
+  });
+
+  it.skipIf(!canDenyAccess)("G2 fallback 2: when neither record can be written, withRun resolves with an in-memory record and leaves the honest placeholder on disk", async () => {
+    const { log, errors } = capturingLogger();
+    const { ctx, workspace, clock } = await contextWith(undefined, new ManualClock(), log);
+    const today = workspace.resolve("runs", localDateString(clock.now()));
+    const record = await withRun(ctx, { kind: "manual", idempotencyKey: "read-only-folder", isCatchUp: false }, async () => {
+      await chmod(today, 0o500); // the start placeholder is written; now neither finishing write can land
+      clock.advance(2_000);
+      return { turns: [{ status: "ok" as const, tokens: { input: 3, output: 1 }, model: "m" }] };
+    }).finally(() => chmod(today, 0o700));
+    expect(record).toMatchObject({ outcome: "failure", error: MINIMAL_FINISH_ERROR, durationMs: 2_000 });
+    expect(record.finishedAt).toBeDefined();
+    expect(runRecordSchema.safeParse(record).success).toBe(true);
+    const onDisk = await getRun(workspace, record.runId);
+    expect(onDisk).toMatchObject({ outcome: "failure", error: "interrupted: the runner stopped before this run finished" });
+    expect(onDisk?.finishedAt).toBeUndefined();
+    expect(errors.some((line) => line.includes("resolving with an in-memory record only"))).toBe(true);
   });
 
   it("a mix of ok and failed turns: tokens sum across all, outcome fails on the first non-ok turn", async () => {
@@ -355,6 +590,23 @@ describe("run-harness.ts: withRun — crash safety and outcome (decision 3, hard
     expect(record.outcome).toBe("success");
     expect(record.error).toBeUndefined();
   });
+
+  it("nit 8: a turn that timed out before any step keeps its tokens and duration, with model 'unknown' (not 'n/a')", async () => {
+    const { ctx, clock } = await contextWith(undefined);
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "timeout-early", isCatchUp: false }, async () => {
+      clock.advance(90_000);
+      return { turns: [{ status: "timeout" as const, tokens: { input: 0, output: 0 }, detail: "No answer within 90 s." }] };
+    });
+    expect(record).toMatchObject({ outcome: "failure", model: UNKNOWN_MODEL, durationMs: 90_000, error: "No answer within 90 s." });
+  });
+
+  it("nit 8 / G8: a body that never ran a turn keeps model 'n/a'", async () => {
+    const { ctx } = await contextWith(undefined);
+    const record = await withRun(ctx, { kind: "manual", idempotencyKey: "no-turns", isCatchUp: false }, async () => {
+      throw new Error("Could not read the saved jobs.");
+    });
+    expect(record.model).toBe(NO_MODEL);
+  });
 });
 
 describe("run-harness.ts: withRun — G4 concurrency (budget lock held across the check and startRun)", () => {
@@ -377,9 +629,28 @@ describe("run-harness.ts: withRun — G4 concurrency (budget lock held across th
   });
 });
 
+describe("run-harness.ts: I1 end to end with the fakes", () => {
+  it("a normal conversation turn through withRun records success, and the idempotency lookup then says done", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("gpt-5.6-luna"), completed({ inputTokens: 11, outputTokens: 2 }), turnCompleted(), sessionWaiting()]);
+    const { ctx, workspace, clock } = await contextWith(eve);
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "prepare:ada-quill:northwind", isCatchUp: false }, async (c) => ({ turns: [await runTurn(c, { message: "prepare" })] }));
+    expect(record).toMatchObject({ outcome: "success", model: "gpt-5.6-luna", tokens: { input: 11, output: 2 } });
+    expect(await hasSucceededWithIdempotencyKey(workspace, clock, "prepare:ada-quill:northwind")).toBe(true);
+    expect(cancelCount()).toBe(0);
+  });
+
+  it("a cancelled turn through withRun records a failure, so the idempotency lookup says not done", async () => {
+    const { eve } = fakeEve(async () => [started("gpt-5.6-luna"), turnCancelled(), sessionWaiting()]);
+    const { ctx, workspace, clock } = await contextWith(eve);
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "prepare:cancelled", isCatchUp: false }, async (c) => ({ turns: [await runTurn(c, { message: "prepare" })] }));
+    expect(record.outcome).toBe("failure");
+    expect(await hasSucceededWithIdempotencyKey(workspace, clock, "prepare:cancelled")).toBe(false);
+  });
+});
+
 describe("run-harness.ts: simulated 429 storm end to end", () => {
   it("pauses on the first provider-limit failure, records it, never retries, and refuses later runs until Resume", async () => {
-    const { eve, calls } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "rate limited", { semanticErrorId: "gateway-rate-limited" })]);
+    const { eve, calls } = fakeEve(async () => [turnFailed("MODEL_CALL_FAILED", "rate limited", { semanticErrorId: "gateway-rate-limited" }), sessionWaiting()]);
     const { ctx, workspace, clock } = await contextWith(eve);
 
     const body = async (c: typeof ctx): Promise<RunBodyResult> => ({ turns: [await runTurn(c, { message: "prepare" })] });

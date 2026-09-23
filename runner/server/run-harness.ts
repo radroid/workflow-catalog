@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isCurrentTurnBoundaryEvent, isTurnFailureEvent, type ClientSession, type MessageStreamEvent, type TurnFailureStreamEvent } from "eve/client";
 import type { RunKind, RunRecord, RunTokenUsage } from "@workflow-catalog/contracts";
 import { getBudgetState, pauseBudget, withBudgetLock } from "../store/budget.ts";
-import { finishRun, NO_MODEL, startRun, writePausedRun } from "../store/runs.ts";
+import { finishRun, NO_MODEL, startRun, UNKNOWN_MODEL, writePausedRun } from "../store/runs.ts";
 import type { RunnerContext } from "./context.ts";
 
 /**
@@ -17,49 +17,79 @@ import type { RunnerContext } from "./context.ts";
  * rules/gateway.js`). When eve attaches no `semanticErrorId` at all — true
  * for the chatgpt/openai/anthropic providers, which have no rate-limit
  * semantic rule (round-1 review nit) — `details.statusCode === 429` or
- * `details.upstreamStatusCode === 429` also counts, as does a `/429|rate.?
+ * `details.upstreamStatusCode === 429` also counts, as does a `/\b429\b|rate.?
  * limit/i` regex against `code`/`message`; both are undocumented heuristics.
  *
- * `runTurn` (round-1 revision, G1; eve-runtime.md §8 item 15): reads the
- * response stream event by event with `for await`, rather than trusting
- * `response.result()` — eve@0.63.0's client can end an aborted turn quietly
- * as "completed" (no boundary event, no thrown error) when the abort lands
- * while the stream is opening or reconnecting. A turn is `ok` only when a
- * terminal boundary event (`session.completed`/`session.failed`/
- * `session.waiting`) was actually seen *and* the timeout signal never fired;
- * an abort — thrown or quiet — always gives `timeout`, keeping whatever
- * partial `step.completed` usage and `step.started` model id were read
- * before it happened. Cancellation goes through `ClientSession.cancel()`
- * (`created.session`), never `MessageResponse.cancel()`, which eve-runtime.md
- * documents as sending nothing before a turn has started or once it is
- * parked.
+ * How `runTurn` classifies a turn (I1, following eve-runtime.md §8 item 15,
+ * "Which boundary means what"). It reads the response stream event by event
+ * with `for await` (G1), because eve@0.63.0's client can end an aborted turn
+ * quietly as "completed" with no boundary and no thrown error; whatever
+ * `step.completed` usage and `step.started` model id arrived before the end
+ * are kept on every path. Checked in this order:
+ *   - timeout: the timeout signal fired, whether the stream threw or ended
+ *     quietly. Cancelled through the session.
+ *   - failed: any failure event (`step.failed`, `turn.failed`,
+ *     `session.failed`). Never retried; a provider limit pauses the budget.
+ *   - cancelled: `turn.cancelled` (eve then always sends `session.waiting`).
+ *     Someone else cancelled the turn, so there is nothing for us to cancel.
+ *   - failed: the stream ended with no boundary event at all.
+ *   - parked, "waiting on the person": only a non-empty `input.requested`
+ *     list. Cancelled through the session.
+ *   - ok: a `session.waiting` or `session.completed` boundary with none of
+ *     the above. A normal conversation turn, which is what
+ *     `client.sessions.create` starts, ends `turn.completed → session.waiting`
+ *     ("parked and ready for the next message" in eve's words: idle between
+ *     turns, not waiting on anyone); only task-mode sessions, such as a
+ *     schedule firing, end `session.completed`. The P02 spike recorded both
+ *     (docs/spec/research/eve-spike.md).
+ *
+ * Cancellation always goes through `ClientSession.cancel()`, never
+ * `MessageResponse.cancel()`, which sends nothing before the turn has
+ * started or once it is parked, and is bounded by `CANCEL_TIMEOUT_MS` so a
+ * stalled eve can't hang the run (I3). For information (round-2 review nit
+ * 9; eve docs, concepts/sessions-runs-and-streaming.md "Cancel the in-flight
+ * turn"): a plain cancel on a session that is already parked is an accepted
+ * no-op on eve's side, so for a parked turn the cancel is a formality. The
+ * session simply stays parked, durable and idle.
  */
 
 const ZERO_TOKENS: RunTokenUsage = { input: 0, output: 0 };
 const MAX_ERROR_LENGTH = 500;
 const DEFAULT_TURN_TIMEOUT_MS = 90_000;
+/** I3 (round-2 nit 4): the bound on `session.cancel()`, passed to it as `AbortSignal.timeout`. */
+export const CANCEL_TIMEOUT_MS = 5_000;
 export const PROVIDER_LIMIT_REASON = "provider limit";
-/** G2 (round-1 revision, decision 3 hardened): the record schema requires a non-empty `error` whenever `outcome` is "failure"; an empty thrown message or empty turn detail becomes this fixed sentence instead of failing validation. */
+/** G2 (round-1 revision, decision 3 hardened): the record schema requires a non-empty `error` whenever `outcome` is "failure"; an empty, whitespace-only or missing thrown message or turn detail (including `throw undefined`) becomes this fixed sentence instead of failing validation. */
 export const EMPTY_ERROR_FALLBACK = "The run failed without an error message.";
 /** G2: the last-resort record written when the real one fails schema validation inside `finishRun`'s `finally`. */
 export const MINIMAL_FINISH_ERROR = "The run failed and its details could not be recorded.";
+/** I2: `withRun` refuses an empty (or whitespace-only) `idempotencyKey` before it touches anything. */
+export const EMPTY_IDEMPOTENCY_KEY_ERROR = "The run did not start: it had no idempotency key.";
+/** I2: any other error before the body, such as a run folder that can't be written. The details go to the log. */
+export const RUN_NOT_STARTED_ERROR = "The run did not start: its run record could not be written.";
 
 function shorten(text: string, max = MAX_ERROR_LENGTH): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+/** The message of whatever was thrown, or "" when it carries none (`throw undefined`, `throw null`, a bare object). */
 function errorMessage(caught: unknown): string {
-  return caught instanceof Error ? caught.message : String(caught);
+  if (caught instanceof Error) return caught.message;
+  if (typeof caught === "string") return caught;
+  if (typeof caught === "number" || typeof caught === "boolean" || typeof caught === "bigint") return String(caught);
+  if (caught !== null && typeof caught === "object" && typeof (caught as { message?: unknown }).message === "string") return (caught as { message: string }).message;
+  return "";
 }
 
-/** `undefined`/empty become the fixed sentence (G2); anything else passes through untouched. */
+/** `undefined`, empty and whitespace-only text become the fixed sentence (G2, I3); anything else passes through untouched. */
 function nonEmptyOrFallback(text: string | undefined): string {
-  return text !== undefined && text.length > 0 ? text : EMPTY_ERROR_FALLBACK;
+  return text !== undefined && text.trim().length > 0 ? text : EMPTY_ERROR_FALLBACK;
 }
 
 // --- runTurn -----------------------------------------------------------
 
-export type TurnStatus = "ok" | "failed" | "parked" | "timeout";
+/** See the classification order at the top of this file. `parked` means waiting on the person (a non-empty `input.requested` list), never eve's `session.waiting` on its own. */
+export type TurnStatus = "ok" | "failed" | "cancelled" | "parked" | "timeout";
 
 export interface TurnResult {
   readonly status: TurnStatus;
@@ -103,6 +133,12 @@ function isProviderLimitFailure(event: TurnFailureStreamEvent): boolean {
   return RATE_LIMIT_FALLBACK.test(event.data.code) || RATE_LIMIT_FALLBACK.test(event.data.message);
 }
 
+/** The reliable cancel (G1), bounded (I3). eve documents "accepted" and "no_active_turn" as success, so the result is not needed, and a failed or timed-out cancel must never fail the run on its own. */
+async function cancelSession(session: ClientSession | undefined): Promise<void> {
+  if (!session) return;
+  await session.cancel({ signal: AbortSignal.timeout(CANCEL_TIMEOUT_MS) }).catch(() => undefined);
+}
+
 /**
  * One eve session turn, for use inside a `withRun` body. Never retries — a
  * detected provider limit pauses the budget itself (so `withRun` needs no
@@ -121,54 +157,71 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
   let model: string | undefined;
   let boundary: MessageStreamEvent | undefined;
   let failure: TurnFailureStreamEvent | undefined;
+  let cancelled = false;
+  let inputRequests = 0;
 
   try {
     const created = await eve.client.sessions.create({ message: input.message, signal });
     session = created.session;
-    // Read the stream event by event (G1): a quietly-ending abort during an
-    // open or reconnect never throws here, so partial usage/model survive it
-    // and the post-loop signal.aborted check below is what actually catches it.
+    // Event by event (G1): a quietly-ending abort during an open or reconnect never throws here, so the partial
+    // usage and model survive it and the signal.aborted check below is what actually catches it.
     for await (const event of created.response) {
-      if (event.type === "step.completed") {
-        tokens = { input: tokens.input + (event.data.usage?.inputTokens ?? 0), output: tokens.output + (event.data.usage?.outputTokens ?? 0) };
-      } else if (event.type === "step.started") {
-        model = event.data.modelId;
+      switch (event.type) {
+        case "step.started":
+          model = event.data.modelId;
+          break;
+        case "step.completed":
+          tokens = { input: tokens.input + (event.data.usage?.inputTokens ?? 0), output: tokens.output + (event.data.usage?.outputTokens ?? 0) };
+          break;
+        case "input.requested":
+          inputRequests += event.data.requests.length;
+          break;
+        case "turn.cancelled":
+          cancelled = true;
+          break;
+        default:
+          break;
       }
       if (!failure && isTurnFailureEvent(event)) failure = event;
       if (isCurrentTurnBoundaryEvent(event)) boundary = event;
     }
   } catch (caught) {
     if (!signal.aborted) {
-      return { status: "failed", tokens, ...(model !== undefined ? { model } : {}), detail: shorten(errorMessage(caught)) };
+      return { status: "failed", tokens, ...(model !== undefined ? { model } : {}), detail: nonEmptyOrFallback(shorten(errorMessage(caught))) };
     }
     // An abort while an open stream is being read does throw (eve-runtime.md §8 item 15); fall through to the
     // signal.aborted branch below with whatever partial usage/model was read before it.
   }
 
+  const partial = { tokens, ...(model !== undefined ? { model } : {}) };
+
   if (signal.aborted) {
-    // The reliable cancel (G1): ClientSession.cancel(), never MessageResponse.cancel().
-    await session?.cancel().catch(() => undefined);
-    return { status: "timeout", tokens, ...(model !== undefined ? { model } : {}), detail: `No answer within ${timeoutMs / 1000} s.` };
+    await cancelSession(session);
+    return { status: "timeout", ...partial, detail: `No answer within ${timeoutMs / 1000} s.` };
   }
 
   if (failure) {
     const providerLimit = isProviderLimitFailure(failure);
     if (providerLimit) await pauseBudget(ctx.workspace, ctx.clock, PROVIDER_LIMIT_REASON);
     const detail = providerLimit ? `${PROVIDER_LIMIT_REASON} (${shorten(failure.data.message)})` : `${failure.data.code}: ${shorten(failure.data.message)}`;
-    return { status: "failed", tokens, ...(model !== undefined ? { model } : {}), detail, providerLimit };
+    return { status: "failed", ...partial, detail, providerLimit };
   }
+
+  if (cancelled) return { status: "cancelled", ...partial, detail: "The turn was cancelled before it finished." };
 
   if (!boundary) {
-    // Not aborted, no failure event, yet the stream ended with no terminal boundary: never call this "ok" (G1).
-    return { status: "failed", tokens, ...(model !== undefined ? { model } : {}), detail: "The turn ended without a result." };
+    // Not aborted, no failure event, yet the stream ended with no boundary event: never call this "ok" (G1).
+    return { status: "failed", ...partial, detail: "The turn ended without a result." };
   }
 
-  if (boundary.type === "session.waiting") {
-    await session?.cancel().catch(() => undefined);
-    return { status: "parked", tokens, ...(model !== undefined ? { model } : {}), detail: "The model asked for input instead of finishing the run." };
+  if (inputRequests > 0) {
+    await cancelSession(session);
+    return { status: "parked", ...partial, detail: "The model asked for input instead of finishing the run." };
   }
 
-  return { status: "ok", tokens, ...(model !== undefined ? { model } : {}) };
+  // A session.waiting (conversation) or session.completed (task) boundary with no failure, no cancellation, no
+  // input request and no abort: the turn finished.
+  return { status: "ok", ...partial };
 }
 
 // --- withRun -------------------------------------------------------------
@@ -195,16 +248,82 @@ type RunDecision =
   | { readonly refused: false; readonly processedItemIds: readonly string[]; readonly runInputs: Record<string, unknown>; readonly startedAt: string };
 
 /**
- * Runs one budgeted, logged run.
+ * I2: the in-memory failure record `withRun` resolves with when the run never started. It is never written: either
+ * nothing can be written (the run folder is unwritable) or the input can't make a valid record (an empty key).
+ */
+function notStartedRecord(ctx: RunnerContext, runId: string, input: WithRunInput, inputs: Record<string, unknown>, error: string): RunRecord {
+  const now = ctx.clock.now().toISOString();
+  return {
+    runId,
+    kind: input.kind,
+    isCatchUp: input.isCatchUp,
+    inputs,
+    idempotencyKey: typeof input.idempotencyKey === "string" ? input.idempotencyKey : "",
+    outcome: "failure",
+    model: NO_MODEL,
+    tokens: ZERO_TOKENS,
+    durationMs: 0,
+    startedAt: now,
+    finishedAt: now,
+    error,
+  };
+}
+
+/**
+ * Inside the budget lock (G4): reads the budget, then either writes the one-shot `paused` refusal record or the
+ * crash-safe start placeholder. Any rejection here (the record can't be written) is `withRun`'s to catch.
+ */
+async function decideAndRecordStart(ctx: RunnerContext, runId: string, input: WithRunInput, baseInputs: Record<string, unknown>): Promise<RunDecision> {
+  const state = await getBudgetState(ctx.workspace, ctx.clock); // never throws (I2)
+  const refusal = state.paused ? (state.pausedReason ?? "paused") : state.runsUsedToday >= state.dailyRunLimit ? `daily run limit reached (${state.dailyRunLimit})` : undefined;
+  if (refusal !== undefined) {
+    const record = await writePausedRun(ctx.workspace, ctx.clock, {
+      runId,
+      kind: input.kind,
+      isCatchUp: input.isCatchUp,
+      idempotencyKey: input.idempotencyKey,
+      inputs: baseInputs,
+      reason: refusal,
+    });
+    return { refused: true, record };
+  }
+
+  let processedItemIds: readonly string[] = [];
+  let runInputs = baseInputs;
+  if (input.items) {
+    processedItemIds = input.items.slice(0, state.itemCap);
+    const remainingItemIds = input.items.slice(state.itemCap);
+    // So the Runs page can render "stopped at the per-run cap (N); M jobs stay Saved" straight from the record.
+    runInputs = { ...baseInputs, itemCap: state.itemCap, processedItemIds, remainingItemIds };
+  }
+
+  const { startedAt } = await startRun(ctx.workspace, ctx.clock, {
+    runId,
+    kind: input.kind,
+    isCatchUp: input.isCatchUp,
+    idempotencyKey: input.idempotencyKey,
+    inputs: runInputs,
+  });
+  return { refused: false, processedItemIds, runInputs, startedAt };
+}
+
+/**
+ * Runs one budgeted, logged run. Resolves with the run's record and never
+ * rejects (decision 3), on every path:
  *
- * Refuses before doing any work when paused or at the daily limit, writing a
- * one-shot `paused` record and never calling `body`. Otherwise writes the
- * crash-safe start placeholder, runs `body`, accumulates its turns' tokens
- * and model id, and always finalizes the record in a `finally` — so
- * `withRun` resolves with the record and never rejects (decision 3, hardened
- * by G2): a thrown body error, an empty error/turn-detail message, and even
- * a `finishRun` that fails its own schema validation all still resolve with
- * a record, never a rejected promise.
+ * - An empty or whitespace-only `idempotencyKey` is refused first, before
+ *   anything is read or written: logged, `body` never called, resolved with
+ *   an in-memory `failure` record carrying `EMPTY_IDEMPOTENCY_KEY_ERROR` (I2).
+ * - Paused (any `pauseKind`, including the synthetic corrupt-file and
+ *   unreadable-run-log pauses) or at the daily limit: a one-shot `paused`
+ *   record with the reason, and `body` is never called.
+ * - Any error before the body — the refusal record or the start placeholder
+ *   can't be written, say — is caught and logged, and `withRun` resolves with
+ *   an in-memory `failure` record carrying `RUN_NOT_STARTED_ERROR` (I2).
+ * - Otherwise: the crash-safe start placeholder, then `body`, accumulating
+ *   its turns' tokens and model id, then the final record in a `finally`. A
+ *   thrown body error, an empty error text, and a `finishRun` that fails
+ *   its own schema validation all still resolve with a record (G2).
  *
  * G4 (round-1 revision): the paused/limit check and the resulting
  * `startRun`/`writePausedRun` write run inside `withBudgetLock`, so two
@@ -217,49 +336,18 @@ export async function withRun(ctx: RunnerContext, input: WithRunInput, body: Run
   const runId = randomUUID();
   const baseInputs = input.inputs ?? {};
 
-  const decision = await withBudgetLock(ctx.workspace, async (): Promise<RunDecision> => {
-    const state = await getBudgetState(ctx.workspace, ctx.clock);
-    if (state.paused) {
-      const record = await writePausedRun(ctx.workspace, ctx.clock, {
-        runId,
-        kind: input.kind,
-        isCatchUp: input.isCatchUp,
-        idempotencyKey: input.idempotencyKey,
-        inputs: baseInputs,
-        reason: state.pausedReason ?? "paused",
-      });
-      return { refused: true, record };
-    }
-    if (state.runsUsedToday >= state.dailyRunLimit) {
-      const record = await writePausedRun(ctx.workspace, ctx.clock, {
-        runId,
-        kind: input.kind,
-        isCatchUp: input.isCatchUp,
-        idempotencyKey: input.idempotencyKey,
-        inputs: baseInputs,
-        reason: `daily run limit reached (${state.dailyRunLimit})`,
-      });
-      return { refused: true, record };
-    }
+  if (typeof input.idempotencyKey !== "string" || input.idempotencyKey.trim().length === 0) {
+    ctx.log.error(`withRun: refused a ${input.kind} run with an empty idempotencyKey (${runId}); the body was not called.`);
+    return notStartedRecord(ctx, runId, input, baseInputs, EMPTY_IDEMPOTENCY_KEY_ERROR);
+  }
 
-    let processedItemIds: readonly string[] = [];
-    let runInputs = baseInputs;
-    if (input.items) {
-      processedItemIds = input.items.slice(0, state.itemCap);
-      const remainingItemIds = input.items.slice(state.itemCap);
-      // So the Runs page can render "stopped at the per-run cap (N); M jobs stay Saved" straight from the record.
-      runInputs = { ...baseInputs, itemCap: state.itemCap, processedItemIds, remainingItemIds };
-    }
-
-    const { startedAt } = await startRun(ctx.workspace, ctx.clock, {
-      runId,
-      kind: input.kind,
-      isCatchUp: input.isCatchUp,
-      idempotencyKey: input.idempotencyKey,
-      inputs: runInputs,
-    });
-    return { refused: false, processedItemIds, runInputs, startedAt };
-  });
+  let decision: RunDecision;
+  try {
+    decision = await withBudgetLock(ctx.workspace, () => decideAndRecordStart(ctx, runId, input, baseInputs));
+  } catch (caught) {
+    ctx.log.error(`withRun: the ${input.kind} run ${runId} did not start (${errorMessage(caught) || "no error message"}); resolving with an in-memory failure record.`);
+    return notStartedRecord(ctx, runId, input, baseInputs, RUN_NOT_STARTED_ERROR);
+  }
 
   if (decision.refused) return decision.record;
   const { processedItemIds, runInputs, startedAt } = decision;
@@ -279,6 +367,9 @@ export async function withRun(ctx: RunnerContext, input: WithRunInput, body: Run
         error = turn.detail;
       }
     }
+    // At least one turn went to eve, but no step ever named the model (a turn that timed out before its first
+    // step, say): "unknown", not "n/a", so the Runs page still shows the run's duration and tokens (I3, nit 8).
+    if (model === NO_MODEL && turns.length > 0) model = UNKNOWN_MODEL;
   } catch (caught) {
     outcome = "failure";
     error = shorten(errorMessage(caught));
@@ -293,12 +384,12 @@ export async function withRun(ctx: RunnerContext, input: WithRunInput, body: Run
       outcome,
       model,
       tokens,
-      ...(outcome === "failure" ? { error: nonEmptyOrFallback(error) } : {}),
+      ...(outcome === "failure" ? { error: nonEmptyOrFallback(error === undefined ? undefined : shorten(error)) } : {}),
     };
     try {
       finalRecord = await finishRun(ctx.workspace, ctx.clock, finishInput);
     } catch (validationError) {
-      ctx.log.error(`withRun: finishRun failed validation for ${runId} (${errorMessage(validationError)}); writing a minimal failure record instead.`);
+      ctx.log.error(`withRun: finishRun failed for ${runId} (${errorMessage(validationError) || "no error message"}); writing a minimal failure record instead.`);
       try {
         finalRecord = await finishRun(ctx.workspace, ctx.clock, {
           runId,
@@ -313,7 +404,7 @@ export async function withRun(ctx: RunnerContext, input: WithRunInput, body: Run
           error: MINIMAL_FINISH_ERROR,
         });
       } catch (minimalError) {
-        ctx.log.error(`withRun: the minimal failure record also failed to write for ${runId} (${errorMessage(minimalError)}); resolving with an in-memory record only.`);
+        ctx.log.error(`withRun: the minimal failure record also failed to write for ${runId} (${errorMessage(minimalError) || "no error message"}); resolving with an in-memory record only.`);
         const now = ctx.clock.now().toISOString();
         finalRecord = {
           runId,
@@ -324,7 +415,7 @@ export async function withRun(ctx: RunnerContext, input: WithRunInput, body: Run
           outcome: "failure",
           model: NO_MODEL,
           tokens: ZERO_TOKENS,
-          durationMs: 0,
+          durationMs: Math.max(0, Date.parse(now) - Date.parse(startedAt)),
           startedAt,
           finishedAt: now,
           error: MINIMAL_FINISH_ERROR,

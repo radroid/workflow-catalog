@@ -1,5 +1,18 @@
 import { z } from "zod";
-import { CORRUPT_BUDGET_REASON, DAILY_RUN_LIMIT_MAX, DAILY_RUN_LIMIT_MIN, getBudgetState, getBudgetStatus, ITEM_CAP_MAX, ITEM_CAP_MIN, resumeBudget, setBudgetLimits } from "../../store/budget.ts";
+import type { BudgetStatus } from "@workflow-catalog/contracts";
+import {
+  BUDGET_UNAVAILABLE_REASON,
+  DAILY_RUN_LIMIT_MAX,
+  DAILY_RUN_LIMIT_MIN,
+  DEFAULT_DAILY_RUN_LIMIT,
+  getBudgetState,
+  getBudgetStatus,
+  ITEM_CAP_MAX,
+  ITEM_CAP_MIN,
+  resumeBudget,
+  setBudgetLimits,
+  type BudgetState,
+} from "../../store/budget.ts";
 import { getRun, listRuns } from "../../store/runs.ts";
 import { errorResponse, readBoundedJson, validationErrorResponse } from "../http.ts";
 import { defineRouteModule } from "../route-modules.ts";
@@ -14,7 +27,7 @@ import { defineRouteModule } from "../route-modules.ts";
  *                                  filesystem when :runId is not a uuid
  *   GET  /api/runs/budget          the full internal budget state (limits, usage, pause)
  *   POST /api/runs/budget          { dailyRunLimit, itemCap }: saves new limits, preserving any pause
- *   POST /api/runs/budget/resume   clears the pause
+ *   POST /api/runs/budget/resume   clears the stored pause; adds `restoredDefaults`
  *
  * The literal /budget routes are registered before the /:runId route so a
  * request for "budget" is never mistaken for a run id (it wouldn't validate
@@ -35,7 +48,7 @@ const setBudgetRequestSchema = z
   })
   .strict();
 
-function budgetResponse(state: Awaited<ReturnType<typeof getBudgetState>>) {
+function budgetResponse(state: BudgetState) {
   return {
     dailyRunLimit: state.dailyRunLimit,
     itemCap: state.itemCap,
@@ -43,12 +56,17 @@ function budgetResponse(state: Awaited<ReturnType<typeof getBudgetState>>) {
     paused: state.paused,
     pausedReason: state.pausedReason ?? null,
     pausedSince: state.pausedSince ?? null,
-    // `corrupt`: the file is unreadable right now. `corruptOrigin`: this pause originated from a corrupt file,
-    // even if a since-repairing Save made the file itself valid again (`corrupt: false`) — Save keeps the pause
-    // (decision 2) but the UI still needs to know why, so its explanation doesn't go stale the instant the file
-    // is fixed (G9, round-1 revision).
+    // Which pause is showing (store/budget.ts has the precedence), so Settings words it from the server's state,
+    // not from what it saw earlier (I4): "budget_unreadable" (the file is unreadable now; the limits shown are
+    // the defaults), "budget_repaired" (a Save rewrote it; paused until Resume), "stored" (e.g. provider limit),
+    // "run_log_unreadable" (Resume can't clear it), or null when not paused.
+    pauseKind: state.pauseKind ?? null,
+    // `corrupt`: the file is unreadable right now. `corruptOrigin`: the pause comes from an unreadable file, now
+    // or before a repairing Save.
     corrupt: state.corrupt,
-    corruptOrigin: state.pausedReason === CORRUPT_BUDGET_REASON,
+    corruptOrigin: state.pauseKind === "budget_unreadable" || state.pauseKind === "budget_repaired",
+    // Today's run folder can't be listed, so runsUsedToday (0) is unknown (I2).
+    runLogUnreadable: state.runLogUnreadable,
   };
 }
 
@@ -71,10 +89,10 @@ export default defineRouteModule({
     });
 
     router.post("/budget/resume", async (c) => {
-      await resumeBudget(ctx.workspace);
-      ctx.log.info("Resumed the budget.");
+      const { restoredDefaults } = await resumeBudget(ctx.workspace);
+      ctx.log.info(restoredDefaults ? "Resumed the budget with the default limits (the file was unreadable)." : "Resumed the budget.");
       const state = await getBudgetState(ctx.workspace, ctx.clock);
-      return c.json(budgetResponse(state));
+      return c.json({ ...budgetResponse(state), restoredDefaults });
     });
 
     router.get("/", async (c) => {
@@ -88,7 +106,15 @@ export default defineRouteModule({
       return c.json(record);
     });
   },
+  // Never throws (I2): GET /status must stay 200 whatever state the workspace is in.
   async status(ctx) {
-    return { budget: await getBudgetStatus(ctx.workspace, ctx.clock) };
+    let budget: BudgetStatus;
+    try {
+      budget = await getBudgetStatus(ctx.workspace, ctx.clock);
+    } catch (error) {
+      ctx.log.error(`GET /status: the budget could not be computed (${error instanceof Error ? error.message : String(error)}); reporting it as paused.`);
+      budget = { dailyRunLimit: DEFAULT_DAILY_RUN_LIMIT, runsUsedToday: 0, paused: true, pausedReason: BUDGET_UNAVAILABLE_REASON };
+    }
+    return { budget };
   },
 });

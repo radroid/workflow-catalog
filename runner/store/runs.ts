@@ -21,8 +21,17 @@ import type { Workspace } from "./workspace.ts";
  * the placeholder, which is an honest record ("interrupted").
  */
 
-/** No model was ever contacted for this record (a paused run, or the crash-safe placeholder). */
+/** No model was ever contacted for this record (a paused run, the crash-safe placeholder, or a body that never ran a turn). */
 export const NO_MODEL = "n/a";
+
+/**
+ * The run sent at least one turn to eve, but no `step.started` ever named the
+ * model: a turn that timed out before its first step, for example (I3, nit 8).
+ * Distinct from `NO_MODEL` so the Runs page can still show such a run's
+ * duration and tokens while hiding only the model it never learned, and keep
+ * hiding the whole line for records that never called the model at all (G8).
+ */
+export const UNKNOWN_MODEL = "unknown";
 
 export const DEFAULT_RUN_LIST_LIMIT = 200;
 export const DEFAULT_RUN_LIST_WINDOW_DAYS = 14;
@@ -232,7 +241,14 @@ export async function listRuns(workspace: Workspace, clock: Clock, options: List
   const limit = options.limit ?? DEFAULT_RUN_LIST_LIMIT;
   const sinceDays = options.sinceDays ?? DEFAULT_RUN_LIST_WINDOW_DAYS;
   const cutoff = localDateString(new Date(clock.now().getTime() - sinceDays * DAY_MS));
-  const dateDirs = (await dateDirectories(workspace)).sort().reverse();
+  let dateDirs: string[];
+  try {
+    dateDirs = (await dateDirectories(workspace)).sort().reverse();
+  } catch {
+    // `runs/` itself can't be listed (a permissions problem, say): report it as one skipped entry, the same way
+    // a single unreadable date directory is, rather than failing the whole list with a 500 (I2).
+    return { records: [], invalidCount: 1, skippedFiles: [`${RUNS_SEGMENT}/`] };
+  }
   const records: RunRecordWithPath[] = [];
   let invalidCount = 0;
   const skippedFiles: string[] = [];
@@ -276,7 +292,11 @@ export async function getRun(workspace: Workspace, runId: string): Promise<RunRe
   return undefined;
 }
 
-/** `budget.ts`'s `runsUsedToday`: valid records for the local date that are not themselves `"paused"`. */
+/**
+ * `budget.ts`'s `runsUsedToday`: valid records for the local date that are not themselves `"paused"`. A missing
+ * directory counts 0; a directory that exists but can't be listed rejects, and `getBudgetState` turns that into
+ * the synthetic "run log unreadable" pause (I2) instead of guessing a count.
+ */
 export async function countCountableRuns(workspace: Workspace, date: string): Promise<number> {
   const files = (await workspace.list(RUNS_SEGMENT, date)).filter((name) => name.endsWith(".json"));
   let count = 0;
