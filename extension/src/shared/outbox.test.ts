@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createBridgeClient, type BridgeClient, type BridgeError, type BridgeResult, type PostEventResult } from "./bridge-client";
-import { getDeviceToken, getPairingExpired, recordPairing } from "./storage";
+import {
+  createBridgeClient,
+  FOREIGN_SERVER_MESSAGE,
+  type BridgeClient,
+  type BridgeError,
+  type BridgeResult,
+  type PostEventResult,
+} from "./bridge-client";
+import { forgetInvalidToken, getDeviceToken, getPairingExpired, recordPairing } from "./storage";
 import {
   enqueueCapture,
   ensureRetryAlarmIfQueued,
@@ -10,7 +17,9 @@ import {
   JOB_CAPTURE_RETRY_ALARM,
   listQueuedCaptures,
   outboxUsedThisSession,
+  pauseInEffect,
   resumeAfterPairing,
+  type OutboxEntry,
 } from "./outbox";
 
 function capture(eventId: string, overrides: Record<string, unknown> = {}) {
@@ -40,6 +49,12 @@ interface FakeChromeHandle {
    * a test put another context's work exactly between a flush's decision
    * to clear the alarm and the clear itself. */
   beforeAlarmClear?: () => Promise<void>;
+  /** One-shot, inside `chrome.alarms.create`, before the alarm is set (the
+   * round-3 reviewer's LIFT-race probe, adopted in revision 3). */
+  beforeAlarmCreate?: () => Promise<void>;
+  /** One-shot, inside `chrome.alarms.create`, after the alarm is set (the
+   * round-3 reviewer's R6-race probe, adopted in revision 3). */
+  afterAlarmCreate?: () => Promise<void>;
 }
 
 function installFakeChrome(): FakeChromeHandle {
@@ -72,9 +87,15 @@ function installFakeChrome(): FakeChromeHandle {
     },
     alarms: {
       async create(name: string, info: { delayInMinutes?: number }) {
+        const before = handle.beforeAlarmCreate;
+        handle.beforeAlarmCreate = undefined;
+        if (before) await before();
         const alarm = { name, delayInMinutes: info.delayInMinutes };
         alarms.set(name, alarm);
         alarmHistory.push(alarm);
+        const after = handle.afterAlarmCreate;
+        handle.afterAlarmCreate = undefined;
+        if (after) await after();
       },
       async get(name: string) {
         return alarms.get(name);
@@ -478,10 +499,10 @@ describe("flushOutbox", () => {
     // Probes P3/P4 of the round-2 review: another program on 4310 answered
     // `200 text/html`, and revision 1's drop branch deleted the capture.
     for (const error of [
-      bridgeError({ code: "invalid_response", message: "The runner's events response didn't match the expected shape." }),
-      bridgeError({ status: 404, code: "unknown_error", message: "The runner answered with an unexpected error (HTTP 404)." }),
-      bridgeError({ status: 401, code: "unknown_error", message: "The runner answered with an unexpected error (HTTP 401)." }),
-      bridgeError({ status: 403, code: "unknown_error", message: "The runner answered with an unexpected error (HTTP 403)." }),
+      bridgeError({ code: "invalid_response", message: FOREIGN_SERVER_MESSAGE }),
+      bridgeError({ status: 404, code: "unknown_error", message: FOREIGN_SERVER_MESSAGE }),
+      bridgeError({ status: 401, code: "unknown_error", message: FOREIGN_SERVER_MESSAGE }),
+      bridgeError({ status: 403, code: "unknown_error", message: FOREIGN_SERVER_MESSAGE }),
     ]) {
       it(`${error.code}${error.status ? ` (HTTP ${error.status})` : ""} keeps the capture queued, active, with the error recorded, and re-arms the alarm`, async () => {
         await enqueueCapture(capture("11111111-1111-4111-8111-111111111111"));
@@ -620,6 +641,250 @@ describe("P07-B revision 2, B4 (probe P5): a worker flush racing a pairing, with
     expect((await getDeviceToken())?.token, "revision 1 cleared the new token here").toBe("token-two");
     expect(await getPairingExpired()).toBe(false);
     expect(await listQueuedCaptures(), "revision 1 wrote the capture back as paused").toEqual([]);
+  });
+});
+
+describe("P07-B revision 3, nit 1: a pause belongs to the pairing it was refused under", () => {
+  const D1 = { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "token-one", pairedAt: "2026-09-22T09:00:00.000Z" };
+  const D2 = { deviceId: "9c1d7a1f-3a2b-4d66-8e4f-1b2c3d4e5f60", token: "token-two", pairedAt: "2026-09-22T09:05:00.000Z" };
+  const ID_A = "11111111-1111-4111-8111-111111111111";
+  const ID_B = "22222222-2222-4222-8222-222222222222";
+  const ID_C = "33333333-3333-4333-8333-333333333333";
+
+  function entry(fields: Partial<OutboxEntry> = {}): OutboxEntry {
+    return { capture: capture(ID_A), attempts: 1, queuedAt: "2026-09-22T00:00:01.000Z", ...fields };
+  }
+
+  function seed(fake: FakeChromeHandle, value: OutboxEntry): void {
+    fake.sessionData[`jobCaptureOutbox:${value.capture.eventId}`] = value;
+  }
+
+  async function queuedById(): Promise<Map<string, OutboxEntry>> {
+    return new Map((await listQueuedCaptures()).map((queued) => [queued.capture.eventId, queued]));
+  }
+
+  describe("pauseInEffect", () => {
+    const cases: Array<[string, OutboxEntry, string | null, boolean]> = [
+      ["not paused, nothing paired", entry(), null, false],
+      ["not paused, paired", entry(), D1.deviceId, false],
+      ["a not_paired pause, still nothing paired", entry({ pausedReason: "not_paired" }), null, true],
+      ["a not_paired pause, paired since", entry({ pausedReason: "not_paired" }), D1.deviceId, false],
+      ["a 401 pause, its token since forgotten", entry({ pausedReason: "token_invalid", pausedFor: D1.deviceId }), null, true],
+      ["a 403 pause, the same pairing still held", entry({ pausedReason: "origin_not_allowed", pausedFor: D1.deviceId }), D1.deviceId, true],
+      ["a 401 pause from an older pairing, a new one held", entry({ pausedReason: "token_invalid", pausedFor: D1.deviceId }), D2.deviceId, false],
+    ];
+    for (const [name, value, pairedDeviceId, expected] of cases) {
+      it(`${name}: the pause ${expected ? "holds" : "no longer holds"}`, () => {
+        expect(pauseInEffect(value, pairedDeviceId)).toBe(expected);
+      });
+    }
+  });
+
+  it("enqueueCapture stamps a 401/403 pause with the pairing the refused request was sent under; a not_paired pause and a retry carry no stamp", async () => {
+    installFakeChrome();
+    await recordPairing(D1);
+    await enqueueCapture(capture(ID_A), bridgeError({ status: 403, code: "origin_not_allowed" }), D1.deviceId);
+    await enqueueCapture(capture(ID_B), bridgeError({ code: "not_paired" }), null);
+    await enqueueCapture(capture(ID_C), bridgeError({ code: "network_error" }), D1.deviceId);
+
+    const byId = await queuedById();
+    expect(byId.get(ID_A)?.pausedFor).toBe(D1.deviceId);
+    expect(byId.get(ID_B)).not.toHaveProperty("pausedFor");
+    expect(byId.get(ID_C)).not.toHaveProperty("pausedReason");
+    expect(byId.get(ID_C), "only a pause has a pairing to belong to").not.toHaveProperty("pausedFor");
+  });
+
+  it("a pause whose pairing was replaced before the entry was written is active: enqueueCapture arms the alarm for it", async () => {
+    const fake = installFakeChrome();
+    // The popup's request went out under D1; D2 was paired while it was in
+    // flight, so the refusal it brings back is about a pairing that's gone.
+    await recordPairing(D2);
+    await enqueueCapture(capture(ID_A), bridgeError({ status: 401, code: "token_invalid" }), D1.deviceId);
+
+    const [queued] = await listQueuedCaptures();
+    expect(queued?.pausedReason).toBe("token_invalid");
+    expect(fake.alarms.has(JOB_CAPTURE_RETRY_ALARM), "a pause from an older pairing must not strand the capture").toBe(true);
+  });
+
+  it("flushOutbox sends a pause left from an older pairing, skips one earned under the current pairing, and re-stamps a new pause with the current pairing", async () => {
+    const fake = installFakeChrome();
+    await recordPairing(D2);
+    seed(fake, entry({ capture: capture(ID_A), pausedReason: "token_invalid", pausedFor: D1.deviceId, lastErrorCode: "token_invalid" }));
+    seed(fake, entry({ capture: capture(ID_B), pausedReason: "origin_not_allowed", pausedFor: D2.deviceId, lastErrorCode: "origin_not_allowed" }));
+    const sent: string[] = [];
+
+    await flushOutbox(
+      fakeClient((event) => {
+        sent.push((event as { eventId: string }).eventId);
+        return { ok: false, error: bridgeError({ status: 403, code: "origin_not_allowed" }) };
+      }),
+    );
+
+    expect(sent, "only the pause from the older pairing is sent").toEqual([ID_A]);
+    const byId = await queuedById();
+    expect(byId.get(ID_A)?.pausedFor, "refused again, now under D2").toBe(D2.deviceId);
+    expect(byId.get(ID_A)?.attempts).toBe(2);
+    expect(byId.get(ID_B)?.attempts, "left alone").toBe(1);
+    expect(fake.alarms.has(JOB_CAPTURE_RETRY_ALARM), "both pauses hold now").toBe(false);
+  });
+
+  it("the stamp is the pairing read before the attempt: one that lands while the request is in flight leaves the refused capture active and armed", async () => {
+    const fake = installFakeChrome();
+    await recordPairing(D1);
+    await enqueueCapture(capture(ID_A), bridgeError({ code: "network_error" }), D1.deviceId);
+    const { client, resolveNext, called } = blockingClient();
+
+    const flush = flushOutbox(client);
+    await called;
+    await recordPairing(D2);
+    resolveNext({ ok: false, error: bridgeError({ status: 401, code: "token_invalid" }) });
+    await flush;
+
+    const [queued] = await listQueuedCaptures();
+    expect(queued?.pausedFor, "the refusal was about D1's token").toBe(D1.deviceId);
+    expect(pauseInEffect(queued!, D2.deviceId)).toBe(false);
+    expect(fake.alarms.has(JOB_CAPTURE_RETRY_ALARM)).toBe(true);
+  });
+
+  it("resumeAfterPairing lifts not_paired pauses and pauses from older pairings, but keeps one earned under this very pairing", async () => {
+    const fake = installFakeChrome();
+    await recordPairing(D2);
+    seed(fake, entry({ capture: capture(ID_A), pausedReason: "token_invalid", pausedFor: D1.deviceId }));
+    seed(fake, entry({ capture: capture(ID_B), pausedReason: "not_paired" }));
+    seed(fake, entry({ capture: capture(ID_C), pausedReason: "origin_not_allowed", pausedFor: D2.deviceId }));
+    const sent: string[] = [];
+
+    const summary = await resumeAfterPairing(
+      fakeClient((event) => {
+        sent.push((event as { eventId: string }).eventId);
+        return { ok: true, value: { duplicate: false } };
+      }),
+    );
+
+    expect(sent).toEqual([ID_A, ID_B]);
+    expect(summary.delivered).toEqual([ID_A, ID_B]);
+    const [left] = await listQueuedCaptures();
+    expect(left?.capture.eventId).toBe(ID_C);
+    expect(left?.pausedReason, "refused under this pairing: resending can only repeat that").toBe("origin_not_allowed");
+    expect(fake.alarms.has(JOB_CAPTURE_RETRY_ALARM)).toBe(false);
+  });
+
+  it("ensureRetryAlarmIfQueued arms the alarm for a pause left from an older pairing", async () => {
+    const fake = installFakeChrome();
+    await recordPairing(D2);
+    seed(fake, entry({ pausedReason: "token_invalid", pausedFor: D1.deviceId }));
+
+    await ensureRetryAlarmIfQueued();
+
+    expect(fake.alarms.has(JOB_CAPTURE_RETRY_ALARM)).toBe(true);
+  });
+});
+
+describe("P07-B revision 3: the round-3 reviewer's race probes, adopted (/tmp/wc-r3-p07b-mut, zz-r3-outbox-races)", () => {
+  const ID_A = "11111111-1111-4111-8111-111111111111";
+  const ID_B = "22222222-2222-4222-8222-222222222222";
+
+  function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((settle) => {
+      resolve = settle;
+    });
+    return { promise, resolve };
+  }
+
+  function json(status: number, body: unknown): Response {
+    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  }
+
+  /** The invariant B1 exists for: a queued capture whose pause doesn't hold
+   * always has a retry alarm. */
+  async function expectNoActiveEntryWithoutAlarm(fake: FakeChromeHandle, where: string): Promise<void> {
+    const pairedDeviceId = (await getDeviceToken())?.deviceId ?? null;
+    const active = (await listQueuedCaptures()).filter((queued) => !pauseInEffect(queued, pairedDeviceId));
+    expect(active.length === 0 || fake.alarms.has(JOB_CAPTURE_RETRY_ALARM), `${where}: ${active.length} active entr(y/ies) but no alarm`).toBe(true);
+  }
+
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("nit 3, R6 race: enqueueCapture writes its entry before it arms the alarm, so a flush's final clear landing mid-enqueue can't leave the capture without one", async () => {
+    // The flush reads [A] and blocks on A's request. A popup's enqueue of B
+    // runs up to its alarm create and stops there; the flush then finishes
+    // (delivers A, decides, clears, re-reads); then the enqueue finishes.
+    const fake = installFakeChrome();
+    await enqueueCapture(capture(ID_A));
+    const { client, resolveNext, called } = blockingClient();
+    const flush = flushOutbox(client);
+    await called;
+
+    const enqueueAtCreate = deferred();
+    const letEnqueueFinish = deferred();
+    fake.afterAlarmCreate = async () => {
+      enqueueAtCreate.resolve();
+      await letEnqueueFinish.promise;
+    };
+    const enqueue = enqueueCapture(capture(ID_B), bridgeError({ code: "network_error" }));
+    await enqueueAtCreate.promise;
+    resolveNext();
+    await flush;
+    letEnqueueFinish.resolve();
+    await enqueue;
+
+    expect(await isQueued(ID_B)).toBe(true);
+    await expectNoActiveEntryWithoutAlarm(fake, "R6 race");
+  });
+
+  it("nit 1, LIFT race: a worker's 401 pause written after a new pairing's lift read is stamped with the old pairing, so the new pairing's own flush delivers the capture", async () => {
+    // Worker: flush -> POST with T1 -> 401 -> token re-read still T1 -> hook.
+    // Inside the hook (between the worker's re-read and its pause write):
+    // the options page pairs (T2) and starts resumeAfterPairing, which gets
+    // past its lift read and stops at its alarm; then the worker writes its
+    // pause and finishes; then the options page's flush runs. Revision 2
+    // left the capture paused under the valid pairing, with no alarm.
+    const fake = installFakeChrome();
+    await recordPairing({ deviceId: "dev-old", token: "T1", pairedAt: "2026-09-22T00:00:00.000Z" });
+    await enqueueCapture(capture(ID_A), bridgeError({ code: "network_error" }));
+    const seen: string[] = [];
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seen.push(auth);
+      if (auth === "Bearer T1") return Promise.resolve(json(401, { ok: false, error: { code: "token_invalid", message: "Pair again." } }));
+      const eventBody = JSON.parse(String(init?.body)) as { eventId: string };
+      return Promise.resolve(json(200, { ok: true, eventId: eventBody.eventId, duplicate: false }));
+    }) as typeof fetch;
+
+    const optionsClient = createBridgeClient();
+    const optionsAtArm = deferred();
+    const workerDone = deferred();
+    let optionsResume: Promise<unknown> | undefined;
+    const workerClient = createBridgeClient({
+      onTokenInvalid: async (token) => {
+        await recordPairing({ deviceId: "dev-new", token: "T2", pairedAt: "2026-09-22T00:01:00.000Z" });
+        fake.beforeAlarmCreate = async () => {
+          optionsAtArm.resolve(); // resumeAfterPairing has done its lift read
+          await workerDone.promise;
+        };
+        optionsResume = resumeAfterPairing(optionsClient);
+        await optionsAtArm.promise;
+        await forgetInvalidToken(token); // the real default hook
+      },
+    });
+
+    await flushOutbox(workerClient);
+    await expectNoActiveEntryWithoutAlarm(fake, "after the worker's flush");
+    workerDone.resolve();
+    await optionsResume;
+
+    expect((await getDeviceToken())?.token, "the new pairing survives").toBe("T2");
+    expect(await getPairingExpired()).toBe(false);
+    expect(await isQueued(ID_A), "revision 2 left it paused under the valid pairing").toBe(false);
+    expect(seen, "refused once under T1, then delivered with T2").toEqual(["Bearer T1", "Bearer T2"]);
+    expect(fake.alarms.has(JOB_CAPTURE_RETRY_ALARM), "nothing left to retry").toBe(false);
   });
 });
 

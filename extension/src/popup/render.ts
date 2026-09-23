@@ -223,8 +223,11 @@ export function renderPreview(
   let saved = false;
   let saving = false;
 
+  /** The reason, when there is one, goes on a line of its own (base.css
+   * `.flash .detail`); the space keeps the two sentences apart in the
+   * region's text, which is what a screen reader announces. */
   function showOutcome(message: string, tone: Tone, detail?: string): void {
-    status.replaceChildren(message, ...(detail === undefined ? [] : [el("span", { className: "detail", text: detail })]));
+    status.replaceChildren(message, ...(detail === undefined ? [] : [" ", el("span", { className: "detail", text: detail })]));
     status.className = FLASH_CLASS[tone];
   }
 

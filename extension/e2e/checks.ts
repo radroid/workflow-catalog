@@ -109,3 +109,45 @@ export async function expectNoSplitCommands(evaluate: Evaluate, label: string): 
   const split = (await evaluate(SPLIT_COMMANDS)) as string[];
   expect(split, `${label}: commands broken across lines`).toEqual([]);
 }
+
+/** The WCAG contrast ratio of `selector`'s text against its own
+ * background, from the browser's computed colours -- each turned into sRGB
+ * by drawing it on a 1x1 canvas, so Chrome itself converts theme.css's
+ * `oklch()` tokens -- plus the element's computed opacity. */
+function textContrastExpression(selector: string): string {
+  return `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) return { ratio: -1, opacity: "missing" };
+    const style = getComputedStyle(element);
+    const context = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+    const toRgb = (color) => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return Array.from(context.getImageData(0, 0, 1, 1).data.slice(0, 3));
+    };
+    const luminance = (rgb) => {
+      const [r, g, b] = rgb.map((value) => {
+        const channel = value / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const text = luminance(toRgb(style.color));
+    const background = luminance(toRgb(style.backgroundColor));
+    return { ratio: (Math.max(text, background) + 0.05) / (Math.min(text, background) + 0.05), opacity: style.opacity };
+  })()`;
+}
+
+/**
+ * P07-B revision 3 polish: an inert button's text still reads at 4.5:1 or
+ * more. axe skips inert controls (WCAG exempts them), so it can't catch
+ * this; revision 2 dimmed the inert "Saved ✓" with opacity, to 3.99:1 in
+ * light. Opacity must be 1: the ratio here is computed from the colours
+ * alone, which opacity would quietly undercut.
+ */
+export async function expectReadableInertButton(evaluate: Evaluate, selector: string, label: string): Promise<void> {
+  const measured = (await evaluate(textContrastExpression(selector))) as { ratio: number; opacity: string };
+  expect(measured.opacity, `${label}: ${selector} is dimmed with opacity`).toBe("1");
+  expect(measured.ratio, `${label}: ${selector} text contrast`).toBeGreaterThanOrEqual(4.5);
+}

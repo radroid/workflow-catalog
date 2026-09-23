@@ -618,6 +618,9 @@ describe("popup render states (extracted from main.ts so they're unit-testable i
           "The runner refused this capture, so it wasn't saved. Save it as a file, or reopen the popup to capture it again.",
         );
         expect(status?.querySelector(".detail")?.textContent).toBe("It clashes with a different capture the runner already has.");
+        expect(status?.textContent, "two sentences a screen reader reads apart").toBe(
+          `${REFUSED_MESSAGE} It clashes with a different capture the runner already has.`,
+        );
         expect(status?.textContent, "revision 2 showed the bridge's developer text").not.toContain("eventId");
         expect(status?.className, "red: refused, and nothing kept it").toBe("flash bad");
         expect(button.textContent).toBe("Save this job");

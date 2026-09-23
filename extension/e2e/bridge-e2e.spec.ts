@@ -24,10 +24,13 @@
  *     mismatched-origin token is indistinguishable from a valid one to
  *     that route, and only actually shows up on job_capture's POST
  *     /events, the only authenticated POST this extension makes
- *   - the P07B acceptance screenshots (docs/screenshots/P07B-*.png):
- *     options paired, options pairing-error, and popup saved, each light
- *     and dark, via theme-capture.ts's captureInTheme (shared with
- *     real-popup.spec.ts's own P07A screenshots) -- opt-in writes gated on
+ *   - the P07B acceptance screenshots (docs/screenshots/P07B-*.png): every
+ *     options and popup state above and the ones only a stand-in on the
+ *     bridge's port can produce (a refusal, another program on the port, a
+ *     re-pair landing mid-Save), light and dark, options at 1280 and 390,
+ *     each checked (axe, empty regions, [hidden], split commands) before
+ *     theme-capture.ts's captureInTheme (shared with real-popup.spec.ts's
+ *     own P07A screenshots) takes it -- opt-in writes gated on
  *     P07B_UPDATE_SCREENSHOTS=1, see screenshotPath below
  *
  * Runs serially (test.describe.configure below) against ONE shared
@@ -49,7 +52,14 @@ import type { Locator, Page, Route } from "@playwright/test";
 import type { JobCapture } from "@workflow-catalog/contracts";
 import { DEVICE_TOKEN_TTL_MS } from "@workflow-catalog/runner/store/devices.ts";
 import { listen } from "@workflow-catalog/runner/server/app.ts";
-import { assertNoAxeViolations, expectEmptyRegionsCollapsed, expectHiddenReallyHidden, expectNoSplitCommands, waitForDownload } from "./checks";
+import {
+  assertNoAxeViolations,
+  expectEmptyRegionsCollapsed,
+  expectHiddenReallyHidden,
+  expectNoSplitCommands,
+  expectReadableInertButton,
+  waitForDownload,
+} from "./checks";
 import { expect, extensionDist, test } from "./fixtures";
 import { startFixtureServer, type FixtureServerHandle } from "./fixture-server";
 import {
@@ -69,7 +79,7 @@ import {
   startBridgeHarness,
   type BridgeHarness,
 } from "./real-bridge-harness";
-import { captureInTheme, inTheme, pageThemeTarget, popupThemeTarget } from "./theme-capture";
+import { AFTER_RESIZE_QUIET, captureInTheme, inTheme, pageThemeTarget, popupThemeTarget } from "./theme-capture";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const committedScreenshotsDir = path.resolve(here, "../../docs/screenshots");
@@ -141,6 +151,44 @@ test.afterEach(async () => {
 
 function optionsUrl(): string {
   return `chrome-extension://${harness.extId}/src/options/index.html`;
+}
+
+/** The side panel placeholder: an extension page that can reach
+ * chrome.storage.session and does nothing on its own -- unlike the options
+ * page, whose status check would act on a token a test is swapping. */
+function sidePanelUrl(): string {
+  return `chrome-extension://${harness.extId}/src/sidepanel/index.html`;
+}
+
+/** The popup's status line: its text and its tone class. */
+async function popupStatus(popup: RawCdpSession): Promise<{ text: string; className: string }> {
+  return popup.evaluate<{ text: string; className: string }>(`(() => {
+    const status = document.querySelector('[role="status"]');
+    return { text: status.textContent, className: status.className };
+  })()`);
+}
+
+/** Polls the popup's status line until it contains `fragment` (a Save's
+ * outcome lands after its request settles), then returns it. */
+async function waitForPopupStatus(popup: RawCdpSession, fragment: string): Promise<{ text: string; className: string }> {
+  let status = await popupStatus(popup);
+  for (let attempt = 0; attempt < 30 && !status.text.includes(fragment); attempt += 1) {
+    await sleep(100);
+    status = await popupStatus(popup);
+  }
+  return status;
+}
+
+/** Stores a fictional device token as this browser's pairing, from an
+ * extension page (`page`) -- for the stand-in tests, where no real bridge
+ * issued it. */
+async function storeFictionalPairing(page: Page, deviceId: string, token: string): Promise<void> {
+  await page.evaluate(
+    async (stored) => {
+      await chrome.storage.session.set({ deviceToken: { ...stored, pairedAt: new Date().toISOString() } });
+    },
+    { deviceId, token },
+  );
 }
 
 /** Opens a fresh options page and waits for its first `GET /status` (part
@@ -331,14 +379,25 @@ test("status (gate 6): a clear re-pair state once the device is revoked, and onc
 
     await page.reload();
     await expect(statusAlert(page)).toHaveText("Your pairing has expired or was revoked. Pair again above.");
+    // P07-B revision 3, UI issue 1: the Pairing card says what is true
+    // now -- not "Paired." (revision 2 kept the last outcome), and not
+    // "Not paired yet." for a browser that was paired.
+    const pairingSection = page.locator('[data-section="pairing"]');
+    await expect(pairingSection.locator('[role="status"]')).toHaveText("Your pairing expired or was revoked.");
+    await expect(pairingSection).toContainText("Not paired.");
+    await expect(pairingSection).not.toContainText("Not paired yet.");
 
     // P07-B revision 2 polish: the 401 forgot the token, but not that this
     // browser was paired -- the next code comes from npm run pair, and a
     // re-check (here, "Check again") keeps saying the pairing expired
     // rather than "Pair this browser above…".
     await expect(page.locator('[data-section="pairing"] label[for]')).toHaveText("Code from npm run pair");
-    const checkAgain = page.getByRole("button", { name: "Check again" });
+    // By reference, not by name: the name reads "Checking…" while it
+    // checks (held for at least 600 ms -- revision 3 polish).
+    const checkAgain = page.locator('[data-section="status"] button');
+    await expect(checkAgain).toHaveText("Check again");
     await checkAgain.click();
+    await expect(checkAgain).toHaveText("Checking…");
     await expect(checkAgain).toHaveText("Check again");
     await expect(checkAgain, "revision 1 rebuilt the section and dropped focus to <body>").toBeFocused();
     await expect(statusAlert(page)).toHaveText("Your pairing has expired or was revoked. Pair again above.");
@@ -610,6 +669,15 @@ async function auditAndCapturePopup(popup: RawCdpSession, fileState: string): Pr
 
 test("P07B screenshots: options page, unpaired (1280 and 390, light and dark)", async () => {
   const page = await openFreshOptionsPage();
+  // P07-B revision 3 polish: the inert "No capture saved yet" reads at
+  // 4.5:1 or more in both themes -- a muted fill, not opacity.
+  const exportButton = page.locator('[data-section="fileBridge"] button');
+  await expect(exportButton).toHaveText("No capture saved yet");
+  const theme = pageThemeTarget(page, "options-unpaired-inert-export");
+  const evaluate = (expression: string): Promise<unknown> => page.evaluate(expression);
+  for (const scheme of ["light", "dark"] as const) {
+    await inTheme(theme, scheme, () => expectReadableInertButton(evaluate, '[data-section="fileBridge"] button:disabled', `options unpaired (${scheme})`));
+  }
   await captureOptionsBothWidths(page, "unpaired");
   await page.close();
 });
@@ -678,6 +746,8 @@ test("P07B screenshots: options page, runner not running -- connection refused (
   await bridge.bridge.close();
   await page.reload();
   await expect(statusAlert(page)).toHaveText("Can't reach the runner. Is it running? Start it with npm run runner.");
+  // P07-B revision 3, H1: the person has to start the runner -- amber.
+  await expect(statusAlert(page)).toHaveClass("flash");
 
   await captureOptionsBothWidths(page, "runner-not-running");
 
@@ -731,7 +801,14 @@ test("P07B screenshots: options page, pairing expired or revoked (1280 and 390, 
 
   await page.reload();
   await expect(statusAlert(page)).toHaveText("Your pairing has expired or was revoked. Pair again above.");
+  await expect(statusAlert(page)).toHaveClass("flash");
   await expect(page.locator('[data-section="pairing"] label[for]')).toHaveText("Code from npm run pair");
+  // P07-B revision 3, UI issue 1 and polish: the card says what is true
+  // now, in amber, and "Not paired." rather than "Not paired yet.".
+  const pairingLine = page.locator('[data-section="pairing"] [role="status"]');
+  await expect(pairingLine).toHaveText("Your pairing expired or was revoked.");
+  await expect(pairingLine).toHaveClass("flash");
+  await expect(page.locator('[data-section="pairing"]')).toContainText("Not paired.");
 
   await captureOptionsBothWidths(page, "pairing-expired");
   await page.close();
@@ -744,9 +821,104 @@ test("P07B screenshots: options page, pairing error (1280 and 390, light and dar
   await expect(page.locator('[data-section="pairing"] [role="status"]')).toHaveText(
     "This pairing code is not valid: it is wrong, was already used, or was withdrawn after too many wrong tries. Run npm run pair for a new one.",
   );
+  // P07-B revision 3, H1: a new code fixes it -- amber, not red.
+  await expect(page.locator('[data-section="pairing"] [role="status"]')).toHaveClass("flash");
 
   await captureOptionsBothWidths(page, "pairing-error");
 
+  await page.close();
+});
+
+test("P07B screenshots: options page, pairing in progress (1280 and 390, light and dark)", async () => {
+  // P07-B revision 3, H1 and polish: "Pairing…" is progress, so the
+  // neutral edge (revision 2: amber), and Pair keeps focus while it waits
+  // (aria-disabled plus a guard; revision 2's `disabled` dropped focus to
+  // <body> until the runner answered). The POST /pair is held open so the
+  // state lasts long enough to check and capture -- inside bridge-client's
+  // 5 s request timeout, so each theme gets its own attempt, switched to
+  // and settled before Pair is pressed, and each attempt is then aborted.
+  test.setTimeout(90_000);
+  for (const width of [1280, 390] as const) {
+    const page = await harness.context.newPage();
+    await page.setViewportSize({ width, height: 800 });
+    // Filled by the route handler, emptied per attempt; read through a
+    // function, since only the handler ever sets it.
+    const held: { pair?: Route } = {};
+    const heldPair = (): Route | undefined => held.pair;
+    await page.route(`${bridge.bridge.url}/pair`, (route: Route) => {
+      held.pair = route;
+    });
+    await page.goto(optionsUrl());
+    await page.locator('[data-section="status"]').waitFor();
+    const target = pageThemeTarget(page, `options-pairing-in-progress-${width}`);
+    const evaluate = (expression: string): Promise<unknown> => page.evaluate(expression);
+    const line = page.locator('[data-section="pairing"] [role="status"]');
+    const pairButton = page.getByRole("button", { name: "Pair", exact: true });
+
+    for (const theme of ["light", "dark"] as const) {
+      await inTheme(target, theme, async () => undefined);
+      await page.evaluate(AFTER_RESIZE_QUIET);
+      delete held.pair;
+      await page.getByLabel(/^Code from npm run (setup|pair)$/).fill("7KQ2M-X9RTB");
+      await pairButton.click();
+      await expect(line).toHaveText("Pairing…");
+      await expect(line).toHaveClass("flash info");
+      await expect(pairButton).toHaveAttribute("aria-disabled", "true");
+      expect(await pairButton.evaluate((button) => (button as HTMLButtonElement).disabled), "never disabled: focus would drop").toBe(false);
+      await expect(pairButton).toBeFocused();
+      await expect.poll(() => heldPair() !== undefined).toBe(true);
+
+      await expectEmptyRegionsCollapsed(evaluate, `options pairing-in-progress (${theme}, ${width})`);
+      await expectHiddenReallyHidden(evaluate, `options pairing-in-progress (${theme}, ${width})`);
+      await expectNoSplitCommands(evaluate, `options pairing-in-progress (${theme}, ${width})`);
+      await assertNoAxeViolations(evaluate, `options pairing-in-progress (${theme}, ${width})`);
+      await captureInTheme(target, theme, `P07B-options-pairing-in-progress-${theme}-${width}.png`, screenshotPath);
+
+      await heldPair()?.abort();
+      await expect(line).toHaveText("Can't reach the runner. Is it running? Start it with npm run runner.");
+      await expect(pairButton).not.toHaveAttribute("aria-disabled", "true");
+    }
+    await page.close();
+  }
+});
+
+test("P07B screenshots: options page, after Un-pair, then paired again in another tab (1280 and 390, light and dark)", async () => {
+  // P07-B revision 3, UI issue 1, the mirror case: revision 2 kept
+  // "Un-paired. You can pair again below." next to the device another tab
+  // then paired. The line reports what happened on this page; once the
+  // pairing it describes is gone, so is the line.
+  test.setTimeout(90_000);
+  const page = await openFreshOptionsPage();
+  const first = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(page, first.code);
+
+  await page.getByRole("button", { name: "Un-pair" }).click();
+  const pairingSection = page.locator('[data-section="pairing"]');
+  const line = pairingSection.locator('[role="status"]');
+  await expect(line).toHaveText("Un-paired. You can pair again below.");
+  await expect(line).toHaveClass("flash ok");
+  await expect(pairingSection).toContainText("Not paired.");
+  await expect(pairingSection).not.toContainText("Not paired yet.");
+  await expect(statusOk(page)).toHaveText("Pair this browser above to see the runner's status.");
+  await captureOptionsBothWidths(page, "after-unpair");
+
+  const otherTab = await openFreshOptionsPage();
+  const second = await bridge.ctx.pairing.issue();
+  await pairThroughTheRealForm(otherTab, second.code);
+  const newDeviceId = await otherTab.evaluate(async () => {
+    const stored = await chrome.storage.session.get("deviceToken");
+    return (stored.deviceToken as { deviceId: string } | undefined)?.deviceId;
+  });
+  if (newDeviceId === undefined) throw new Error("expected the other tab's pairing in chrome.storage.session, got none");
+  await otherTab.close();
+
+  // This page learns of it on its next check.
+  await page.locator('[data-section="status"] button').click();
+  await expect(statusOk(page)).toContainText("Connected");
+  await expect(pairingSection.locator("dl.kv dd").first()).toHaveText(`${newDeviceId.slice(0, 8)}…`);
+  await expect(line, "revision 2 kept 'Un-paired.' next to the new device").toHaveText("");
+  await expect(pairingSection).not.toContainText("Un-paired");
+  await captureOptionsBothWidths(page, "paired-in-another-tab");
   await page.close();
 });
 
@@ -783,13 +955,14 @@ test("P07B screenshots: popup, sent (light and dark)", async () => {
   await focusSaveButton(popup);
   await pressEnter(popup);
 
-  let statusText = "";
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("Sent to the runner")) break;
-    await sleep(100);
+  expect(await waitForPopupStatus(popup, "Sent to the runner")).toEqual({ text: "Sent to the runner.", className: "flash ok" });
+  // P07-B revision 3 polish: the inert "Saved ✓" reads at 4.5:1 or more
+  // in both themes -- a muted fill, not opacity (revision 2: 3.99:1).
+  const evaluate = (expression: string): Promise<unknown> => popup.evaluate(expression);
+  const popupTheme = popupThemeTarget(popup);
+  for (const scheme of ["light", "dark"] as const) {
+    await inTheme(popupTheme, scheme, () => expectReadableInertButton(evaluate, 'button.primary[aria-disabled="true"]', `popup Saved ✓ (${scheme})`));
   }
-  expect(statusText).toBe("Sent to the runner.");
 
   await auditAndCapturePopup(popup, "sent");
 
@@ -817,13 +990,12 @@ test("P07B screenshots: popup, queued -- runner down (light and dark)", async ()
   await focusSaveButton(popup);
   await pressEnter(popup);
 
-  let statusText = "";
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("isn't reachable right now")) break;
-    await sleep(100);
-  }
-  expect(statusText).toBe("The runner isn't reachable right now — it'll be sent automatically once it's back.");
+  // P07-B revision 3, H1: the worker retries it on its own -- the neutral
+  // edge (revision 2: amber).
+  expect(await waitForPopupStatus(popup, "isn't reachable right now")).toEqual({
+    text: "The runner isn't reachable right now — it'll be sent automatically once it's back.",
+    className: "flash info",
+  });
 
   await auditAndCapturePopup(popup, "queued-runner-down");
 
@@ -846,13 +1018,11 @@ test("P07B screenshots: popup, not paired (light and dark)", async () => {
   await focusSaveButton(popup);
   await pressEnter(popup);
 
-  let statusText = "";
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("Not paired yet")) break;
-    await sleep(100);
-  }
-  expect(statusText).toBe("Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.");
+  // P07-B revision 3, H1: it waits on the person pairing -- amber.
+  expect(await waitForPopupStatus(popup, "Not paired yet")).toEqual({
+    text: "Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.",
+    className: "flash",
+  });
 
   await auditAndCapturePopup(popup, "not-paired");
 
@@ -885,13 +1055,12 @@ test("P07B screenshots: popup, pairing expired -- 401 (light and dark)", async (
   await focusSaveButton(popup);
   await pressEnter(popup);
 
-  let statusText = "";
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("expired or was revoked")) break;
-    await sleep(100);
-  }
-  expect(statusText).toBe("Your pairing expired or was revoked. Pair again in Settings and it's sent.");
+  // P07-B revision 3, H1: a pause waits on the person pairing again, so
+  // amber (revision 2: red); red is left for a refusal nothing kept.
+  expect(await waitForPopupStatus(popup, "expired or was revoked")).toEqual({
+    text: "Your pairing expired or was revoked. Pair again in Settings and it's sent.",
+    className: "flash",
+  });
 
   await auditAndCapturePopup(popup, "pairing-expired");
 
@@ -923,13 +1092,10 @@ test("P07B screenshots: popup, other install -- 403 (light and dark)", async () 
   await focusSaveButton(popup);
   await pressEnter(popup);
 
-  let statusText = "";
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    if (statusText.includes("different install")) break;
-    await sleep(100);
-  }
-  expect(statusText).toBe("This pairing belongs to a different install. Pair again in Settings.");
+  expect(await waitForPopupStatus(popup, "different install")).toEqual({
+    text: "This pairing belongs to a different install. Pair again in Settings.",
+    className: "flash",
+  });
 
   await auditAndCapturePopup(popup, "other-install");
 
@@ -990,10 +1156,19 @@ test("P07B screenshots: popup, not sent -- the bridge refused it, 409 (light and
     let statusText = "";
     for (let attempt = 0; attempt < 30; attempt += 1) {
       statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-      if (statusText.includes("already used")) break;
+      if (statusText.includes("refused")) break;
       await sleep(100);
     }
-    expect(statusText).toBe(refusal.error.message);
+    // P07-B revision 3, H2: what happened and what to do next, then the
+    // reason in plain words -- never the bridge's developer text ("This
+    // eventId was already used…"), which revision 2 showed as it was.
+    expect(statusText).toBe(
+      "The runner refused this capture, so it wasn't saved. Save it as a file, or reopen the popup to capture it again. It clashes with a different capture the runner already has.",
+    );
+    expect(await popup.evaluate<string>(`document.querySelector('[role="status"] .detail').textContent`)).toBe(
+      "It clashes with a different capture the runner already has.",
+    );
+    expect(await popup.evaluate<string>(`document.querySelector('[role="status"]').className`), "red: refused, and nothing kept it").toBe("flash bad");
     const button = await popup.evaluate<{ text: string; ariaDisabled: string | null; focused: boolean }>(`(() => {
       const button = document.querySelector("button.primary");
       return { text: button.textContent, ariaDisabled: button.getAttribute("aria-disabled"), focused: document.activeElement === button };
@@ -1009,6 +1184,126 @@ test("P07B screenshots: popup, not sent -- the bridge refused it, 409 (light and
     await tabPage.close();
   } finally {
     await standIn.close();
+  }
+  bridge.bridge = await listen(bridge.app, bridge.port);
+});
+
+test("P07B screenshots: popup and options page, something other than the runner answering on its port (light and dark; options at 1280 and 390)", async () => {
+  // P07-B revision 3, H2 and H4: another program holds the runner's port
+  // and answers every request with a web page. The popup queues the capture
+  // for the worker to retry, in the neutral tone; Settings says the same
+  // thing in one sentence with a next step -- in Status, and in the outbox
+  // line below it -- and keeps the pairing (nothing refused the token).
+  // Revision 2's Status blamed the runner, in jargon ("didn't match the
+  // expected shape", "HTTP 404").
+  test.setTimeout(90_000);
+  await bridge.bridge.close();
+  const foreign = await serveOnPort(bridge.port, (request, response) => {
+    request.resume();
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<!doctype html><title>Another program</title><p>A fictional local dev server.</p>");
+  });
+  try {
+    const storagePage = await harness.context.newPage();
+    await storagePage.goto(sidePanelUrl());
+    await storeFictionalPairing(storagePage, "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", "fictional-token");
+    await storagePage.close();
+
+    const tabPage = await harness.context.newPage();
+    await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+    const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+    const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+    expect(await waitForPopupState(popup)).toBe("preview");
+    await focusSaveButton(popup);
+    await pressEnter(popup);
+
+    expect(await waitForPopupStatus(popup, "Something other than the runner")).toEqual({
+      text: "Something other than the runner is answering on its port — queued. It'll be sent once the runner answers.",
+      className: "flash info",
+    });
+    await auditAndCapturePopup(popup, "queued-foreign-server");
+    await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+    await popup.detach();
+    await tabPage.close();
+
+    const page = await openFreshOptionsPage();
+    await expect(statusAlert(page)).toHaveText(
+      "Something other than the runner is answering on its port. Close that program, then start the runner with npm run runner.",
+    );
+    await expect(statusAlert(page)).toHaveClass("flash");
+    await expect(statusAlert(page).locator("code")).toHaveText("npm run runner");
+    await expect(page.locator('[data-section="status"]')).toContainText(
+      "1 saved job waiting to send. Something other than the runner is answering on its port; trying again.",
+    );
+    await expect(page.locator('[data-section="status"]')).not.toContainText(/HTTP|shape/);
+    await expect(page.locator('[data-section="pairing"]'), "nothing refused the token").toContainText("8b0c6f0e");
+    await captureOptionsBothWidths(page, "foreign-server");
+    await page.close();
+  } finally {
+    await foreign.close();
+  }
+  bridge.bridge = await listen(bridge.app, bridge.port);
+});
+
+test("P07B screenshots: popup, queued -- this browser was paired again while it saved (light and dark)", async () => {
+  // P07-B revision 3, H4: the token_replaced state (bridge-client.ts). A
+  // stand-in on the bridge's port answers every POST /events 401 in the
+  // bridge's own envelope, but first moves this browser on to a newer
+  // pairing -- the way a re-pair in Settings can land while a Save is in
+  // flight. Both the Save and bridge-client's one retry with the newer
+  // token come back refused for a token already replaced, so the capture
+  // is queued for retry (neutral), not paused. The real bridge can't be
+  // re-paired twice inside one request. Tokens are swapped from the side
+  // panel page, which (unlike Settings) runs no status check of its own.
+  const storagePage = await harness.context.newPage();
+  await storagePage.goto(sidePanelUrl());
+  await storeFictionalPairing(storagePage, "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", "fictional-token-1");
+  const newerPairings = [
+    { deviceId: "9c1d7a1f-3a2b-4d66-8e4f-1b2c3d4e5f60", token: "fictional-token-2" },
+    { deviceId: "0d2e8b20-4b3c-4e77-9f50-2c3d4e5f6071", token: "fictional-token-3" },
+  ];
+  const tokenInvalid = {
+    ok: false,
+    error: { code: "token_invalid", message: "This device token is not valid (unknown, revoked or expired). Pair the extension again." },
+  };
+  await bridge.bridge.close();
+  const standIn = await serveOnPort(bridge.port, (request, response) => {
+    request.resume();
+    void (async () => {
+      const newer = request.method === "POST" ? newerPairings.shift() : undefined;
+      if (newer) await storeFictionalPairing(storagePage, newer.deviceId, newer.token);
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify(tokenInvalid));
+    })();
+  });
+  try {
+    const tabPage = await harness.context.newPage();
+    await tabPage.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+    const tabTargetId = await getTabTargetId(harness.bs, harness.context, tabPage);
+    const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+    expect(await waitForPopupState(popup)).toBe("preview");
+    await focusSaveButton(popup);
+    await pressEnter(popup);
+
+    expect(await waitForPopupStatus(popup, "paired again")).toEqual({
+      text: "Queued — this browser was just paired again. It'll be sent shortly.",
+      className: "flash info",
+    });
+    expect(newerPairings, "both requests reached the stand-in").toEqual([]);
+    const entry = await popup.evaluate<{ lastErrorCode?: string; pausedReason?: string } | undefined>(
+      `chrome.storage.session.get(null).then((all) => Object.entries(all).find(([key]) => key.startsWith("jobCaptureOutbox:"))?.[1])`,
+    );
+    expect(entry?.lastErrorCode).toBe("token_replaced");
+    expect(entry?.pausedReason, "queued for retry, not paused").toBeUndefined();
+
+    await auditAndCapturePopup(popup, "queued-token-replaced");
+
+    await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+    await popup.detach();
+    await tabPage.close();
+  } finally {
+    await standIn.close();
+    await storagePage.close();
   }
   bridge.bridge = await listen(bridge.app, bridge.port);
 });
