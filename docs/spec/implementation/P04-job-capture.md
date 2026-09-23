@@ -1,7 +1,7 @@
 # P04 · Job capture
 
-Status: open
-Assignee: none
+Status: claimed (iter 006)
+Assignee: iter-006 implementer (Sonnet)
 Blocked by: P03
 Owns: runner/server/routes/captures.ts, runner/store/jobs.ts, runner/lib/safe-fetch.ts, runner/lib/readable-text.ts, runner/agent/tools/ (the job-extraction tool only), the eval-agent re-export, fixture and tool-registry entries and eval for it, runner/ui/jobs.html and its script, runner/test/ (new tests for these files), packages/job-assistant/fixtures/jobs/
 Spec: F6, hard-problems #3
