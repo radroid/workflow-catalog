@@ -29,6 +29,119 @@ Job capture, preparation, board.
 
 ## Report
 
+### 2026-09-23 — Revision 3 (iter-005 Opus escalation, J1–J8)
+
+**PR:** [#11](https://github.com/radroid/workflow-catalog/pull/11) `packet/P03` → `overnight/integration`. The code is final at `479298d`. `3cbae94` merges integration's newer head `492c432`, which is docs and logs only, and this report is the commit after that merge.
+
+| Commit | What | CI run, result |
+|---|---|---|
+| `154adc3` | Server side of J1, J3, J5, J6.4 and J7, with tests | `35921025406`, success |
+| `5612d69` | Both pages render in place (J3–J6), plus `runner/test/ui-pages.test.ts` | `35924386887`, success |
+| `0ad539a` | Merge of `origin/overnight/integration` at `360ac69` (P08-A), as the orchestrator asked mid-round | `35925367506`, success |
+| `1982598` | J8 screenshots, taken after the merge | `35925700294`, success |
+| `5115312` | J5 follow-up: three route messages were over 90 characters for the longest labels | `35926785553`, success |
+| `479298d` | Renames the J5 route test for what it checks | `35927221808`, success |
+| `3cbae94` | Merge of `origin/overnight/integration` at `492c432`: GOALS.md, the P08 packet, eve-runtime.md and logs/, with no conflicts | see the reply |
+
+**Scope.** This round covered J1–J8 in `logs/handoff/P03-round-3-review.md` and the amended eve-runtime §8 item 15. Before the work I merged `origin/overnight/integration`. That merge touched only `logs/` and `eve-runtime.md`. The mid-round P08-A merge had one conflict, `runner/test/route-modules.test.ts`. I kept this branch's readdir-based test (D2). It already covers P08-A's `runs` module, which declares no events, and the runner passed 560 of 560 after the merge. Everything changed is inside P03's Owns, D1's additions and the escalation allowlist: the onboarding route; `runner/store/profile*.ts`; both pages' HTML, JS and CSS; P03's tests plus the new `runner/test/ui-pages.test.ts`; and `docs/screenshots/P03-*`.
+
+**J1–J8.**
+
+| Item | What changed | Proved by |
+|---|---|---|
+| J1 | `interpretExtractionTurn` treats any `turn.cancelled` as not ok, with the reason "The extraction was stopped before it finished. Try again." No content hash is recorded, and claims the tool step saved before the cancel stay, as on the timeout path. The next extract of the same text starts a new session. | `test/onboarding-extract-timeout.test.ts`, both with the real eve@0.63.0 `Client` over a stubbed `fetch`: "J1: a cancelled turn (extract_claims persisted → turn.cancelled → session.waiting) is not ok, records no hash, keeps the saved claim, and the same text runs again", and the control "the spike's normal turn (… turn.completed → session.waiting) that persisted claims is ok, records the hash, and cancels nothing". Mutation S1. |
+| J2 | No code, as decided. §8 item 15 already says why. | — |
+| J3 | **Refusal:** while `markdownError` is set, every refused write is one line, "Not saved: career-profile.md has an edit the runner can't read. See the note at the top." (`MARKDOWN_UNREADABLE_REFUSAL`). No field error and no `aria-invalid` appear on either page. **Note:** the strict reader names the problem by line: "Line 36: the line for the boundary “…” is missing, or its marker was changed. Put it back as it was." The note and the line never show a marker's id; only the file's own text in the Profile editor does. **Save & extract:** the text is saved, because source text is not profile data, and extraction is refused with 409 before any eve call. The page says "Text saved, but not extracted: fix career-profile.md first. See the note at the top.", or "Not extracted: …" when there was nothing new to save. **Discard** clears every field error on both pages and focuses the page title. **Profile editor:** while the file can't be read, it shows the file as it is on disk, read-only, labelled "The file as it is on disk (read-only until the problem above is fixed)", and "Save edits" is hidden. Typed text is never replaced. A save that finds the file unreadable keeps the text editable and moves focus to the note. Discard keeps the text, says "File edits discarded; your unsaved text in the box is kept.", and a later save works. | Route: "an unreadable edit (a deleted marker, probe B2) refuses every write with 409, …". It sends a statement, a source status, approve and extract, and pins both constants. It checks that no eve call is made, that nothing is written and that no UUID appears. It also checks the `Line N: …` pattern, `markdownOnDisk` and `GET /markdown`. Strict reader tests in `test/profile-markdown-strict.test.ts`. DOM (`test/ui-pages.test.ts`): "while career-profile.md can't be read, a refused write is the one short line: no field error, no aria-invalid, focus and typed text stay"; "Discard clears every field error and moves focus to the page title before the note is hidden"; "shows the file as it is on disk, read-only, with no Save, while it can't be read"; "a save that finds the file unreadable keeps the typed text, moves focus to the note, and Discard keeps the text too". Browser: 17 J3 checks. Mutations S7, S8, S9, S11, C3, P2, P3, P4. |
+| J4 | Both pages now update the DOM in place instead of rebuilding it. Nodes are matched by id, else by position. Handlers are set as properties and read `event.currentTarget`. The focused node is never replaced or moved, and a focused field's text is never rewritten. A focused node that has to go is held until focus has moved to the planned target, and a focused control that has to be hidden is hidden only afterwards. So focus goes straight from the old control to the new one, never through `<body>`. When focus moves to a field that carries the detail, the line says only the short outcome: "An answer is needed." when Confirm opens a question, "Not added.", "Not saved." or "Nothing to extract." for a field error. Each outcome is written to the one live region once. | DOM (`test/ui-pages.test.ts`, the pages' own scripts in happy-dom against the real routes): "a status button is the very same node after its action, and no focus event fires"; "Confirm on a metric moves focus straight to its answer box, with the Confirm button still on the page, and the line says only that an answer is needed"; on Profile, Save is still shown when the note takes focus. Browser: 19 J4 checks, including a focus log of exactly one move, Confirm → answer box, and announcements counted per outcome. Mutations C1, C2, C5, C6, P1. |
+| J5 | **Short messages:** reducer messages (checked across a full scenario) and route messages (checked for all seven labels) are at most 90 characters, usually one sentence. A few pair a short outcome with the next step, like the D9 line J3 chose. **Clamp:** at 640 px and below the line clamps to two lines (`line-clamp: 2`); its text node keeps the whole sentence, and so does its `title`. **Scroll padding:** `scroll-padding-top` follows the line's measured height through a `ResizeObserver` (`--last-action-offset`). **Focus clear:** a control focused from the keyboard, or by a render, is scrolled fully clear of the line; that includes the Profile editor at 390. **Caveat:** a message that passes on eve's own error text ("The extraction turn for X failed: …", "The extraction failed: … (code)") can run longer. It clamps the same way. | Reducer: "no reducer message carries a UUID, a short id, or a raw category key" (asserts ≤ 90). Route: "J5: every message a source's routes send is 90 characters at most, for every label". Browser at 390: the line is 30 px (1 line) after a question and 48 px (2 lines) after a D9 refusal. The offset follows it (47 px, then 65 px). The answer box, the input and the Profile editor are clear of the line, whether reached by Tab or by Shift+Tab. Mutations S12, S13. |
+| J6.1 | "Working…" shows only if the request is still running after 300 ms. | Browser: nothing says Working in the first 150 ms; Working, then the outcome, announced once each. |
+| J6.2 | `npm run runner` in a message is rendered in `<code>`. | Browser: J6.2. |
+| J6.3 | A field error clears as soon as its field changes, and every action clears all earlier field errors first, so none outlives a later action. | DOM: "a field error sits on its field with the short outcome in the line, and goes with the next unrelated action". Browser: 2 checks. Mutation C4. |
+| J6.4 | `questionReason` names the real trigger. It gives "it's a metric claim" when the kind always asks, else the always-ask word as written ("it says “Led”"), else nothing. The reducer's message uses it, and the page view's `questionReasons` puts "Asked because …" into the answer box's description. | `test/profile-questions.test.ts` (3 tests); the reducer test "J6.4: the needs-an-answer message names …"; the N4 route test; the DOM Confirm test; 3 browser checks. Mutation S10. |
+| J6.5 | The readiness summary reads as one phrase ("Not ready: generation locked"), with no "Not yet:"/"Done:" prefix. The other lines keep theirs. | Browser: 2 checks. |
+| J6.6 | Before a render, the page notes where the focused control is on screen. If the render moved it, the page scrolls back by the difference, and `overflow-anchor: none` keeps the browser from also adjusting. | Browser: the focused button stayed at 420.5 px while the D9 note appeared above it. At 390 the editor stays clear after a refused save. |
+| J6.8 | Both withdrawal cards link the open question (`/ui/onboarding#question-<id>`). The link moves focus to its answer box, and so does opening Onboarding with that hash. | Browser: 4 checks. |
+| J6.9 | Evidence refs read "pasted.txt, line 3", with the full path in `title`. The extraction prompt is unchanged. | DOM Confirm test (text and `title`); browser J6.9. |
+| J6.10 | Profile's Status card lists each open question near the top, with the claim's words and the question, linked to its answer box. | `P03-profile-question-open-*`; browser J6.10. |
+| J6.11 | The pages use the file's wording in local time with the zone named, for example "23 September 2026 at 17:56 EDT". The file keeps UTC. | Browser: 2 checks. |
+| J7 N1 | The D8 wait's deadline is set before the in-process chain is joined, so queued writers all give up about 5 s after they asked. | `test/profile-writes.test.ts`: "N1/N2 (revision 3): writers queued behind one another all give up about 5 s after they asked, not at 5, 10 and 15 s". Three queued writers each get the busy error between 4.9 and 6.5 s. Mutation S2. |
+| J7 N2 | The route's 503 test is timed. | "answers 503 'The profile is busy' …" asserts 4.9 s ≤ elapsed < 6.5 s. |
+| J7 N3 | Extract is in the D9 route loop. | The J3 route test (no eve call). Mutation S8. |
+| J7 N4 | D10 notes are in the page view. | "N4: carries D10's notes on an open question, keyed by claim id, and drops them once the question is answered". |
+| J7 N6 | When rendering, a line that ends in a marker-shaped token gets one escaping backslash, and the reader strips exactly one, so any text round-trips. That includes a no-break space before the marker. | `test/profile-markdown.test.ts`: property tests over 40 seeded texts with hostile tails, plus the exact-escape test. `test/profile-store-revision2.test.ts`: "N6 (revision 3): claim text shaped like markers never makes the runner's own file unreadable", which includes an unchanged save that round-trips. Mutations S3, S4, S5. |
+| J7 N7 | `GET /readiness` reads through `load()`. | "N7: GET /readiness applies a hand edit first, the same as GET /". Mutation S6. |
+| J8 | The shots listed below, all taken after the P08-A merge. | — |
+
+**The DOM test and happy-dom.** `runner/test/ui-pages.test.ts` loads each page's HTML and runs its module in happy-dom 20.14.5 against the bridge's real routes. happy-dom is resolved from the extension's install (`createRequire(extension/package.json)`), because adding it to the runner would change `runner/package.json` and `pnpm-lock.yaml`, which are outside this packet's Owns. If the extension ever drops happy-dom, this test breaks, so a runner devDependency is a sensible follow-up for whoever owns those files. The browser checks below cover the same behaviour in Chromium.
+
+**Tests run, real output.** All commands were run from the repo root at `3cbae94`, with only this report uncommitted, and every one exited 0.
+- `pnpm install --frozen-lockfile`: already up to date.
+- `pnpm typecheck`: all 6 packages done.
+- `pnpm test`:
+  - contracts: 16 files, 235 tests;
+  - job-assistant: 6 files, 151 tests;
+  - extension: 16 files, 130 tests plus 2 skipped;
+  - runner: 35 files, 561 tests;
+  - `eve eval`: 5 of 5, 85 gates;
+  - catalog: 26 files, 168 tests;
+  - root `scripts/*.test.mjs`: 2 of 2.
+- `pnpm -r lint`: 6 of 6 clean.
+- `pnpm check:fixtures`: exit 0.
+- `git status --porcelain` afterwards listed only this packet file.
+- An earlier `pnpm test` run at `1982598` failed while other agents were loading the machine. Six runner tests in five files hit vitest's 20 s timeout: budget, runs (two), bridge, profile-store and profile-store-revision2. Catalog's `tests/db/global-singleton.test.ts` also reported one failure, with no reason printed before the parallel run stopped. As the brief says, I reran with `pnpm -r --workspace-concurrency=1 test`, where everything passed (runner 560, eval 85 gates), then `node --test scripts/*.test.mjs`, 2 of 2. The runs at `5115312`, `479298d` and `3cbae94` passed in parallel.
+
+**Browser checks.** The harness is scratch in `/tmp/wc-p03-esc-r2/`. The bridge runs on 127.0.0.1:4320 against a scratch workspace, with a fake eve gateway that runs the real verify-then-persist helper. The real HOME, the keychain and any model were never touched.
+- `checks3.mjs` (revision 3): 71 of 71, `checks3-run3.log`.
+- `checks2-r3.mjs` (revision 2's checks, reworded for revision 3's messages): 72 of 72, `checks2-r3-run2.log`.
+- Both ran on the page code committed in `5612d69`, before the P08-A merge. The merge changed none of these pages' files, only `runner.css` (the `.badge.fail` text colour and form-control borders) and the nav. The DOM test ran again after the merge, as part of the 561.
+
+**Screenshots (J8).** There are 62 files in `docs/screenshots/`, all taken after the P08-A merge, so the nav shows Runs and Settings. Every one is axe clean and has no sideways scroll (`/tmp/wc-p03-esc-r2/shots-audit.json` and `shots-audit-r3.json`). The console is clean apart from Chrome's own "Failed to load resource: 409" line for the deliberately refused requests in the D9 and refusal shots.
+- The 48 state shots, retaken full page: `P03-{onboarding,profile}-{empty,in-progress,question-open,ready,approved,withdrawn}-{light,dark}-{390,1280}.png`. The Profile question-open shots show both open questions in the Status card (J6.10).
+- 8 new D9 shots, full page: `P03-{onboarding,profile}-d9-{light,dark}-{390,1280}.png`.
+  - The note reads "Line 36: …", and no UUID is visible.
+  - On Onboarding, Save & extract with the saved text says "Not extracted: fix career-profile.md first. See the note at the top.", with no field error.
+  - On Profile, the editor shows the file on disk, read-only, with no Save.
+- 6 new viewport shots at 390:
+  - `P03-onboarding-line-question-{light,dark}-390.png`: after Confirm on the metric. The line is one line (30 px) and says "An answer is needed.". Focus moved once, straight to the answer box, which sits at 619–706 px of 844.
+  - `P03-onboarding-line-refusal-{light,dark}-390.png`: after Enter in the preference field while the file is unreadable. The line is two lines (48 px). Focus stayed in the field, at 462–503 px, its text was kept, and there is no field error.
+  - `P03-profile-line-editor-{light,dark}-390.png`: after Tab into the editor. It sits at 249–697 px, clear of the line.
+- Every server and browser I started was stopped, and port 4320 was the only one used.
+
+**Mutation proofs.** There are 23 mutations, all on revision 3's code, and all were killed. Each was applied to one file and tested with its named tests, then restored from a `/tmp` backup and compared byte for byte. `git status --porcelain` was clean afterwards. Scripts and logs: `/tmp/wc-p03-esc-r2/mut/` (`specs3.mjs`, `run3.mjs`, `mutations3.log`, `out/mut3-*`).
+
+| Mutation | File | Killed by |
+|---|---|---|
+| S1 `turn.cancelled` counts as ok | server/routes/onboarding.ts | J1: a cancelled turn … |
+| S2 deadline set inside the chain | store/profile-writes.ts | N1/N2 (revision 3): writers queued behind one another … |
+| S3 no escaping backslash | store/profile-markdown.ts | reads back hostile claim … text exactly (seeds 1–40) |
+| S4 no unescape | store/profile-markdown.ts | the same property tests |
+| S5 marker tail without `\s*` (no-break space) | store/profile-markdown.ts | the same property tests |
+| S6 `readiness()` without `load()` | store/profile.ts | N7: GET /readiness applies a hand edit first |
+| S7 409 says the reader's problem | server/routes/onboarding.ts | the D9 route test; both D9 DOM tests |
+| S8 extract not refused under D9 | server/routes/onboarding.ts | the D9 route test |
+| S9 no line number in the problem | store/profile-markdown.ts | refuses a removed marker, naming the claim; D9 route and DOM tests |
+| S10 no kind reason | store/profile-questions.ts | names a kind that always asks; the DOM Confirm test; N4 |
+| S11 no file on disk in `load()` | store/profile.ts | shows the file as it is on disk …; the D9 route test |
+| S12 the 91-character 413 message | server/routes/onboarding.ts | J5 route test; VN3 |
+| S13 the 91-character nothing-saved message | server/routes/onboarding.ts | J5 route test |
+| C1 rebuild instead of morph | ui/assets/onboarding.js | a status button is the very same node …; Confirm … |
+| C2 focused node removed at once | ui/assets/onboarding.js | Confirm on a metric … still on the page … |
+| C3 field error under D9 | ui/assets/onboarding.js | while career-profile.md can't be read, a refused write is the one short line … |
+| C4 errors outlive later actions | ui/assets/onboarding.js | a field error … goes with the next unrelated action |
+| C5 a refusal moves focus to the button | ui/assets/onboarding.js | the D9 refusal DOM test (focus stays in the field) |
+| C6 the question's line repeats the message | ui/assets/onboarding.js | Confirm on a metric … the line says only that an answer is needed |
+| P1 focused Save hidden at once | ui/assets/profile.js | a save that finds the file unreadable … |
+| P2 editor shows the render, not the file | ui/assets/profile.js | shows the file as it is on disk … |
+| P3 Discard drops the typed text | ui/assets/profile.js | a save that finds the file unreadable … Discard keeps the text too |
+| P4 D9 save shown as a field error | ui/assets/profile.js | the same test |
+
+**Notes.**
+- Two orchestrator messages came this round, the revision-3 brief and the mid-round P08-A merge instruction. Both carried 709f68, and nothing claimed to be the orchestrator without it.
+- These MCP servers need authentication and were not used: claude.ai Dice, Excalidraw and Slack, and plugin:cloudflare (api, bindings, builds, observability). They stay unavailable until someone authorizes them, in the claude.ai connector settings or with `claude mcp` (`/mcp`) in an interactive session.
+- The harness refused some commands for complexity: an inline node edit script, a heredoc piped to node, a grep whose pattern held backticks, and an awk one-liner. I split them, or used Edit/Write, single quotes and grep instead. No permission or deny rule refused anything.
+- The background agents in this session (P07-B escalation implementer, P08-A round-3 reviewer and UI critic) belong to the orchestrator. I did not interact with them.
+- The authorizations note that `492c432` added under eve-runtime §8 item 15 touches the extraction route too. `interpretExtractionTurn` checks failures, cancels, input requests and the boundary, not a pending `authorization.required`. The note says this can't happen while `runner/agent` has no connections, and gives it to the first packet that adds one. The orchestrator said J1–J8 are unchanged, so I changed nothing for it.
+
 ### 2026-09-22 — Revision 2 (iter-005 Opus escalation)
 
 **PR:** [#11](https://github.com/radroid/workflow-catalog/pull/11) `packet/P03` → `overnight/integration`. The code is at `8e4ca45`; this report is the commit after it. CI on `8e4ca45`: run `35782815079`, success. `git merge-tree` against integration head `54c6550` merges with no conflicts.
