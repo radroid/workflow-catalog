@@ -34,7 +34,7 @@ Messages from the orchestrator may arrive mid-task, sometimes attached to a tool
    - "Extending the runner" in `runner/README.md`.
 6. Every fact about eve comes from `runner/node_modules/eve/docs`, the installed types at eve@0.63.0 and `eve-runtime.md`, never from memory.
 7. Claim the packet:
-   - In the packet file, set `Status: claimed (iter 005)` and `Assignee: iter-005 implementer (Sonnet)`.
+   - In the packet file, set `Status: claimed (iter 006)` and `Assignee: iter-006 implementer (Sonnet)`.
    - Commit "P04: claim", and push.
 
 ## Owns (your file allowlist)

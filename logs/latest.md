@@ -1,6 +1,6 @@
-Latest: iter-005 closed on 2026-09-23. P08-A, P03 and P07-B merged into overnight/integration (360ac69, 9821bee, e01017c). Log: `logs/iter-005.md`. In `.loop/state.json`, `iter` is 5.
+Latest: iter-006 in progress, started 18:57 on 2026-09-23. Iter 005 closed with P08-A, P03 and P07-B merged (360ac69, 9821bee, e01017c); CI on e01017c is green, extension e2e included. In `.loop/state.json`, `iter` stays 5 until iter 006 closes.
 
-Next, iter 006: spawn P04 (Sonnet) from `logs/handoff/P04-prompt.md`, filling in the integration head and a fresh private code word. Its harness port is 4330.
+Running now: the P04 implementer (Sonnet, from `logs/handoff/P04-prompt.md`), on branch `packet/P04` with harness port 4330. It opens PR "P04: Job capture". Then comes round 1: an Opus reviewer and an Opus UI critic.
 - **Then:**
   - after P04: P05 (Opus) ∥ P03.2 (Sonnet), which needs P04's turn events. P03.1 follows P03.2, because they share files.
   - after P05: P08-B, which carries P08-A's follow-ups, and P06.
