@@ -616,13 +616,25 @@ test("job_capture (gate 4): Save queues when the runner is unreachable, and the 
   expect(delivered, "the queued capture was never journaled by the bridge after it came back").toBe(true);
 
   // And the client side's own queue emptied too, not just the server side.
+  // The bridge journals a capture before it answers (runner/server/
+  // events.ts: the record is appended as pending, its dispatch is recorded,
+  // and only then does the response go out), so the journal can show it a
+  // moment before the worker has its answer and removes the entry. A single
+  // check straight away raced that (P07-B revision 3: CI run 35918588650).
+  // The wait stays well inside the 30 s the worker waits before a second
+  // try, so a delivery that failed still fails here.
   const checkPage = await harness.context.newPage();
   await checkPage.goto(optionsUrl());
-  const stillQueued = await checkPage.evaluate(async () => {
-    const all = await chrome.storage.session.get(null);
-    return Object.keys(all).filter((key) => key.startsWith("jobCaptureOutbox:")).length;
-  });
-  expect(stillQueued, "the outbox should be empty once the alarm delivered it").toBe(0);
+  await expect
+    .poll(
+      () =>
+        checkPage.evaluate(async () => {
+          const all = await chrome.storage.session.get(null);
+          return Object.keys(all).filter((key) => key.startsWith("jobCaptureOutbox:")).length;
+        }),
+      { message: "the outbox should be empty once the alarm delivered it", timeout: 10_000 },
+    )
+    .toBe(0);
   await checkPage.close();
 });
 
