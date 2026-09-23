@@ -27,6 +27,343 @@ Form filling, uploads, submission, cookies, native messaging.
 
 ## Report
 
+### 2026-09-23 — Revision 3 (part B, iter-005)
+
+Round 3 reviewed head `d0e2b2c`. The reviewer returned REVISE with one
+issue (the README) and seven nits. The UI critic returned REVISE with five
+issues and a polish list. The orchestrator's decisions H1–H4
+(`logs/handoff/P07-B-round-3-review.md`, pushed at `e9cd8d3`) set the
+work, and the same Opus escalation implementer did it.
+
+Setup merged `origin/overnight/integration` at `e9cd8d3` (`e00d21a`), then
+the claim (`566c64b`). Work:
+- `628fba1`: UI issue 1, H1, H2, the polish, and nits 1, 4 and 5;
+- `555d87f`: nits 1, 3 and 6 as tests, e2e for the new states, and the H4
+  screenshots;
+- `23199d4`: the README, the remaining H2 test gaps, and nit 7.
+
+This report is the next commit. Integration has since moved to `a2326c8`
+(logs only); that isn't merged. Files touched: `extension/**`,
+`docs/screenshots/P07A-*.png` and `P07B-*.png`, and this file.
+`.github/workflows/ci.yml` needed no change, and nothing in `packages/`,
+`runner/` or `apps/` changed. Two orchestrator messages arrived during the
+round, the revision 3 brief and a resume after the weekly usage limit
+reset. Both carried the code word, and no message claimed to be from the
+orchestrator without it.
+
+**Reviewer issue 1: the README.** `extension/README.md` now matches the
+PR.
+- **The popup.** Save sends the capture. The status line says it was sent,
+  queued for retry, queued until this browser is paired, or refused.
+  Nothing downloads on its own: **Save as a file** is the explicit
+  fallback. Save also stores the capture for **Export last capture**.
+- **Settings.** Pairing (with **Pair again**), Status's plain states and
+  the outbox line, and the file bridge. The file bridge's export is
+  **Export last capture**, and its import takes `application-session.json`.
+- **The outbox.** One storage key per capture. A retry resends the same
+  `eventId`, and the bridge answers a replay with `duplicate: true`.
+  Pauses record the pairing they were refused under.
+- **Scripts.** `pnpm typecheck` runs two tsc programs. `pnpm test` names
+  what it covers and the five tests that need `dist/`.
+- **e2e.**
+  - `real-popup.spec.ts` saves unpaired, then downloads through **Save as a
+    file**. The README used to say "Save → download".
+  - A new paragraph covers `bridge-e2e.spec.ts`: port 4310 must be free,
+    the stand-ins, and `P07B_UPDATE_SCREENSHOTS=1`.
+- **Manual smoke steps.**
+  - Step 3: Save queues the capture, and nothing downloads.
+  - Step 5: codes come from `npm run setup` and `npm run pair`, and the
+    queued capture is sent after pairing.
+  - Step 6: a retry resends the same `eventId`. A re-save is a new event,
+    because the popup mints a new id each time it opens.
+  - Step 7: **Export last capture**. The import takes
+    `application-session.json`, and a `job-capture.json` is refused.
+- **Known limitations.** A new section carries nit 2.
+
+**UI issue 1: the stale Pairing card.** The Pairing line reports what
+happened on this page. When `syncPairingSection` rebuilds the card for a
+different pairing, the line is set to what is now true:
+- "Your pairing expired or was revoked." in amber, when the bridge refused
+  the token this page showed;
+- empty otherwise, for example after a pairing made or dropped in another
+  tab.
+
+A page opened after a refusal starts with that line. The unit tests cover
+the revoke path, the pair-elsewhere path and the load path. The revoke
+test checks the line, its tone and the code field's accessible
+description. The pair-elsewhere test checks that the line is cleared and
+the new device shown. The e2e checks both paths against the real bridge
+and captures them.
+
+**H2 (UI issues 2 and 3): plain messages.**
+- **Popup refusals.** Each leads with "The runner refused this capture, so
+  it wasn't saved. Save it as a file, or reopen the popup to capture it
+  again." The reason goes on its own line. Known bridge codes are
+  translated:
+  - `event_id_conflict`: "It clashes with a different capture the runner
+    already has."
+  - `body_too_large`: "It's larger than the runner accepts."
+  - `invalid_body`, `invalid_json` and `unsupported_media_type`: "The
+    runner couldn't read it."
+  - `not_found`: "This version of the runner doesn't take captures."
+
+  Any other code comes from a route handler's `EventRejectedError`, whose
+  own message is kept. The 409 shot no longer shows `eventId`.
+- **Another program on the port.** Everywhere it's the same sentence:
+  "Something other than the runner is answering on its port. Close that
+  program, then start the runner with `npm run runner`."
+  - It is bridge-client's message for `invalid_response` and
+    `unknown_error`.
+  - `statusFailureMessage` maps both codes to it before the 401/403 checks,
+    so a sign-in page's 401 isn't read as an expired pairing.
+  - The outbox line agrees: "…Something other than the runner is answering
+    on its port; trying again."
+- **A real 5xx.** Status says "The runner had a problem. Check again in a
+  moment, or restart it with `npm run runner`." The popup says "The runner
+  had a problem; trying again."
+- **A status check overtaken by two re-pairings (`token_replaced`).**
+  Status says "This browser was just paired again. Check again in a
+  moment." This is new: bridge-client's wording was about a capture being
+  sent.
+- Tests assert that no field names or status codes appear in any of these
+  texts.
+
+**UI issue 4.** "Enter the code shown by …" puts the command in backticks,
+so it renders as `<code>`. Tested.
+
+**H1 (UI issue 5): tones.** `shared/tone.ts` holds four tones:
+- `ok`: sent, "Paired." and "Un-paired.";
+- `info`, a new neutral edge in `--muted-foreground`: "Pairing…", and every
+  automatic retry in the popup (runner down, no answer, a 500, another
+  program on the port, token replaced);
+- `act`, amber, where the person must act:
+  - the not-paired, 401 and 403 pauses (red before);
+  - a wrong pairing code (red before);
+  - every Status problem (red before);
+- `bad`, red: a refusal where nothing kept the capture, and the popup's
+  storage failure.
+
+Unit and e2e tests assert the class on every state.
+
+**Polish.**
+- **Busy buttons.** "Pairing…" and "Saving…" use `aria-disabled` plus a
+  guard, not `disabled`, so focus stays on the button. A second press or
+  Enter is ignored. Unit tests check both states: focus stays, a second
+  press is ignored, and the button is never `disabled`. The e2e checks
+  "Pairing…" the same way, against a `/pair` request held open. "Saving…"
+  passes too quickly against a real Save to check there.
+- **"Check again".** It holds "Checking…" for at least 600 ms. A check the
+  button started restates its result: the polite region is refilled, or
+  the alert is re-inserted once. A window-focus re-check stays silent
+  unless something changed.
+- **Inert buttons.** The inert "Saved ✓" and "No capture saved yet" use a
+  muted fill and muted text at opacity 1. By the theme tokens,
+  `--muted-foreground` on `--muted` is about 7.1:1 in light and 6.8:1 in
+  dark. The e2e measures both buttons in both themes in the real browser,
+  with Chrome converting the `oklch()` colours through a canvas. It
+  requires at least 4.5:1 and opacity 1. axe skips inert controls, so it
+  couldn't catch this.
+- **Wording.**
+  - "Not paired." rather than "Not paired yet." once this browser has
+    paired.
+  - After an earlier pairing, the popup's not-paired pause says "…pair the
+    extension again…".
+  - The outbox line says "waiting until this browser is paired again" for
+    a browser that was paired.
+  - A real 500 says the runner had a problem.
+
+**H3: the reviewer's nits.**
+1. **The LIFT race.**
+   - Each pause records the pairing its request was refused under
+     (`pausedFor`). That is the device id read before the attempt: per
+     entry in `flushOutbox`, and before the post in the popup.
+   - A pause holds only while nothing is paired, or while that same pairing
+     is (`pauseInEffect`). A pause left from an older pairing counts as
+     active everywhere: it is flushed, and the alarm is armed for it.
+   - `resumeAfterPairing` lifts every pause except one earned under the
+     current pairing.
+   - The comment at `outbox.ts` 49-52 is corrected.
+   - The reviewer's LIFT-race probe is now a test. It asserts delivery with
+     the new token ("Bearer T1", then "Bearer T2"), not a stuck pause.
+2. **The `forgetInvalidToken` window.** Documented as a known limitation
+   here and in the README: if you pair at the exact moment an old token is
+   refused, pair again.
+3. **The R6-race probe** is a test: the entry is written before the alarm
+   is armed.
+4. **Queueing failures.** When queueing throws (storage.session's quota),
+   the popup says "Couldn't save this capture: the browser wouldn't store
+   it. Save it as a file instead." in red and offers **Save as a file**.
+   The reviewer's quota probe is a test.
+5. **A refused `Page.startScreencast`.** `captureFrame` withdraws its frame
+   wait (timer and waiter) and rethrows the refusal.
+   `src/capture-frame.test.ts` drives it with a fake CDP session and fake
+   timers, and checks that no rejection is left unhandled 5 s later.
+6. **The guard's refusal paths.** `src/theme-guard.test.ts` adopts the
+   theme-guard probe. It runs the real `captureInTheme` and
+   `findDevToolsLabelTopRight` against a scripted target and synthetic
+   PNGs, not the committed shots, which this revision retakes.
+   `writeFileSync` is mocked, so nothing is written. Its eight tests cover:
+   - the control;
+   - both wrong-theme refusals;
+   - the scheme-repair budget;
+   - CI's overlaid frame, and a label that stays;
+   - a label on a light page;
+   - the two budgets not combining;
+   - a transient label waited out.
+7. **Report accuracy.** Corrected in place in revision 2's report below.
+
+**H4: screenshots.** All 46 P07 shots were retaken with both opt-in
+variables set, since tones, wording and the inert style changed. There are
+20 new shots, each in light and dark:
+- `P07B-popup-queued-foreign-server-*` and
+  `P07B-popup-queued-token-replaced-*`;
+- `P07B-options-foreign-server-*`, `P07B-options-pairing-in-progress-*`,
+  `P07B-options-after-unpair-*` and `P07B-options-paired-in-another-tab-*`,
+  each at 1280 and 390.
+
+Every state is checked before capture: axe, empty regions, `[hidden]`, and
+commands kept on one line. I viewed the changed and new shots:
+- the 409 refusal, red, with the lead sentence and the reason;
+- the amber pauses, and the neutral retries and "Pairing…";
+- the inert buttons;
+- the Pairing card after a revoke, after Un-pair, and after pairing in
+  another tab.
+
+**Mutation proofs.** For each, I planted the change in the source, ran the
+tests, then restored the file from its backup in `/tmp/wc-p07b-esc/mut-r3/`.
+`cmp` showed each restored file identical to its backup, and `git diff`
+was empty. The logs are in the same folder.
+- **Item 2a.** `syncPairingSection` no longer resets the line. The revoked
+  and paired-elsewhere tests fail.
+- **Item 2b.** The load path doesn't set the line. The "opened after a
+  refusal" test fails.
+- **Item 3a.** The popup shows the bridge's raw message for a refusal. The
+  413, 409 and handler-message tests fail.
+- **Item 3b.** Bridge-client's `invalid_response` message goes back to
+  "didn't match the expected shape". The bridge-client H2 test and the
+  Pairing-line foreign-server test fail.
+  - The first run of this plant passed everything. Status maps the code
+    itself, so nothing tested the message. I added the two tests, and the
+    plant now fails.
+- **Item 3c.** `statusFailureMessage` loses the foreign-server mapping. The
+  non-envelope 401 case fails.
+- **Item 3d.** Without the 5xx mapping, the 5xx test fails.
+- **Item 3e.** Without the `token_replaced` mapping, its test fails.
+- **Item 5.**
+  - 5a: popup pauses go red. The not-paired, 401 and 403 tests fail.
+  - 5b: popup retries go amber. The runner-down, `invalid_response`, 500 and
+    `token_replaced` tests fail.
+  - 5c: Status alerts go red. Seven tests fail, the four H2 cases and the
+    three H1 cases.
+  - 5d: "Pairing…" goes amber. Its test fails.
+- **Nit 1.**
+  - 1a: any pause holds, as in revision 2. Eight tests fail, including the
+    LIFT race.
+  - 1b: the stamp uses the pairing read after the attempt. The pre-attempt
+    stamp test and the LIFT race fail.
+- **Nit 3.** The alarm is armed before the entry is written. The R6 race
+  fails.
+- **Nit 4.** The catch no longer shows **Save as a file**. Both
+  storage-failure tests fail.
+- **Nit 5.** `captureFrame` loses the cancel. The refused-screencast test
+  fails on the unhandled rejection.
+- **Nit 6.**
+  - 6a: the scheme is retried even when matchMedia agrees. Both wrong-theme
+    refusal tests fail.
+  - 6b: a label is accepted after one wait. The three label tests fail.
+
+**Verify chain** on `23199d4`, from the repo root. I moved `extension/dist`
+aside first, so the tree was clean.
+- `pnpm install --frozen-lockfile`: "Already up to date".
+- `pnpm typecheck`: all six packages Done.
+- `pnpm test`:
+  - contracts 16 files, 235 tests;
+  - job-assistant 6 files, 151 tests;
+  - runner 14 files, 155 tests (gates: approval 4/4, tool-surface 4/4,
+    missing-tools 8/8, skills 4/4);
+  - catalog 26 files, 168 tests;
+  - extension: 21 files passed and 1 skipped; 319 tests passed and 5
+    skipped (the tests that need `dist/`);
+  - `scripts/*.test.mjs`: pass 2, fail 0.
+- `pnpm -r lint`: 6/6 clean. `pnpm check:fixtures`: clean.
+- `git status --porcelain`: empty.
+- Extension build, then `EXTENSION_DIST_REQUIRED=1 pnpm --filter
+  @workflow-catalog/extension test`: 22 files, 324 tests passed, 0 skipped.
+- `pnpm --filter @workflow-catalog/extension test:e2e`, twice: "36 passed"
+  both times (2.1m, then 2.0m). Port 4310 was free before and after each
+  run, and the tree stayed clean.
+
+Since revision 2, extension unit tests went from 273 to 324 (20 to 22
+files, with `dist/` built). e2e went from 32 to 36, and the screenshots
+from 46 to 66.
+
+**CI.**
+- 35913982448 on `628fba1`: failure. The e2e 409 test still expected
+  revision 2's raw message; its update came in the next commit. I had
+  pushed at a unit-green step without running e2e first.
+- 35915946218 on `555d87f`: success (4m25s).
+- `23199d4` and this report's commit: the runs are in the reply to the
+  orchestrator.
+
+**Skipped, and why.**
+- There was no real screen reader, as before. Announcements are checked in
+  the DOM and with axe.
+- Three states can't be reached from a real Save against the real bridge,
+  so each uses a stand-in on 4310:
+  - the 409 refusal;
+  - another program on the port;
+  - a re-pair landing mid-Save. Here the stand-in swaps tokens from the side
+    panel page, which runs no status check of its own.
+- Integration's newest commits, up to `a2326c8` (logs only), are not
+  merged.
+
+**Assumptions and judgment calls.**
+- **Another program on the port** is neutral in the popup. It is an
+  automatic retry, and the worker keeps trying. Settings' Status says the
+  same thing in amber, since that is where the person acts by closing the
+  program.
+- **The expired Pairing line** repeats Status's alert in a shorter form
+  ("Your pairing expired or was revoked."), the wording the handoff
+  proposed. It is amber, and the code field is described by it.
+- **A pause earned under the current pairing** (that pairing's own token or
+  origin refused) is kept by `resumeAfterPairing`. Resending under the same
+  pairing can only repeat the refusal.
+- **The stamp is read before the attempt**, not after. A refusal is filed
+  under the pairing it was about, so a pairing that lands mid-request
+  leaves the capture active.
+- **`CHECKING_LABEL_MIN_MS`** is 600 ms.
+- **Refusal reasons** translate the bridge's own codes (`runner/server/`'s
+  `http.ts`, `events.ts` and `app.ts`) and keep handler messages as they
+  are. `not_found` reads "This version of the runner doesn't take
+  captures.", since only an older runner would lack the route.
+- **Two part A states stay red:** the popup's can't-capture fallback and a
+  refused file import in Settings. Both are refusals where nothing was
+  kept, which is H1's red, and the round-3 critic didn't raise either.
+- **A storage failure in the popup** is red, because the capture wasn't
+  kept, and offers only **Save as a file**.
+- **Two sentences in the DOM.** A space separates a refusal's lead sentence
+  from its reason, so the region's text reads as two sentences. The reason
+  still sits on its own line.
+
+**Known limitation (nit 2).** When the runner refuses a token, the
+extension forgets it only if it is still the stored one. chrome.storage has
+no compare-and-set, so a pairing stored in the few milliseconds between
+that check and the removal is lost with it. If you pair at the exact moment
+an old token is refused, pair again.
+
+**Disclosures.**
+- The harness refused two commands as too complex:
+  - a `for` loop with a `jq` filter around `gh run list`;
+  - a `for` loop with `cmp` and `git diff`.
+
+  I split each into plain commands, as the clarified rule allows. No deny
+  rule or permission check refused anything.
+- This round's first push (`628fba1`) went red in CI, as above.
+
+**Sharpen next time.** Put the tone rules (H1) and the message rules (H2)
+in the packet before part B starts. Three rounds of UI review converged on
+them.
+
 ### 2026-09-22 — Revision 2 (part B, iter-005 Opus escalation)
 
 PR #12 came back REVISE from both reviewers in round 2, with CI red (run
