@@ -639,7 +639,7 @@ describe("UI issue 2: route messages name things for a person", () => {
     expect(messages[4]).toBe("Work samples is not marked provided. Mark it provided, then extract.");
   });
 
-  it("J5: every message a source's routes send is one short sentence, 90 characters at most, for every label", async () => {
+  it("J5: every message a source's routes send is 90 characters at most, for every label", async () => {
     const fake = fakeExtraction([{ status: "completed", extract: [{ text: "Staff roles, remote-first.", kind: "fact", evidenceRef: "pasted.txt#1", evidenceQuote: "Staff roles, remote-first." }, { ...LED_CLAIM }] }]);
     const bridge = await realBridge(fake);
     const messages: string[] = [];
