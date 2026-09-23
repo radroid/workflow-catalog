@@ -1,7 +1,7 @@
 # P07 · Chrome extension
 
 Status: claimed (part B)
-Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus); part B iter-004 implementer (Sonnet); part B revision 1 iter-004 implementer (Sonnet); part B revision 2 iter-005 escalation implementer (Opus); part B revision 3 iter-005 escalation implementer (Opus)
+Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus); part B iter-004 implementer (Sonnet); part B revision 1 iter-004 implementer (Sonnet); part B revision 2 iter-005 escalation implementer (Opus); part B revision 3 iter-005 escalation implementer (Opus); part B revision 4 iter-005 escalation implementer (Opus)
 Blocked by: P02 (pairing and bridge), P06 (manifests and commands)
 Owns: extension/
 Spec: F6 (capture path), F9, §7 rule 3, browser-boundary.md (all sections; the nine gates are this packet's definition of done)
