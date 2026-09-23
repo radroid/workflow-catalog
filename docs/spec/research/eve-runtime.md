@@ -269,6 +269,28 @@ export default eveChannel({
       - Share logic in directive-free modules under `runner/agent/lib/`.
       - Keep a thin executor and step wrapper in each root.
       - Never re-export or copy a tool's logic into the eval agent. Evals must exercise the shared helper, not a copy.
+15. **An aborted client turn can end quietly as `completed`.** This is not in the docs. It was verified at eve@0.63.0 during the P08-A review (2026-09-22; logs/blocks.md, "P08-A peer review, round 1"), by probes with the real `Client` and a stubbed `fetch`, and by reading `dist/src/client/`.
+    - `open-stream.js` `followStreamIterable`: when the `signal` aborts while the client is opening or reopening the event stream, or while it backs off between attempts, the stream returns without throwing (`catch … if (signal.aborted) return`, and the `aborted` checks after the read loop and after `sleep`). An abort while an open stream is being read does throw.
+    - `session-utils.js` `summarizeTurnEvents`: `status` is `waiting` or `failed` only when a boundary event (`session.waiting`, `session.failed`) was seen. With no boundary it defaults to `completed`. So `response.result()` resolves `completed` for a turn that never finished.
+    - The client reconnects an idle stream after 15 s (`streamReadIdleTimeoutMs`, default 15e3). A turn that goes silent more than about 15 s before its deadline therefore hits the quiet path.
+    - **Silence without an abort** (checked 2026-09-23, P03 round-3 review):
+      - A turn response (`MessageResponse`, whether through `result()` or by iterating it) follows its stream with `keepAlive`, so eve reopens a silent stream without limit.
+      - If that stream ends before the turn boundary without an abort, eve throws "The response stream ended before the accepted message reached its turn boundary." (`session.js`, when the send reported a delivery id). So on a turn response, the only quiet end is the abort.
+      - A manually opened `session.stream()` stops quietly after five reopens in a row that bring no event (idle policy `maxAttempts: 5`, each reopen after 15 s of silence). eve's docs say it "eventually stops after repeated empty streams" (`guides/client/streaming.mdx:154`).
+    - `MessageResponse.cancel()` sends nothing until the client has seen the turn start, and nothing once the turn is parked. `ClientSession.cancel()` (`POST …/session/:id/cancel`) is the reliable cancel.
+    - Pattern for every caller that sets a timeout:
+      - After `result()` resolves, check `signal.aborted`.
+      - Treat a turn as ok only when `summarizeTurnEvents(...).boundary` (a terminal `session.*` event) is present.
+      - Cancel through the session.
+      - Read the stream event by event, so partial `step.completed` usage survives a timeout.
+    - **Which boundary means what.** Don't confuse our "parked" with eve's.
+      - A normal conversation turn, which is what `client.sessions.create` gives, ends `turn.completed → session.waiting`. eve's docs call `session.waiting` "parked and ready for the next message": that is idle between turns, and it is **ok**.
+      - `session.completed` ends only task-mode sessions, such as a schedule firing. The P02 spike (`eve-spike.md`) recorded both sequences.
+      - A turn is **waiting on the person** only when `input.requested` carried a non-empty request list (`result().inputRequests`).
+      - `turn.cancelled` (always followed by `session.waiting`) is not ok.
+      - A failure event, or a `session.failed` boundary, is not ok.
+      - Found in the P08-A round-2 review (2026-09-22): a harness that read `session.waiting` as "needs input" recorded every normal run as a failure.
+    - Callers: P08-A `runTurn` (fixed in its revision), P03's extraction route (R3 timeout), and P02's `checkModel` (a runner follow-up).
 
 **Recommended pin (read 2026-09-20):** `"eve": "0.63.0"` exact (no caret), `"ai"` and `"zod"` at whatever `eve init` writes for 0.63.0, Node `24` in `.nvmrc`/`engines`, and read docs from `node_modules/eve/docs` at that version rather than `main`. Re-evaluate the pin deliberately; do not float `eve@latest` in the template.
 

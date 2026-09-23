@@ -865,3 +865,186 @@ UI notes carried along: `aria-pressed` on a flipping label; autofocus only on fu
 - **D15:** an edit that adds an always-ask item re-opens the question.
 - **D16:** all 48 screenshots.
 - Contracts follow-up (for a later contracts packet): withdrawals are stored as `accepted` revisions, because the revision status list is closed.
+
+## 2026-09-22 — P08-A peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** high
+
+**Charter / context:** an Opus reviewer and an Opus UI critic reviewed PR #13 at 0af2945: the run log, the budget pause, the run harness, and the Runs and Settings Budget pages.
+**Verdict text / failure detail:** the full findings are in `logs/handoff/P08-A-round-1-review.md`.
+- **Reviewer: VERDICT: REVISE — 5 issues.**
+  - What holds:
+    - the chain is green at the head and on the merge, and CI passes;
+    - all four mutation proofs reproduce;
+    - tests pass in 5 time zones;
+    - the seven eve facts are verified;
+    - the API guard, bounds and uuid checks hold;
+    - there are no HTML sinks, and the scope is clean.
+  - Issues:
+    1. A timed-out turn is recorded as a success, with no cancel, because eve's client ends quietly on an abort during stream open or reopen.
+    2. `withRun` rejects on empty error text, which breaks decision 3.
+    3. Usage is lost on a timeout.
+    4. The idempotency lookup is capped at 200 records, not the 14-day window.
+    5. Budget writes race.
+- **UI critic: VERDICT: REVISE — 9 issues.**
+  1. The failure pill (P02's `.badge.fail`) fails contrast.
+  2. Error text fails contrast.
+  3. Resume drops focus.
+  4. No page error for out-of-range limits.
+  5. Long model ids scroll sideways at 390.
+  6. The empty state is doubled.
+  7. UUIDs, "n/a" and error codes are visible.
+  8. Amber is used for information.
+  9. The corrupt-budget state is unexplained, and "Saved." contradicts the pause.
+
+**Action taken:** one combined revision went to the same Sonnet implementer (its one round), with decisions G1–G10:
+- **G1:** stream turns event by event, require a boundary event and no abort, and cancel through the session, with real-`Client` regression tests.
+- **G2:** `withRun` never rejects.
+- **G3:** idempotency scans the whole window.
+- **G4:** budget writes are serialised now, not deferred to P08-B.
+- **G5:** a 429 in `statusCode` or `upstreamStatusCode` counts as a provider limit when no id is present.
+- **G6:** `paused` stays the manual pause; consumers derive "daily limit reached" from the two numbers.
+- **G7:** approved `runner.css` edits, for `.badge.fail` contrast and form-control borders only.
+- **G8:** shortened paths with Copy path, and no model or code noise.
+- **G9:** skipped files are named.
+- **G10:** "Did not finish (or still running)".
+- The screenshots grow to 24, adding the corrupt and daily-limit states.
+
+## 2026-09-22 — eve client ends an aborted turn quietly as "completed" [DRIFT]
+
+**Iter:** 005
+**Source:** contract-drift
+**Severity:** high
+
+**Charter / context:** the P08-A reviewer found that eve@0.63.0's client stream returns without throwing when the signal aborts during stream open, reopen or backoff (`dist/src/client/open-stream.js`). `summarizeTurnEvents` then defaults the status to `completed` when no boundary event was seen (`session-utils.js`). The orchestrator checked both in the installed code. `MessageResponse.cancel()` sends nothing before the turn starts; `ClientSession.cancel()` is the reliable cancel.
+**Verdict text / failure detail:** a caller that sets `AbortSignal.timeout` and trusts `response.result()` records a timed-out turn as success. Three callers are affected:
+- P08-A `runTurn`;
+- P03's extraction route (R3 timeout);
+- P02's `checkModel` in `runner/server/eve-gateway.ts`.
+
+**Action taken:**
+- Recorded as `docs/spec/research/eve-runtime.md` §8 item 15, with the safe pattern.
+- P08-A fixes it in its revision (G1).
+- The P03 escalation implementer was told to apply the pattern to the extraction route and to test it.
+- **Follow-up:** `checkModel` (P02's file) needs the same fix. It is queued as a runner follow-up for after P03 and P08-A merge, and must reuse P08-A's `runTurn` rather than a third copy.
+
+## 2026-09-22 — P07-B escalation used Edit after a refused heredoc [DRIFT]
+
+**Iter:** 005
+**Source:** peer-review (self-disclosed by the implementer)
+**Severity:** low
+
+**Charter / context:** the harness refused the P07-B escalation implementer's heredoc append to `extension/src/shared/bridge-client.test.ts` as too complex. The implementer made the same append with the Edit tool and disclosed it in its report.
+**Verdict text / failure detail:** this was not a guardrail bypass.
+- The refusal came from the harness's command-complexity rule, not from a deny rule or a permission check, and Edit is the tool meant for file edits.
+- The rule "never reroute after a refusal" is aimed at deny-rule and permission refusals: `rm -rf`, force-push, secrets, the worktree isolation guard.
+
+**Action taken:** prompts from now on say:
+- If a command is refused as too complex, split it, or use the dedicated tool (Edit or Write) for file changes.
+- If a command is refused by a deny rule or a permission check, stop and report. Never route around it.
+
+The P07-B escalation reached d0e2b2c, with CI green on every pushed head. Round 3 (Opus reviewer and UI critic) was dispatched at 16:05.
+
+## 2026-09-22 — P07-B peer review, round 3 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** a fresh Opus reviewer and a fresh Opus UI critic did a full review of PR #12 at d0e2b2c (the Opus escalation's revision 2), including everything round 2 never reached. The findings are in `logs/handoff/P07-B-round-3-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: REVISE — 1 issue.** The issue is documentation only: the README's manual smoke checklist still describes Save downloading a file.
+  - The chain is green at the head and on the merge.
+  - dist vitest 273, 0 skipped. CI e2e 32/32 with no retries.
+  - The guard is not weakened: planting a weakening makes the reviewer's probe fail.
+  - 16 of 18 race probes pass.
+  - Nits: a narrow pause window just after pairing, a `forgetInvalidToken` window, an untested ordering, a full queue without a file fallback, a screencast error handler, a guard test, and report counts.
+- **UI critic: VERDICT: REVISE — 5 issues.** Every round-2 item is fixed. About 110 axe audits are clean, active text is at least 7.6:1, and nothing scrolls sideways at 390. The issues:
+  1. The Pairing card keeps a stale outcome after a revoke.
+  2. The "something else on the port" alert contradicts the line below it.
+  3. The 409 message shows `eventId` developer text.
+  4. One command is outside `<code>`.
+  5. Amber is used for waiting and retries.
+
+**Action taken:** one combined revision 3 went to the same Opus escalation implementer, with decisions H1–H4:
+- **H1:** amber means the person must act, including the 401/403 re-pair pauses. Progress and retries are neutral. Red means the capture was not kept.
+- **H2:** refusals are plain sentences with a next step, with no field names or HTTP codes.
+- **H3:** reviewer nits 1 and 3–7 are fixed now; nit 2 is documented as a known limitation.
+- **H4:** retake the affected screenshots.
+
+## 2026-09-22/23 — A weekly usage limit stopped all five agents, and the loop stalled about 23 hours [FAILURE]
+
+**Iter:** 005
+**Source:** smoke-failure (provider usage limit)
+**Severity:** high
+
+**Charter / context:** at about 17:05 on 2026-09-22, all five running agents stopped with HTTP 429 "You've hit your weekly limit · resets 4pm (America/Toronto)":
+- P07-B revision 3;
+- the P08-A round-2 reviewer and UI critic;
+- the P03 round-3 reviewer and UI critic.
+The orchestrator's own fallback wake-up couldn't run either, so the loop stalled until the owner re-kicked at 16:04 on 2026-09-23.
+**Verdict text / failure detail:** nothing was lost.
+- P07-B had unpushed local work (566c64b).
+- Every other branch was pushed, and the reviewers' scratch was in /tmp.
+- No process held a port.
+
+**Action taken:**
+- All five agents resumed with SendMessage, keeping their context. Each message carried that agent's code word.
+- Lesson: this is the second hard stop in one day from running several Opus agents at once. The first was the session limit at about 14:45.
+  - A weekly limit can stall the loop for up to a week, and no wake-up can recover from it.
+  - Total consumption drives it, not parallelism. So confirmation rounds from now on check only the items that changed.
+  - Moving UI critics to Sonnet is the owner's call, because the overnight prompt specifies Opus for every reviewer.
+
+## 2026-09-23 — P08-A peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** high
+
+**Charter / context:** an Opus reviewer and an Opus UI critic reviewed PR #13 at 371cd63 (the Sonnet implementer's revision 1). The findings are in `logs/handoff/P08-A-round-2-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: REVISE — 2 issues.** Round 1's abort points, usage, races and idempotency are all fixed.
+  1. G1's fix reads eve's normal `session.waiting` boundary as "parked", so every real run would record a failure and idempotency would never say done. At eve@0.63.0, conversation turns end `turn.completed → session.waiting`.
+  2. `withRun`, `/status` and the budget route still reject or return 500 when today's run folder can't be read.
+- **UI critic: VERDICT: REVISE — 3 issues.** Round 1's contrast, focus, bounds, overflow, empty state and amber issues are fixed, and G7 regresses no page.
+  1. The skipped-file note shows full UUID paths.
+  2. The corrupt-budget recovery messages are untrue after a Save.
+  3. Copy path has no visible feedback below the first screen.
+
+**Action taken:**
+- The Sonnet implementer's one revision round was spent, so a fresh **Opus escalation implementer** took the combined list, with decisions I1–I4:
+  - **I1:** ok is a `session.waiting` or `session.completed` boundary with no failure, no cancel and no abort. A turn waits on the person only with a non-empty `input.requested`.
+  - **I2:** nothing before the body can reject. An unreadable run folder becomes a synthetic pause, and `/status` stays 200.
+  - **I3:** nits 1–8.
+  - **I4:** the UI issues and polish.
+- `eve-runtime.md` §8 item 15 now spells out which boundary means what.
+- The P03 round-3 reviewer was asked to check that P03's extraction route classifies a normal turn as ok.
+
+## 2026-09-23 — P03 peer review, round 3 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** medium
+
+**Charter / context:** an Opus reviewer and an Opus UI critic reviewed PR #11 at bbfa00e, the Opus escalation's revision 2. The findings are in `logs/handoff/P03-round-3-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: REVISE — 1 issue.** The chain is green at the head and on the merge. V1–V6, VN1–VN11 and D8–D16 hold. The normal `turn.completed → session.waiting` turn is read as finished.
+  1. A `turn.cancelled` extraction turn counts as a success: the route records the content hash, so the same text is never extracted again.
+  - Nits: N1 (the D8 wait compounds for queued writers), N2–N4 (untested guards), N5, N6 (marker-shaped claim text breaks the runner's own file) and N7 (`GET /readiness` doesn't reconcile).
+- **UI critic: VERDICT: REVISE — 3 issues.** Round-2 issues 1 and 4–9 hold, as do D11, D13 and D16, and axe is clean across 98 variants.
+  1. D9 refusals are a 313-character paragraph with a marker's UUID, shown three times, with a false "Nothing was saved" after Save & extract.
+  2. Screen readers hear some outcomes twice, and the focused control is rebuilt after every action.
+  3. The pinned line reaches 7 lines at 390 and can cover the focused editor.
+
+**Action taken:**
+- Revision 3 went to the same Opus implementer, with decisions J1–J8:
+  - **J1:** `turn.cancelled` is not ok.
+  - **J3–J6:** the UI issues and polish.
+  - **J7:** nits N1–N4, N6 and N7.
+  - **J8:** screenshots.
+- **J2 dropped N5.**
+  - A turn response follows with `keepAlive`, so eve never gives up on a silent stream.
+  - If the stream ends early without an abort, eve throws. Only a manually opened `session.stream()` stops quietly.
+  - `eve-runtime.md` §8 item 15 now says so.
