@@ -27,7 +27,244 @@ Opening tabs from a schedule (never), catalog cron (none).
 
 ## Report
 
+### 2026-09-23 — Revision 2 (iter-005 Opus escalation)
+
+Round 2 returned REVISE (reviewer 2 issues, one high; UI critic 3), after the Sonnet implementer's one revision round. I took over `packet/P08-A` at `371cd63` and merged `origin/overnight/integration` normally (`5059f69`; no rebase, amend or force-push). The work list is `logs/handoff/P08-A-round-2-review.md`, decisions I1–I4. No message claiming to be the orchestrator arrived during this round, with or without the code word.
+
+Commits:
+- `78386b2`: I1, I2 and the backend part of I3.
+- `cf6cd48`: I4, the nit-8 UI change, and the screenshots.
+- `e17d01d`: the README.
+- This report.
+
+**I1: turn classification (reviewer issue 1, high).** `runTurn` follows `eve-runtime.md` §8 item 15. It reads the stream with `for await` and tracks the model, usage, the number of `input.requested` requests, `turn.cancelled`, the first failure event and the latest boundary. It then classifies the turn in this order:
+
+1. **timeout**: the signal fired. The session is cancelled.
+2. **failed**: any failure event (`step.failed`, `turn.failed`, `session.failed`). A provider limit still pauses the budget.
+3. **cancelled**: a new `TurnStatus`, for `turn.cancelled`. We send no cancel of our own.
+4. **failed**: no boundary event arrived.
+5. **parked**: only when the `input.requested` list is non-empty. The session is cancelled.
+6. **ok**: a `session.waiting` or `session.completed` boundary with none of the above.
+
+Partial tokens and the model are kept on every path.
+
+Tests:
+- A real `Client` against a stubbed `fetch` replays the spike's exact normal conversation sequence (`turn.completed → session.waiting`, 11/2 tokens, `probe-model`). It gives `ok` with 0 cancels.
+- Through `withRun`, the same sequence records `success`, and `hasSucceededWithIdempotencyKey` then says done.
+- The spike's task sequence (`session.completed`) is also ok.
+- The fakes' ok paths now end `turn.completed → session.waiting`. One `session.completed` case is kept, and the 429-storm fakes were updated the same way.
+- The park tests include a real `InputRequest`-shaped `input.requested`, and give 1 cancel. An empty `input.requested` list is not a park.
+- `turn.cancelled → session.waiting` gives `cancelled` with no cancel, and through `withRun` it records a failure that is not done.
+- A `session.failed` boundary gives `failed`.
+
+**I2: nothing before the body can reject (reviewer issue 2).**
+- `getBudgetState` never throws. It catches the failure of `countCountableRuns` for today and returns a synthetic pause:
+  - the reason is `run log unreadable (runs/<date>/)`;
+  - `pauseKind` is `run_log_unreadable` and `runLogUnreadable` is true;
+  - it is derived on every read and never stored, so it clears once the folder is readable.
+- `pauseKind` is set exactly when paused. When more than one pause applies, the first match wins: `budget_unreadable`, then `budget_repaired`, then `stored`, then `run_log_unreadable`.
+- `listRuns` reports an unlistable `runs/` as one skipped entry, `runs/`.
+- `/status` stays 200. `status()` catches anything `getBudgetStatus` throws, logs it, and reports `{ dailyRunLimit: 10, runsUsedToday: 0, paused: true, pausedReason: "budget status unavailable" }`.
+- `withRun`:
+  - An empty or whitespace-only `idempotencyKey` is logged and resolves with an in-memory failure record, `The run did not start: it had no idempotency key.`. Nothing is written and the body is never called.
+  - The refusal check and `startRun` sit in a try/catch, inside the budget lock as before. Any error there is logged and resolves with an in-memory failure record, `The run did not start: its run record could not be written.`.
+  - Where a record can be written, the run is refused with a `paused` record carrying the run-log reason.
+- Tests:
+  - chmod 000 on today's folder:
+    - `withRun` resolves with an in-memory failure, logged, and the body runs 0 times;
+    - the store gives the synthetic pause, Resume can't clear it, and it clears once readable;
+    - the routes give `/status` 200 with the pause, and `/api/runs/budget` and `/api/runs` 200.
+  - chmod 300 on today's folder: a `paused` record with the run-log reason is written.
+  - chmod 500 on `runs/`: an in-memory failure.
+  - chmod 000 on `runs/`: `listRuns` gives `{ records: [], invalidCount: 1, skippedFiles: ["runs/"] }`; `/status` and the list stay 200.
+  - An empty key and a whitespace-only key.
+  - A mocked `getBudgetStatus` that rejects: `status()` returns the fail-closed budget, and `GET /status` is 200 and valid.
+  - The chmod tests skip on Windows and as root.
+
+**I3: nits 1–8.**
+1. **`withTz("Pacific/Kiritimati")`.** New cases:
+   - `2026-09-22T12:00Z` is `2026-09-23` in Kiritimati;
+   - `2026-09-22T05:00Z` is `2026-09-21` in Pago Pago;
+   - a run under Kiritimati files under `runs/2026-09-23/`, and today's count finds it.
+2. **Partial tokens and model on the quiet-end abort paths.**
+   - Abort point 2, through `withRun`, records 7/3 tokens, `probe-model` and `No answer within 0.3 s.`.
+   - The idle-stall case keeps the model, and the control case asserts both.
+   - A new case covers an abort during the 503 open-retry backoff.
+3. **The G2 fallbacks are tested.**
+   - Fallback 1: tokens of 1.5 and −1 fail validation, so the minimal record is written, and this is logged.
+   - Fallback 2: `runs/<date>/` is set to chmod 500 during the body. The run resolves with an in-memory record, and the honest placeholder stays on disk.
+   - `throw undefined`, a message-less stream error and a whitespace-only detail all get the fixed sentence. `errorMessage` returns "" for anything without a message, and `nonEmptyOrFallback` trims.
+4. **`session.cancel()` is bounded.** It now runs with `{ signal: AbortSignal.timeout(5000) }`. The test runs an eve that never answers the cancel POST: the turn resolves `timeout` between 5.2 s and 8.3 s, and the request carried an aborted signal.
+5. **The G4 race test asserts both writes.** Over 40 trials it counts `pausesLost` and `limitsLost`, and both must be 0.
+6. **The README duplicate is removed**, and the P08 lines are updated.
+7. **Report corrections**: see below.
+8. **A timed-out turn keeps its duration and tokens.** `withRun` sets the model to the new `UNKNOWN_MODEL` ("unknown") when a turn was sent but no `step.started` arrived. The Runs page then shows duration and tokens and hides only the model. `NO_MODEL` ("n/a") still means the model was never called, and still hides the whole line (G8).
+
+Nit 9 (a cancel on a parked session is a no-op on the server) is documented in the `run-harness.ts` header.
+
+**I4: UI critic issues 1–3 and polish.**
+1. **Skipped-file note.**
+   - Each file shows as `shortRunPath()` in `<code>`, with the full path in `title`, one per line in a `<ul>`, followed by "and N more.".
+   - The note became a `<div>`.
+   - New this round: a folder entry (`runs/<date>/` or `runs/`) makes the count read "run records or folders".
+2. **Budget messages come from the returned state.**
+   - Resume returns `restoredDefaults`: true only when the file was unreadable at that moment. The message is:
+     - "Runs resumed with the default limits: 10 runs a day, 5 jobs per run." when defaults were restored;
+     - otherwise "Runs resumed.";
+     - "Resumed, but runs stay paused: today's run log can't be read." or "Runs are still paused." if still paused.
+   - A repairing Save stores the reason `budget settings were unreadable (runs/budget.json)`, and the note reads "Your limits are saved now. Press Resume to restart runs; until then, Save keeps runs paused.".
+   - The Save message follows the returned state:
+     - "Budget saved.";
+     - "Budget saved. Runs stay paused until you press Resume.";
+     - "Budget saved. Runs stay paused until the run log can be read.".
+   - The run-log pause shows its path in `<code>`, hides Resume, and shows usage "unknown".
+   - `wasCorrupt` and `lastState` are gone. Notes are keyed on `pauseKind`.
+3. **Copy path.**
+   - "Copied" or "Couldn't copy" appears in an `aria-hidden` span right after the pressed button, and the span's width is always reserved. It clears after 4 s, or when another button is pressed.
+   - The live region still makes the one announcement.
+4. **Polish.**
+   - **P2:** the lede reads "How this runner behaves, one section per concern. Today that is the run budget; pairing is on the Status page."
+   - **P4:** the reason sits beside the pill in a flex row, and wraps beside it rather than under it.
+   - **P9:**
+     - Settings' status line reserves one line at desktop widths and two at ≤40rem (every Budget message fits); the Runs page's reserves one line;
+     - "Runs used today" and the daily-limit note moved below Save;
+     - `aria-invalid` uses an inset box-shadow, so the input doesn't change size.
+   - **Names:** each Copy path has the aria-label `Copy path — <kind>, <time>`, and each View JSON summary has the same pattern.
+   - **Focus:** `#budget-title:focus-visible` uses a 2px `var(--ring)` outline.
+   - **JSON view:** it shows the record as it is on disk, with no `path` or `absolutePath`. Both paths are listed above it in a `<dl>`: "In the workspace" and "On this computer".
+   - New this round: the pause reason's `<code>` is `white-space: nowrap`. At 390 it had broken inside the date (`runs/2026-09-` / `23/`).
+
+**Screenshots.** I retook all 24 and added 16 new ones:
+- `runs-skipped`;
+- `runs-copy-path` ("Copied" beside the 7th card);
+- `settings-budget-repaired` (right after the repairing Save, with its message);
+- `settings-budget-run-log-unreadable`.
+
+All are full page, light and dark, at 1280×800 and 390×844.
+
+The harness was an in-process bridge on 127.0.0.1:4330 with /tmp workspaces under `/tmp/p08a-esc-ui/ws/`. The data is fictional (Ada Quill, Northwind Labs). One record's failure text is a hostile HTML and prompt-injection string, and it renders as inert text.
+
+**Browser verification (Playwright + axe-core, scripts in `/tmp/p08a-esc-ui/`, results in `log.json` there).**
+- **Coverage:** every state was checked in both themes at 390 and 1280. The states were Runs (records, skipped, empty, run log unreadable, after a copy) and Settings (normal, paused, corrupt, repaired, at the limit, run log unreadable).
+- **Audit results:**
+  - 0 serious or critical axe findings, and no other findings;
+  - no horizontal scroll at 390;
+  - every probed text measured ≥ 4.5:1;
+  - no console errors;
+  - no full UUID in visible text;
+  - no UI-authored path outside `<code>`.
+- **P9:** Save moved 0 px at both widths, and the pointer was still on Save afterwards, in six cases:
+  - an out-of-range limit;
+  - an out-of-range cap;
+  - a Save that reaches the daily limit;
+  - a repairing Save;
+  - a second Save while paused;
+  - a Save with the run log unreadable.
+- **Copy path:**
+  - the button moved 0/0 px;
+  - the clipboard held the absolute path;
+  - "Copied" appeared beside the button, in the viewport;
+  - the live region had exactly one write, "Path copied.";
+  - pressing another card cleared the note, and it also cleared after 4 s;
+  - a refused copy showed "Couldn't copy" and wrote once, "Error: Couldn't copy the path.";
+  - 14 cards gave 14 unique Copy path names and 14 unique View JSON names.
+- **Focus:** a keyboard Resume leaves focus on `#budget-title` with `:focus-visible` and `solid 2px` in the `--ring` colour. A pointer Resume focuses it with no ring. The summary's ring is `--ring` as well.
+- **JSON view:** the `<pre>` parses to exactly the file on disk.
+
+**Report corrections (nit 7), for Revision 1 below.**
+- **G1:** it said a turn is ok once any boundary (`session.completed`, `session.failed` or `session.waiting`) is seen. At `371cd63` that was not what the code did:
+  - `session.failed` was a failure, since `isTurnFailureEvent` covers it;
+  - `session.waiting` was parked;
+  - only `session.completed` was ok.
+
+  That is reviewer issue 1: every real conversation turn recorded a failure.
+- **"Mutation proofs" 1–3** were regression tests, not mutations; no source was changed for them.
+- **G4, "keeps both":** the race test asserted only that the pause survived. Mutation N5 below loses 40 of 40 limit writes, and that old assertion would still have passed.
+- **G3:** one description conflated two tests:
+  - The >200 test had 4×50 = 200 newer records, with the success 5 days back. It now has 4×51 = 204, and also asserts that `listRuns`' 200-record page excludes the success.
+  - The early-exit test has 300 records over 10 days, with the match alone in the newest (11th) day, and a `readJson` spy under 60 calls.
+- **G4 part 2's failure text** is `expected [ 'success', 'success' ] to deeply equal [ 'paused', 'success' ]`, not `expected +0 to be 2`.
+
+**Tests, real output.**
+- **P08-A files:**
+
+  | File | Tests |
+  |---|---|
+  | `run-harness.test.ts` | 46 (was 28) |
+  | `run-harness-eve-client.test.ts` | 12 (was 5) |
+  | `budget.test.ts` | 22 (was 17) |
+  | `runs.test.ts` | 28 (was 24) |
+  | `routes-runs.test.ts` | 19 (was 16) |
+  | `routes-runs-status-fallback.test.ts` (new) | 2 |
+  | **Total** | **129** |
+
+- **The six files under three zones:** `TZ=Pacific/Kiritimati`, `TZ=Pacific/Pago_Pago` and `TZ=UTC` each gave `Test Files 6 passed (6)`, `Tests 129 passed (129)`.
+- **Full chain from the repo root at `e17d01d`.** The code is identical to this commit; only this report differs.
+  - `pnpm install --frozen-lockfile`: "Already up to date".
+  - `pnpm typecheck`: 6/6 Done.
+  - `pnpm test`: all green.
+
+    | Workspace | Test files | Tests |
+    |---|---|---|
+    | contracts | 16 | 235 passed |
+    | job-assistant | 6 | 151 passed |
+    | extension | 16 | 130 passed, 2 skipped |
+    | runner | 20 | 284 passed, plus `EVALS 4`, `Results: 4 passed`, `Gates: 20 passed` |
+    | catalog | 26 | 168 passed |
+    | `scripts/*.test.mjs` | – | 2 passed |
+
+  - `pnpm -r lint`: 6/6 Done, zero warnings.
+  - `pnpm check:fixtures`: exit 0.
+  - `git status --porcelain`: empty.
+
+**Mutation proofs.** Each mutation was an exact-string replacement in the real source (`/tmp/p08a-esc/mut.sh` and `mutations/spec/*.json`). I ran the named tests, restored the file from a `/tmp/p08a-esc/backup/` copy, and confirmed it clean with `git diff --quiet`. All 22 were killed:
+
+| Mutation | Tests failed |
+|---|---|
+| **I1a:** `session.waiting` also parks | 6 |
+| **I1b:** `turn.cancelled` treated as ok | 3 |
+| **I1c:** an empty `input.requested` list parks | 1 |
+| **I1d:** no cancel on park | 2 |
+| **I2a:** `getBudgetState` rethrows | 6 |
+| **I2b:** `withRun` rethrows before the body | 2 |
+| **I2c:** empty key not refused | 2 |
+| **I2d:** `status()` rethrows | 2 |
+| **I2e:** `listRuns` rethrows on `runs/` | 2 |
+| **I2f:** run-log pause dropped | 4 |
+| **M05:** timeout drops the model | 3 |
+| **M04:** timeout drops the usage | 2 |
+| **N4:** unbounded cancel | 1 (hit the 15 s test timeout) |
+| **G2a:** whitespace passes | 2 |
+| **G2u:** `throw undefined` becomes "undefined" | 1 |
+| **G2b:** no minimal record | 2 |
+| **G2c:** no in-memory last resort | 1 |
+| **TZa:** UTC getters in `localDateString`, run under ambient `TZ=UTC` | 3 (Kiritimati, Pago Pago, the filing case) |
+| **N5:** `pauseBudget` reads outside the lock | 1: `expected { pausesLost: +0, limitsLost: 40 } to deeply equal { pausesLost: +0, limitsLost: +0 }` |
+| **N8:** no unknown-model placeholder | 1 |
+| **M03:** no timeout cancel | 6 |
+| **M06:** a thrown abort treated as failed | 2 |
+
+M05, G2b, G2c and TZa are the reviewer's survivors.
+
+**What was skipped, and why.** Nothing in I1–I4 was skipped. Schedules are still P08-B. No route calls `withRun` or `runTurn` yet; that is P05's and P08-B's job. I left the `Status:`/`Assignee:` lines alone because this round's Owns covers the report only.
+
+**Assumptions and observations.**
+1. **The two in-memory "did not start" records are never written.**
+   - The empty-key record keeps the key as given (""), so it would not validate against `runRecordSchema`. Nothing persists it.
+   - A whitespace-only key is refused like an empty one, which is stricter than the schema's `min(1)`.
+   - The in-memory last-resort record now computes `durationMs` from `startedAt`.
+2. **`pauseKind` precedence** is my reading of I2 plus decision 2. A stored pause outranks the run-log pause, and `runLogUnreadable` is still flagged alongside it.
+   - After a repairing Save, `/status` reports the new, truthful reason.
+   - A legacy stored `budget settings unreadable (runs/budget.json)` also reads as `budget_repaired`.
+   - `corruptOrigin` is still returned; it is true for `budget_unreadable` or `budget_repaired`. The UI now keys on `pauseKind`.
+3. **The `/status` fallback reason** is a fixed "budget status unavailable". It keeps `runsUsedToday` at 0 and the default limit, so the shape still matches the contract.
+4. **Flagged, not acted on (outside I1's definition):** eve's `session.js` keeps a response attached across an interim `session.waiting` only while an `authorization.required` with a `webhookUrl` is pending. An authorization with no `webhookUrl`, followed by `session.waiting`, would read as ok. P05 should decide whether that is possible for our agent.
+5. **Flagged:** `hasSucceededWithIdempotencyKey` still rejects when a date folder can't be listed. P05 and P08-B must treat a rejection as "unknown", not "not done".
+6. **`AbortSignal.timeout` uses an unref'd timer in Node.** A standalone CLI whose only pending work is a turn can exit before the turn finishes; my /tmp seed script did. The bridge is kept alive by its server, so nothing changed here.
+
 ### 2026-09-22 — Revision 1 (iter-005 implementer, Sonnet successor)
+
+> Revision 2 above corrects parts of this entry: the G1 text, "mutation proofs" 1–3, the G3 and G4 descriptions, and G4 part 2's failure text.
 
 The orchestrator assigned "P08-A (#13) revision 1" after both reviewers (the Class-A Reviewer and the UI critic) returned REVISE on head `0af2945`, carrying code word `f0b39a` (confirmed genuine against the branch/PR state). This is the one revision round the packet gets. Work list authority: `logs/handoff/P08-A-round-1-review.md` (critic's issues 1–9 + polish P1–P11, reviewer's issues 1–5 + nits, orchestrator decisions G1–G10). No other message claiming to be the orchestrator arrived during this round.
 
