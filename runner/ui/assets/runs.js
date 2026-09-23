@@ -1,11 +1,15 @@
-/* global document, navigator, requestAnimationFrame */
+/* global document, navigator, requestAnimationFrame, setTimeout, clearTimeout */
 // The Runs page: the run log, newest first (server/routes/runs.ts GET /api/runs).
 import { el, formatTime, getJson } from "./runner.js";
 
 const $ = (id) => document.getElementById(id);
 
-/** Mirrors store/runs.ts's NO_MODEL: no server import path exists from the browser, so this is duplicated. */
+/** Mirror store/runs.ts's NO_MODEL and UNKNOWN_MODEL: no server import path exists from the browser, so these are duplicated. */
 const NO_MODEL = "n/a";
+const UNKNOWN_MODEL = "unknown";
+
+/** How long the visible "Copied" / "Couldn't copy" note stays next to the button that was pressed. */
+const COPY_FEEDBACK_MS = 4000;
 
 const KIND_LABELS = {
   prepare_newly_saved_jobs: "Prepare newly saved jobs",
@@ -57,58 +61,100 @@ function humanizeReason(error) {
   return match ? error.slice(match[0].length) : error;
 }
 
-/** "runs/2026-09-22/a82b1274-....json" -> "runs/2026-09-22/a82b1274….json" (G8: full path stays in `title`). */
+/** "runs/2026-09-22/a82b1274-....json" -> "runs/2026-09-22/a82b1274….json" (G8: full path stays in `title`). Anything else is shown as it is. */
 function shortRunPath(path) {
   const match = /^(runs\/\d{4}-\d{2}-\d{2}\/)([0-9a-f-]{8})[0-9a-f-]*(\.json)$/i.exec(path);
   return match ? `${match[1]}${match[2]}…${match[3]}` : path;
 }
 
-function copyPathButton(run) {
-  const button = el("button", { className: "button secondary small copy-path", text: "Copy path", attrs: { type: "button" } });
+// The one visible copy note showing right now, so pressing another Copy path clears the previous one.
+let activeCopyFeedback;
+let copyFeedbackTimer;
+
+function showCopyFeedback(node, text, failed) {
+  if (activeCopyFeedback && activeCopyFeedback !== node) activeCopyFeedback.textContent = "";
+  clearTimeout(copyFeedbackTimer);
+  node.textContent = text;
+  node.classList.toggle("failed", failed);
+  activeCopyFeedback = node;
+  copyFeedbackTimer = setTimeout(() => {
+    node.textContent = "";
+  }, COPY_FEEDBACK_MS);
+}
+
+/**
+ * "Copy path" plus a visible result right next to it (I4, UI critic issue 3): the live region at the top of the
+ * page can be far off-screen when the button is pressed deep in the list. The visible note is aria-hidden and
+ * keeps its space reserved in the CSS, so the live region still makes the one announcement and nothing moves.
+ */
+function copyPathControls(run) {
+  const label = `Copy path — ${kindLabel(run.kind)}, ${formatTime(run.startedAt)}`;
+  const button = el("button", { className: "button secondary small copy-path", text: "Copy path", attrs: { type: "button", "aria-label": label } });
+  const feedback = el("span", { className: "copy-feedback small", attrs: { "aria-hidden": "true" } });
   button.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(run.absolutePath);
+      showCopyFeedback(feedback, "Copied", false);
       announce("Path copied.", "success");
     } catch {
+      showCopyFeedback(feedback, "Couldn't copy", true);
       announce("Couldn't copy the path.", "error");
     }
   });
-  return button;
+  return [button, feedback];
+}
+
+/**
+ * The duration/tokens/model line. None for a record that never finished (G10) or never called the model at all
+ * (`n/a`: paused, or a body that failed before any turn; G8). A run that sent a turn but never learned the model
+ * (`unknown`, a timeout before the first step, say) still shows its duration and tokens, and hides only the
+ * model (I3, nit 8).
+ */
+function metaLine(run) {
+  if (!run.finishedAt || run.model === NO_MODEL) return undefined;
+  const meta = el(
+    "div",
+    { className: "run-meta" },
+    el("span", { text: `Duration ${formatDuration(run.durationMs)}` }),
+    el("span", { text: `Tokens in ${(run.tokens?.input ?? 0).toLocaleString()} · out ${(run.tokens?.output ?? 0).toLocaleString()}` }),
+  );
+  if (run.model !== UNKNOWN_MODEL) meta.append(el("span", {}, el("span", { text: "Model " }), el("code", { text: run.model })));
+  return meta;
+}
+
+/** The record exactly as it is on disk: the list API adds `path` and `absolutePath`, which the file itself doesn't have (I4). */
+function recordOnDisk(run) {
+  const record = { ...run };
+  delete record.path;
+  delete record.absolutePath;
+  return record;
 }
 
 function renderRun(run) {
   const unfinished = !run.finishedAt;
   const badgeClass = unfinished ? "neutral" : (OUTCOME_BADGE[run.outcome] ?? "neutral");
   const badgeText = unfinished ? "Did not finish (or still running)" : run.outcome;
-  const jsonLabel = `View JSON — ${kindLabel(run.kind)}, ${formatTime(run.startedAt)}`;
+  const when = formatTime(run.startedAt);
 
   const head = el(
     "div",
     { className: "run-head" },
-    el("span", { className: `badge ${badgeClass}`, text: badgeText }),
     el("span", { className: "run-kind", text: kindLabel(run.kind) }),
     run.isCatchUp ? el("span", { className: "badge neutral", text: "catch-up" }) : undefined,
-    el("span", { className: "muted small", text: formatTime(run.startedAt) }),
+    el("span", { className: "muted small", text: when }),
   );
 
-  const card = el("li", { className: "run-card" }, head);
+  // P4: the reason sits right next to the outcome pill, on the same line.
+  const outcome = el("p", { className: "run-outcome small" }, el("span", { className: `badge ${badgeClass}`, text: badgeText }));
+  if (!unfinished && run.error) outcome.append(el("span", { className: "run-reason", text: humanizeReason(run.error) }));
 
+  const card = el("li", { className: "run-card" }, head, outcome);
+
+  const meta = metaLine(run);
+  if (meta) card.append(meta);
   if (!unfinished) {
-    // Records that never reached the model (paused; the rare finished-but-uncontacted case) show no
-    // duration/tokens/model line at all — a "0 ms · 0 · 0 · n/a" line said nothing useful (G8/G10).
-    if (run.model !== NO_MODEL) {
-      const meta = el(
-        "div",
-        { className: "run-meta" },
-        el("span", { text: `Duration ${formatDuration(run.durationMs)}` }),
-        el("span", { text: `Tokens in ${(run.tokens?.input ?? 0).toLocaleString()} · out ${(run.tokens?.output ?? 0).toLocaleString()}` }),
-        el("span", {}, el("span", { text: "Model " }), el("code", { text: run.model })),
-      );
-      card.append(meta);
-    }
-    if (run.error) card.append(el("p", { className: "run-reason small", text: humanizeReason(run.error) }));
     const note = itemCapNote(run.inputs);
-    if (note) card.append(el("p", { className: "run-reason small", text: note }));
+    if (note) card.append(el("p", { className: "run-note small", text: note }));
   }
 
   const pathLine = el(
@@ -117,32 +163,42 @@ function renderRun(run) {
     el("span", { className: "muted", text: "File " }),
     el("code", { text: shortRunPath(run.path), attrs: { title: run.path } }),
   );
-  pathLine.append(copyPathButton(run));
+  pathLine.append(...copyPathControls(run));
   card.append(pathLine);
 
   // The run id itself is never shown as visible text: only in the path's short form/title above, and inside
   // this opt-in JSON disclosure (a deliberate raw-data view, not glanceable text). Error codes such as
-  // "MODEL_CALL_FAILED:" likewise appear only here, never in the visible reason paragraph above (G8).
-  const summary = el("summary", { text: "View JSON", attrs: { "aria-label": jsonLabel } });
-  const details = el("details", { className: "run-json" }, summary, el("pre", { text: JSON.stringify(run, null, 2) }));
+  // "MODEL_CALL_FAILED:" likewise appear only here, never in the visible reason above (G8).
+  const summary = el("summary", { text: "View JSON", attrs: { "aria-label": `View JSON — ${kindLabel(run.kind)}, ${when}` } });
+  const paths = el(
+    "dl",
+    { className: "run-json-paths" },
+    el("div", {}, el("dt", { text: "In the workspace" }), el("dd", {}, el("code", { text: run.path }))),
+    el("div", {}, el("dt", { text: "On this computer" }), el("dd", {}, el("code", { text: run.absolutePath }))),
+  );
+  const details = el("details", { className: "run-json" }, summary, paths, el("pre", { text: JSON.stringify(recordOnDisk(run), null, 2) }));
   card.append(details);
 
   return card;
 }
 
-/** Neutral note naming skipped files in <code>, not amber "decision" styling (G9: these aren't a decision). */
+/**
+ * Neutral note (G9: not a decision) naming the skipped files as short paths in <code>, one per line, full path in
+ * `title` (I4). A folder that couldn't be listed at all is one entry ("runs/2026-09-23/", or "runs/" for the whole
+ * log; I2), so the count then says "records or folders" rather than claim it counted records inside it.
+ */
 function renderSkippedNote(node, invalidCount, skippedFiles) {
   node.replaceChildren();
   if (invalidCount <= 0) {
     node.hidden = true;
     return;
   }
-  node.append(el("span", { text: `${invalidCount} run record${invalidCount === 1 ? "" : "s"} could not be read: ` }));
-  skippedFiles.forEach((file, index) => {
-    if (index > 0) node.append(document.createTextNode(", "));
-    node.append(el("code", { text: file }));
-  });
-  node.append(document.createTextNode(invalidCount > skippedFiles.length ? ` and ${invalidCount - skippedFiles.length} more.` : "."));
+  const noun = skippedFiles.some((file) => file.endsWith("/")) ? `run record${invalidCount === 1 ? " or folder" : "s or folders"}` : `run record${invalidCount === 1 ? "" : "s"}`;
+  node.append(el("p", { text: `${invalidCount} ${noun} could not be read:` }));
+  const list = el("ul", { className: "skipped-files" });
+  for (const file of skippedFiles) list.append(el("li", {}, el("code", { text: shortRunPath(file), attrs: { title: file } })));
+  node.append(list);
+  if (invalidCount > skippedFiles.length) node.append(el("p", { text: `and ${invalidCount - skippedFiles.length} more.` }));
   node.hidden = false;
 }
 

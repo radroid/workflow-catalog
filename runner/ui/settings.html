@@ -12,7 +12,7 @@
     <!-- runner:nav -->
     <main class="page">
       <h1>Settings</h1>
-      <p class="lede">Provider, workspace, schedules and budget live here, one section per concern; pairing is on the Status page.</p>
+      <p class="lede">How this runner behaves, one section per concern. Today that is the run budget; pairing is on the Status page.</p>
 
       <!-- The page's one persistent live region: every section's success and error is announced here. -->
       <p id="status-message" role="status" aria-live="polite" class="status-message"></p>
@@ -28,13 +28,9 @@
             <strong>Paused:</strong> <span id="budget-pause-reason"></span>
             <span id="budget-pause-since" class="muted"></span>
           </p>
-          <p class="small muted" id="budget-corrupt-note" hidden>The limits shown are the defaults. Resume saves them and restarts runs; Save keeps runs paused.</p>
+          <p class="small muted" id="budget-pause-note" hidden></p>
           <button class="button secondary" type="button" id="budget-resume">Resume</button>
         </div>
-
-        <p class="small notice" id="budget-limit-note" hidden>Daily limit reached. New runs wait until tomorrow.</p>
-
-        <p class="small" id="budget-usage">Runs used today: <span id="budget-usage-value">…</span></p>
 
         <form id="budget-form" novalidate>
           <div class="field">
@@ -49,6 +45,10 @@
           </div>
           <button class="button" type="submit" id="budget-save">Save</button>
         </form>
+
+        <!-- Below Save, so neither line can push Save out from under the pointer when it changes (P9). -->
+        <p class="small" id="budget-usage">Runs used today: <span id="budget-usage-value">…</span></p>
+        <p class="small notice" id="budget-limit-note" hidden>Daily limit reached. New runs wait until tomorrow.</p>
       </section>
     </main>
     <script type="module" src="/ui/assets/settings-budget.js"></script>

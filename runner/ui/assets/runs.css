@@ -11,7 +11,7 @@
 .status-message {
   margin: 0 0 1rem;
   overflow-wrap: anywhere;
-  min-height: 1.4em;
+  min-height: 1.55em;
 }
 .status-message:empty {
   display: block;
@@ -34,6 +34,22 @@
   background: var(--secondary);
 }
 
+/* The skipped-file note (G9, I4): one short path per line, each in <code> with the full path in its title. */
+#invalid-note {
+  margin-bottom: 1rem;
+}
+#invalid-note p {
+  margin: 0;
+}
+.skipped-files {
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+}
+.skipped-files code {
+  overflow-wrap: anywhere;
+}
+
 .runs-list {
   list-style: none;
   margin: 0;
@@ -54,12 +70,28 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 0.75rem;
-  margin-bottom: 0.5rem;
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.4rem;
 }
 
 .run-kind {
   font-weight: 500;
+}
+
+/* P4: the outcome pill and its reason share one line; a long reason wraps beside the pill, not under it. */
+.run-outcome {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 0.4rem;
+}
+.run-outcome .badge {
+  flex: none;
+  margin-top: 0.1rem;
+}
+.run-reason {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .run-meta {
@@ -77,13 +109,13 @@
   overflow-wrap: anywhere;
 }
 
-.run-reason {
-  font-size: 0.85rem;
+.run-note {
+  margin: 0.4rem 0 0;
   overflow-wrap: anywhere;
 }
 
 .run-path {
-  margin-top: 0.5rem;
+  margin: 0.5rem 0 0;
   font-size: 0.85rem;
   overflow-wrap: anywhere;
   display: flex;
@@ -94,6 +126,17 @@
 .run-path .button.small {
   font-size: 0.75rem;
   padding: 0.25rem 0.55rem;
+}
+/* The visible "Copied" / "Couldn't copy" note (I4, issue 3). Its width is reserved even while empty, so the
+   text appearing never moves anything; it is aria-hidden because the live region makes the one announcement. */
+.copy-feedback {
+  display: inline-block;
+  min-width: 6.5rem;
+  color: var(--muted-foreground);
+}
+.copy-feedback.failed {
+  color: var(--foreground);
+  font-weight: 500;
 }
 
 .run-json {
@@ -107,6 +150,21 @@
 .run-json summary:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+/* The record's two paths, shown apart from the JSON because they aren't in the file (I4). */
+.run-json-paths {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+}
+.run-json-paths div {
+  margin-bottom: 0.25rem;
+}
+.run-json-paths dt {
+  color: var(--muted-foreground);
+}
+.run-json-paths dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .run-json pre {
   margin: 0.5rem 0 0;

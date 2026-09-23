@@ -17,7 +17,8 @@
 
       <!-- The page's one persistent live region: every success and error is announced here. Empty and visually silent until there is something to say. -->
       <p id="status-message" role="status" aria-live="polite" class="status-message"></p>
-      <p id="invalid-note" class="notice small" hidden></p>
+      <!-- Run files that couldn't be read: a neutral note (not a decision), one short path per line. -->
+      <div id="invalid-note" class="notice small" hidden></div>
 
       <ul class="runs-list" id="runs-list">
         <li class="muted">Loading…</li>
