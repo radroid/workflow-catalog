@@ -8,11 +8,13 @@ body {
   padding: 14px;
 }
 
-.popup h1 {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
+/* The popup's h1 carries className "eyebrow" (render.ts) -- base.css's
+ * .eyebrow rule (11px / 400 / 0.08em, uppercase, muted) is the prototype's
+ * styling for it. A `.popup h1` rule used to live here and, at equal
+ * source order, out-specificity .eyebrow's single class selector (one
+ * class + one type selector beats one class), silently overriding it to
+ * 14px/600/-0.01em -- removed rather than fixed in place, so nothing here
+ * fights base.css's shared token again. */
 
 .title {
   font-size: 15px;

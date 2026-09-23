@@ -85,6 +85,9 @@ importers:
       '@types/chrome':
         specifier: 0.3.0
         version: 0.3.0
+      '@workflow-catalog/runner':
+        specifier: workspace:*
+        version: link:../runner
       axe-core:
         specifier: 4.13.0
         version: 4.13.0

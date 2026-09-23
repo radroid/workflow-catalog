@@ -26,11 +26,18 @@ import type { JobCapture } from "@workflow-catalog/contracts";
 const DEVICE_TOKEN_KEY = "deviceToken";
 const LAST_JOB_CAPTURE_KEY = "lastJobCapture";
 
+/**
+ * `PairResponse` (packages/contracts/src/bridge-http.ts) is `{ deviceId,
+ * token }` -- the bridge never issues a device name, so there is nothing to
+ * store here beyond the id itself. The options page shows an abbreviated
+ * `deviceId` for the paired state (P07 packet part B, deliverable 1); a
+ * contracts ask (a real device name in `PairResponse`, e.g. "Chrome on
+ * macOS") is flagged in this packet's report rather than invented
+ * client-side and silently treated as authoritative.
+ */
 export interface StoredDeviceToken {
   deviceId: string;
   token: string;
-  /** Shown in the options page so the person can recognize which browser/device this is — set at pairing time (part B; part A's pairing stub has no real device name yet). */
-  deviceName: string;
   pairedAt: string;
 }
 
@@ -56,4 +63,95 @@ export async function getLastJobCapture(): Promise<JobCapture | null> {
 
 export async function setLastJobCapture(capture: JobCapture): Promise<void> {
   await chrome.storage.session.set({ [LAST_JOB_CAPTURE_KEY]: capture });
+}
+
+const PAIRING_ORIGIN_MISMATCH_KEY = "pairingOriginMismatch";
+
+/**
+ * P07-B revision 1, B3: a 403 `origin_not_allowed` on `job_capture`'s
+ * `POST /events` means the stored token belongs to a different install --
+ * but `GET /status` (what the options page's own Status section calls)
+ * never carries an Origin header at all (Chrome doesn't send one on a GET),
+ * so the bridge can never refuse *that* call for a mismatched origin: the
+ * options page would otherwise have no way to ever learn about a 403 the
+ * popup's own POST observed. This flag is that channel -- set by
+ * bridge-client.ts's `onOriginMismatch` hook (`flagOriginMismatch` below)
+ * the moment a 403 happens anywhere, read by the options page's Status
+ * section, and cleared on the next successful pairing or explicit Un-pair
+ * (`recordPairing`/`forgetPairing`; both mean "start over").
+ */
+export async function setPairingOriginMismatch(value: boolean): Promise<void> {
+  if (value) {
+    await chrome.storage.session.set({ [PAIRING_ORIGIN_MISMATCH_KEY]: true });
+  } else {
+    await chrome.storage.session.remove(PAIRING_ORIGIN_MISMATCH_KEY);
+  }
+}
+
+export async function getPairingOriginMismatch(): Promise<boolean> {
+  const result = await chrome.storage.session.get(PAIRING_ORIGIN_MISMATCH_KEY);
+  return result[PAIRING_ORIGIN_MISMATCH_KEY] === true;
+}
+
+const PAIRING_EXPIRED_KEY = "pairingExpired";
+const PAIRED_BEFORE_KEY = "pairedBeforeThisSession";
+
+/**
+ * P07-B revision 2, B4: bridge-client.ts's default 401 hook. Forgets the
+ * stored token only if it is still `token`, the one the bridge just
+ * refused. Revision 1 cleared whatever token was stored on any 401, so a
+ * request sent with an old token that came back after a new pairing had
+ * finished threw the new pairing away. Also records that this browser's
+ * pairing expired, so the options page keeps saying so (and keeps naming
+ * `npm run pair`) instead of treating the browser as never paired.
+ *
+ * chrome.storage has no compare-and-set: a pairing that lands between this
+ * read and the removal still loses. That window is one storage round trip,
+ * not the length of a network request as before.
+ */
+export async function forgetInvalidToken(token: string): Promise<void> {
+  const stored = await getDeviceToken();
+  if (stored?.token !== token) return;
+  await chrome.storage.session.remove(DEVICE_TOKEN_KEY);
+  await chrome.storage.session.set({ [PAIRING_EXPIRED_KEY]: true });
+}
+
+/** P07-B revision 2, B4: bridge-client.ts's default 403 hook -- the same
+ * rule as `forgetInvalidToken`: a 403 about a token that has since been
+ * replaced says nothing about the pairing this browser holds now. */
+export async function flagOriginMismatch(token: string): Promise<void> {
+  const stored = await getDeviceToken();
+  if (stored?.token !== token) return;
+  await setPairingOriginMismatch(true);
+}
+
+/** True once `forgetInvalidToken` has dropped a token the bridge refused,
+ * until the next pairing or Un-pair. */
+export async function getPairingExpired(): Promise<boolean> {
+  const result = await chrome.storage.session.get(PAIRING_EXPIRED_KEY);
+  return result[PAIRING_EXPIRED_KEY] === true;
+}
+
+/** True once this browser has paired in this browser session. Never
+ * cleared here: after an Un-pair or an expired token, the next code still
+ * comes from `npm run pair`, not `npm run setup` (P07-B revision 2
+ * polish). */
+export async function getPairedBefore(): Promise<boolean> {
+  const result = await chrome.storage.session.get(PAIRED_BEFORE_KEY);
+  return result[PAIRED_BEFORE_KEY] === true;
+}
+
+/** A successful pairing: stores the new token first (so an in-flight
+ * request refused for the old one sees it's been replaced, see
+ * bridge-client.ts), then clears what the old pairing's failures left. */
+export async function recordPairing(token: StoredDeviceToken): Promise<void> {
+  await setDeviceToken(token);
+  await chrome.storage.session.set({ [PAIRED_BEFORE_KEY]: true });
+  await chrome.storage.session.remove([PAIRING_ORIGIN_MISMATCH_KEY, PAIRING_EXPIRED_KEY]);
+}
+
+/** Un-pair: forgets the token and anything its failures flagged. */
+export async function forgetPairing(): Promise<void> {
+  await clearDeviceToken();
+  await chrome.storage.session.remove([PAIRING_ORIGIN_MISMATCH_KEY, PAIRING_EXPIRED_KEY]);
 }

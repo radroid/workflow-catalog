@@ -31,6 +31,20 @@ export const MAX_INPAGE_TEXT_CHARS = MAX_JOB_CAPTURE_TEXT_BYTES * 4;
 export type BuildJobCaptureResult = { ok: true; capture: JobCapture } | { ok: false; reason: string };
 
 /**
+ * P07-B revision 4, K4: what the popup's fallback says when the capture
+ * doesn't pass the contracts schema -- plain sentences, like every other
+ * fallback reason, above the fallback's own next step (paste the posting
+ * in the runner's Jobs page). Revision 3 showed "This capture didn't pass
+ * validation: " followed by zod's own messages. A page's address is the
+ * one realistic cause: url.ts already refuses every scheme but http(s),
+ * so what's left is an address longer than the contracts' cap (2,048
+ * characters), or one the URL rules reject. The text is normalized and cut
+ * to its byte cap above, so it passes.
+ */
+export const ADDRESS_NOT_ACCEPTED_REASON = "This page's address is too long or unusual to capture.";
+export const CAPTURE_NOT_ACCEPTED_REASON = "This page couldn't be captured.";
+
+/**
  * Raw extracted text + the tab URL -> a validated `JobCapture` envelope.
  * This is the single place text gets normalized, truncated to the
  * contracts byte cap, and hashed — the popup's preview and its Save both
@@ -62,10 +76,8 @@ export async function buildJobCapture(params: { url: string; rawText: string }):
   // storage, or the exported file) sees a candidate that failed it.
   const parsed = jobCaptureSchema.safeParse(candidate);
   if (!parsed.success) {
-    return {
-      ok: false,
-      reason: `This capture didn't pass validation: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`,
-    };
+    const addressRefused = parsed.error.issues.some((issue) => issue.path[0] === "url");
+    return { ok: false, reason: addressRefused ? ADDRESS_NOT_ACCEPTED_REASON : CAPTURE_NOT_ACCEPTED_REASON };
   }
 
   return { ok: true, capture: parsed.data };

@@ -17,24 +17,34 @@
  * fixture-server.ts); every fixture URL below is built from
  * `fixtureServer.origin`.
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { inflateSync } from "node:zlib";
 import type { Page } from "@playwright/test";
 import type { JobCapture } from "@workflow-catalog/contracts";
+import { assertNoAxeViolations, expectEmptyRegionsCollapsed, expectHiddenReallyHidden, waitForDownload } from "./checks";
 import { expect, extensionDist, test } from "./fixtures";
 import { startFixtureServer, type FixtureServerHandle } from "./fixture-server";
 import {
+  focusSaveButton,
   getTabTargetId,
   launchWithExtensionDebugging,
+  pressEnter,
   sleep,
   triggerRealPopup,
+  waitForPopupState,
   type RawCdpSession,
   type RealPopupHarness,
 } from "./real-popup-cdp";
+import {
+  AFTER_RESIZE_QUIET,
+  captureInTheme,
+  findDevToolsLabelTopRight,
+  inTheme,
+  pageThemeTarget,
+  popupThemeTarget,
+} from "./theme-capture";
 
 test.describe.configure({ mode: "serial" });
 
@@ -58,49 +68,6 @@ function screenshotPath(fileName: string): string {
     : test.info().outputPath(fileName);
 }
 
-const require = createRequire(import.meta.url);
-const AXE_SOURCE = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
-// Same tag set as WCAG A/AA + best-practice; violations only (not
-// "incomplete" -- those need a human judgment call axe can't make itself,
-// and asserting on them would make this test flaky against axe's own
-// heuristics, not this extension's markup).
-const AXE_RUN_EXPRESSION = `
-  axe.run(document, {
-    runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"] },
-    resultTypes: ["violations"],
-  }).then((results) => results.violations.map((violation) => ({
-    id: violation.id,
-    impact: violation.impact,
-    nodes: violation.nodes.length,
-    targets: violation.nodes.slice(0, 5).map((node) => node.target.join(" ")),
-  })))
-`;
-
-interface AxeViolationSummary {
-  id: string;
-  impact: string | null;
-  nodes: number;
-  targets: string[];
-}
-
-async function assertNoAxeViolations(evaluate: (expression: string) => Promise<unknown>, label: string): Promise<void> {
-  await evaluate(AXE_SOURCE);
-  const violations = (await evaluate(AXE_RUN_EXPRESSION)) as AxeViolationSummary[];
-  expect(violations, `axe violations on ${label}:\n${JSON.stringify(violations, null, 2)}`).toEqual([]);
-}
-
-async function waitForPopupState(session: RawCdpSession, timeoutMs = 8000): Promise<"preview" | "fallback"> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const state = await session.evaluate<string>(
-      `document.querySelector("#app button.primary") ? "preview" : (document.querySelector("#app [role='alert']") ? "fallback" : "loading")`,
-    );
-    if (state === "preview" || state === "fallback") return state;
-    await sleep(100);
-  }
-  throw new Error("popup never left the loading state");
-}
-
 async function readKvPairs(session: RawCdpSession): Promise<Record<string, string>> {
   return session.evaluate<Record<string, string>>(`
     Object.fromEntries(
@@ -110,225 +77,6 @@ async function readKvPairs(session: RawCdpSession): Promise<Record<string, strin
       ]),
     )
   `);
-}
-
-/** Real Tab key presses (CDP Input.dispatchKeyEvent -- a trusted input
- * event, unlike a page-script-dispatched KeyboardEvent, which browsers
- * don't honor for default actions like button activation) until focus
- * lands on the Save button, bounded so a markup change that removes it
- * fails loudly instead of looping forever. */
-async function focusSaveButton(session: RawCdpSession): Promise<void> {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const onSaveButton = await session.evaluate<boolean>(
-      `document.activeElement instanceof HTMLElement && document.activeElement.classList.contains("primary")`,
-    );
-    if (onSaveButton) return;
-    await session.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
-    await sleep(50);
-  }
-  throw new Error("Tab never reached button.primary within 8 presses");
-}
-
-async function pressEnter(session: RawCdpSession): Promise<void> {
-  await session.pressKey({ key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
-}
-
-async function waitForDownload(dir: string, filename: string, timeoutMs = 5000): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  const target = path.join(dir, filename);
-  while (Date.now() < deadline) {
-    if (existsSync(target)) {
-      const content = readFileSync(target, "utf8");
-      if (content.length > 0) return content;
-    }
-    await sleep(100);
-  }
-  throw new Error(`${filename} never appeared in ${dir} (present: ${readdirSync(dir).join(", ") || "(empty)"})`);
-}
-
-type Theme = "light" | "dark";
-
-/** A page a test switches between colour schemes and captures: the real
- * popup (raw CDP session) or a normal Playwright page (the options page). */
-interface ThemeTarget {
-  readonly label: string;
-  setColorScheme(theme: Theme): Promise<void>;
-  evaluate<T>(expression: string): Promise<T>;
-  capture(): Promise<Buffer>;
-}
-
-const TWO_FRAMES = "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))";
-
-/** Starts recording the time of the page's last `resize` event (once per
- * document; later calls are no-ops). A theme switch fires resize events. */
-const RECORD_RESIZES = `(() => {
-  if (window.__wcLastResizeAt === undefined) {
-    window.__wcLastResizeAt = performance.now();
-    addEventListener("resize", () => { window.__wcLastResizeAt = performance.now(); });
-  }
-  return true;
-})()`;
-
-/** Resolves once no `resize` event has fired for 1.1 s, then two frames
- * later. DevTools' "380px × 418px" viewport-size label is painted after a
- * resize and removed by Chrome's overlay one second later (Blink's
- * InspectorOverlayAgent::OnResizeTimer). In the real popup the label kept
- * appearing in captures taken right after a theme switch, even with
- * Overlay.setShowViewportSizeOnResize({ show: false }) sent on this test's
- * own session (see triggerRealPopup), so it isn't this session's overlay
- * painting it. A capture taken after 1.1 s without a resize never showed it
- * (checked on the first popup of fresh browsers, the case that showed it
- * most). */
-const AFTER_RESIZE_QUIET = `new Promise((resolve) => {
-  ${RECORD_RESIZES};
-  const settle = () => (performance.now() - window.__wcLastResizeAt >= 1100 ? resolve(true) : setTimeout(settle, 50));
-  settle();
-}).then(() => ${TWO_FRAMES})`;
-
-function popupThemeTarget(popup: RawCdpSession): ThemeTarget {
-  return {
-    label: "popup",
-    setColorScheme: async (theme) => {
-      await popup.evaluate(RECORD_RESIZES);
-      await popup.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: theme }] });
-    },
-    evaluate: <T>(expression: string) => popup.evaluate<T>(expression),
-    capture: async () => {
-      await popup.evaluate(AFTER_RESIZE_QUIET);
-      return popup.screenshot();
-    },
-  };
-}
-
-function pageThemeTarget(page: Page, label: string): ThemeTarget {
-  return {
-    label,
-    setColorScheme: async (theme) => {
-      await page.evaluate(RECORD_RESIZES);
-      await page.emulateMedia({ colorScheme: theme });
-    },
-    evaluate: <T>(expression: string) => page.evaluate(expression) as Promise<T>,
-    capture: async () => {
-      await page.evaluate(AFTER_RESIZE_QUIET);
-      return page.screenshot();
-    },
-  };
-}
-
-interface ThemeState {
-  dataTheme: string | undefined;
-  declaredBackground: string;
-  expectedBackground: string;
-  bodyBackground: string;
-}
-
-/** Resolves two animation frames after it's evaluated, so at least one
- * frame has been produced with the page's current style (a capture taken
- * sooner can return the frame from before a theme switch).
- * `declaredBackground` is theme.css's own --background for `theme`, read
- * from that theme's rule (`:root` for light, `[data-theme="dark"]` for
- * dark) instead of a hard-coded colour; `expectedBackground` is that value
- * resolved the way body's background-color is. */
-function themeStateAfterTwoFrames(theme: Theme): string {
-  const selector = theme === "dark" ? '[data-theme="dark"]' : ":root";
-  return `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
-    let declaredBackground = "";
-    for (const sheet of Array.from(document.styleSheets)) {
-      for (const rule of Array.from(sheet.cssRules)) {
-        if (rule instanceof CSSStyleRule && rule.selectorText === ${JSON.stringify(selector)}) {
-          declaredBackground = rule.style.getPropertyValue("--background").trim() || declaredBackground;
-        }
-      }
-    }
-    const probe = document.createElement("div");
-    probe.style.backgroundColor = declaredBackground;
-    document.body.appendChild(probe);
-    const expectedBackground = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    resolve({
-      dataTheme: document.documentElement.dataset.theme,
-      declaredBackground,
-      expectedBackground,
-      bodyBackground: getComputedStyle(document.body).backgroundColor,
-    });
-  })))`;
-}
-
-function expectTheme(state: ThemeState, theme: Theme, where: string): void {
-  expect(state.dataTheme, `${where}: data-theme`).toBe(theme);
-  expect(state.declaredBackground, `${where}: theme.css declares --background for ${theme}`).not.toBe("");
-  expect(state.bodyBackground, `${where}: body background is painted, not transparent`).not.toBe("rgba(0, 0, 0, 0)");
-  expect(state.bodyBackground, `${where}: body background is theme.css's ${theme} --background`).toBe(
-    state.expectedBackground,
-  );
-}
-
-/**
- * Switches `target` to `theme`, runs `action`, and accepts the run only if
- * the page showed `theme` both before and after it. The real popup can drop
- * a freshly set prefers-color-scheme override: early in a new popup's life
- * (observed within ~1.3 s of it opening), a resize ~150-550 ms after the
- * override is set flips the page's own
- * `matchMedia("(prefers-color-scheme: dark)")` back to false. That is how a
- * normal run wrote a light P07A-popup-dark.png, and how the dark axe audit
- * could run against the light page (its first attempt failed the "after"
- * check in 3 of 4 instrumented runs). Re-applying the override afterwards
- * holds, so a failed check re-applies it and retries, bounded; anything this
- * can't prove fails the test.
- */
-async function inTheme<T>(target: ThemeTarget, theme: Theme, action: () => Promise<T>): Promise<T> {
-  let result: T | undefined;
-  await expect(async () => {
-    await target.setColorScheme(theme);
-    expectTheme(await target.evaluate<ThemeState>(themeStateAfterTwoFrames(theme)), theme, `${target.label} ${theme}, before`);
-    const value = await action();
-    expectTheme(await target.evaluate<ThemeState>(themeStateAfterTwoFrames(theme)), theme, `${target.label} ${theme}, after`);
-    result = value;
-  }).toPass({ intervals: [250, 500, 1000], timeout: 10_000 });
-  return result as T;
-}
-
-/** Mean of the R, G, B bytes of a PNG's top-left pixel, which is page
- * background in every capture here. Row 0's first pixel is stored verbatim
- * whatever PNG filter the row uses (every filter predicts 0 there), so this
- * only has to inflate the image data, not unfilter it. */
-function topLeftBrightness(png: Buffer): number {
-  const idat: Buffer[] = [];
-  let bitDepth = 0;
-  let colorType = 0;
-  for (let offset = 8; offset < png.length; ) {
-    const length = png.readUInt32BE(offset);
-    const type = png.toString("ascii", offset + 4, offset + 8);
-    const data = png.subarray(offset + 8, offset + 8 + length);
-    if (type === "IHDR") {
-      bitDepth = data.readUInt8(8);
-      colorType = data.readUInt8(9);
-    } else if (type === "IDAT") {
-      idat.push(data);
-    }
-    offset += 12 + length;
-  }
-  if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) {
-    throw new Error(`unexpected PNG format (bit depth ${bitDepth}, colour type ${colorType})`);
-  }
-  const pixels = inflateSync(Buffer.concat(idat));
-  // Byte 0 is row 0's filter type; bytes 1-3 are the first pixel's R, G, B.
-  return (pixels.readUInt8(1) + pixels.readUInt8(2) + pixels.readUInt8(3)) / 3;
-}
-
-/** Captures `target` in `theme` and writes the PNG (see screenshotPath)
- * only once the capture itself is proven to show that theme: its top-left
- * pixel, page background, is light (mean RGB >= 128) for light and dark
- * for dark. A wrong image is never written. */
-async function captureInTheme(target: ThemeTarget, theme: Theme, fileName: string): Promise<void> {
-  const png = await inTheme(target, theme, async () => {
-    await target.evaluate("document.fonts.ready.then(() => true)");
-    const capture = await target.capture();
-    const brightness = topLeftBrightness(capture);
-    expect(brightness >= 128 ? "light" : "dark", `${fileName}: captured background, mean RGB ${brightness}`).toBe(theme);
-    return capture;
-  });
-  writeFileSync(screenshotPath(fileName), png);
 }
 
 let harness: RealPopupHarness;
@@ -386,12 +134,17 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     );
   });
 
-  await test.step("captures the P07A popup screenshots from the real popup, each proven dark or light", async () => {
-    await captureInTheme(popupTheme, "dark", "P07A-popup-dark.png");
-    await captureInTheme(popupTheme, "light", "P07A-popup-light.png");
+  await test.step("P07-B revision 2, C1 and D: before Save, the empty status line takes no room, and the hidden secondary buttons really are hidden", async () => {
+    await expectEmptyRegionsCollapsed((expression) => popup.evaluate(expression), "popup preview");
+    await expectHiddenReallyHidden((expression) => popup.evaluate(expression), "popup preview");
   });
 
-  await test.step("Save: leaves 'Saved ✓' (not stuck on 'Saving…'), keeps focus, and produces a real download", async () => {
+  await test.step("captures the P07A popup screenshots from the real popup, each proven dark or light", async () => {
+    await captureInTheme(popupTheme, "dark", "P07A-popup-dark.png", screenshotPath);
+    await captureInTheme(popupTheme, "light", "P07A-popup-light.png", screenshotPath);
+  });
+
+  await test.step("Save: leaves 'Saved ✓' (not stuck on 'Saving…'), keeps focus, queues (not paired), and -- via the explicit 'Save as a file' action that outcome offers -- still produces a real download", async () => {
     await focusSaveButton(popup);
     await pressEnter(popup);
 
@@ -411,8 +164,24 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     );
     expect(focusStaysOnButton, "review issue 5/7: focus must not drop to <body> after a successful Save").toBe(true);
 
+    // P07-B revision 1, E1/E2: this popup never pairs (P07-A's own scope,
+    // before pairing existed) -- Save now queues instead of downloading
+    // automatically, and offers "Save as a file" as an explicit secondary
+    // action instead of downloading on every Save. This step's real point
+    // is proving the download mechanism itself (a genuine CDP download
+    // event, never mocked) still works end to end, so it's driven through
+    // that button below instead of Save itself.
     const statusText = await popup.evaluate<string>(`document.querySelector('[role="status"]').textContent`);
-    expect(statusText).toContain("Saved job-capture.json");
+    expect(statusText).toBe("Not paired yet — queued. It'll be sent automatically once you pair the extension in Settings.");
+
+    // One real Tab press from the still-focused Save button (DOM order:
+    // Save, Save as a file, Open settings -- popup/render.ts's own `row`).
+    await popup.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    const onFileButton = await popup.evaluate<boolean>(
+      `document.activeElement instanceof HTMLElement && document.activeElement.textContent === "Save as a file"`,
+    );
+    expect(onFileButton, "one Tab from Save should reach the visible 'Save as a file' button").toBe(true);
+    await pressEnter(popup);
 
     const downloaded = await waitForDownload(downloadDir, "job-capture.json");
     const capture = JSON.parse(downloaded) as JobCapture;
@@ -421,6 +190,43 @@ test("captures, previews, and saves a real job posting through a genuine popup g
     expect(capture.text).toContain("Staff Software Engineer");
     rmSync(path.join(downloadDir, "job-capture.json"));
   });
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await page.close();
+});
+
+test("capturing the real popup fires no resize of its own, so DevTools' size label never lands in the frame (P07-B revision 2, CI run 35758037837)", async () => {
+  // The CI failure this guards: Page.captureScreenshot fired a same-size
+  // `resize` in the popup during every capture (real-popup-cdp.ts's
+  // captureFrame explains the Chrome mechanism), DevTools' overlay painted
+  // its viewport-size label in response, and the label landed in the very
+  // frame being captured -- again on every retry. Both halves are checked:
+  // no resize (deterministic: the old capture fired exactly one, every
+  // time) and no label in the frame.
+  const page = await harness.context.newPage();
+  await page.goto(`${fixtureServer.origin}/posting-json-ld.html`);
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+  expect(await waitForPopupState(popup)).toBe("preview");
+
+  await popup.evaluate(`(() => {
+    window.__wcResizeCount = 0;
+    addEventListener("resize", () => { window.__wcResizeCount += 1; });
+    return true;
+  })()`);
+
+  for (let capture = 0; capture < 5; capture += 1) {
+    await popup.evaluate(AFTER_RESIZE_QUIET);
+    const before = await popup.evaluate<number>("window.__wcResizeCount");
+    const png = await popup.captureFrame();
+    // A capture-fired resize landed 3-60 ms after the old capture returned
+    // (measured); 300 ms leaves a wide margin.
+    await sleep(300);
+    const after = await popup.evaluate<number>("window.__wcResizeCount");
+    expect(after - before, `capture ${capture}: resize events fired by the capture itself`).toBe(0);
+    expect(findDevToolsLabelTopRight(png), `capture ${capture}`).toBeUndefined();
+  }
 
   await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
   await popup.detach();
@@ -468,6 +274,17 @@ test("shows the hostile posting's injected instruction as plain visible text, an
     }
     expect(buttonText).toBe("Saved ✓");
 
+    // P07-B revision 1, E1/E2: not paired -> queued, not an automatic
+    // download; "Save as a file" (one Tab from the still-focused Save
+    // button, same as the json-ld test above) drives the same real
+    // download this step has always proven.
+    await popup.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    const onFileButton = await popup.evaluate<boolean>(
+      `document.activeElement instanceof HTMLElement && document.activeElement.textContent === "Save as a file"`,
+    );
+    expect(onFileButton, "one Tab from Save should reach the visible 'Save as a file' button").toBe(true);
+    await pressEnter(popup);
+
     const downloaded = await waitForDownload(downloadDir, "job-capture.json");
     const capture = JSON.parse(downloaded) as JobCapture;
     expect(capture.text).toContain("ignore previous instructions");
@@ -504,24 +321,54 @@ test("captures a posting through the DOM-heuristics path (no JSON-LD) end to end
 });
 
 test("refuses to save when the tab navigates between reading its URL and reading its text (SPA route change, review issue 2)", async () => {
-  const page = await harness.context.newPage();
-  await page.goto(`${fixtureServer.origin}/posting-spa-mismatch.html`);
+  // Fire-and-not-await: see posting-spa-mismatch.html's own comment for the
+  // busy-wait that arms this race. That busy-wait only produces "fallback"
+  // if it starts running on the tab's renderer before
+  // Extensions.triggerAction's browser-mediated chain (open popup -> popup's
+  // chrome.tabs.query -> chrome.scripting.executeScript into this same tab)
+  // reaches that renderer. The two are independent CDP dispatch paths that
+  // only converge at the renderer's task queue -- nothing on this side
+  // guarantees which one Chrome enqueues first, and under real
+  // worker-parallel CPU contention (this file's own tests are serial, but
+  // e.g. e2e/extension.spec.ts's slow service-worker-start test can be
+  // running concurrently in another worker) either dispatch can be delayed
+  // enough to invert them. When that happens the extraction runs first,
+  // reads the OLD url both times, and the popup shows "preview" instead of
+  // "fallback" -- the race was never armed, not a real extension bug.
+  // Retry the arrange phase (fresh page, fresh dispatch, fresh popup) when
+  // that happens, the same way ensureColorScheme above retries matchMedia's
+  // own real-world nondeterminism -- the assertions below stay exact.
+  const maxAttempts = 5;
+  let page: Page | undefined;
+  let popup: RawCdpSession | undefined;
+  let routeChange: Promise<void> | undefined;
+  let state: "preview" | "fallback" | undefined;
 
-  const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    page = await harness.context.newPage();
+    await page.goto(`${fixtureServer.origin}/posting-spa-mismatch.html`);
+    const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
 
-  // Fire-and-not-await: see posting-spa-mismatch.html's own comment for
-  // why a fixed, generous busy-wait on the TAB's renderer thread --
-  // started just before the popup opens, not raced against it -- forces
-  // this deterministically instead of hoping a real timing race lands
-  // right.
-  const routeChange = page.evaluate(() => {
-    (window as unknown as { __simulateRouteChangeTo: (path: string) => void }).__simulateRouteChangeTo("/jobs-b");
-  });
+    routeChange = page.evaluate(() => {
+      (window as unknown as { __simulateRouteChangeTo: (path: string) => void }).__simulateRouteChangeTo("/jobs-b");
+    });
 
-  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
-  const state = await waitForPopupState(popup);
+    popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+    state = await waitForPopupState(popup);
+    if (state === "fallback") break;
 
-  expect(state).toBe("fallback");
+    // Lost the race: let the busy-wait/pushState finish so it doesn't leak
+    // into the next attempt, then discard this popup and page.
+    await routeChange;
+    await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+    await popup.detach();
+    await page.close();
+  }
+  if (!page || !popup || !routeChange) {
+    throw new Error("unreachable: the loop above always assigns these before exiting");
+  }
+
+  expect(state, `never observed "fallback" after ${maxAttempts} attempts`).toBe("fallback");
   const fallbackText = await popup.evaluate<string>(`document.querySelector('[role="alert"]').textContent`);
   expect(fallbackText).toBe("This page changed while it was being read — reopen the extension to try again.");
 
@@ -554,13 +401,25 @@ test("options page: 0 axe violations unpaired, light and dark; screenshots captu
 
   const optionsTheme = pageThemeTarget(page, "options");
 
-  await assertNoAxeViolations((expression) => page.evaluate(expression), "options (light, unpaired)");
-  await captureInTheme(optionsTheme, "light", "P07A-options-light.png");
+  // P07-B revision 2, C1 and D: unpaired, the Pairing status line is empty
+  // and the Un-pair row is hidden -- a .row, whose own display:flex beats
+  // the UA [hidden] rule without base.css's !important one.
+  await expectEmptyRegionsCollapsed((expression) => page.evaluate(expression), "options (unpaired)");
+  await expectHiddenReallyHidden((expression) => page.evaluate(expression), "options (unpaired)");
 
-  await page.emulateMedia({ colorScheme: "dark" });
-  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
-  await assertNoAxeViolations((expression) => page.evaluate(expression), "options (dark, unpaired)");
-  await captureInTheme(optionsTheme, "dark", "P07A-options-dark.png");
+  await assertNoAxeViolations((expression) => page.evaluate(expression), "options (light, unpaired)");
+  await captureInTheme(optionsTheme, "light", "P07A-options-light.png", screenshotPath);
+
+  // P07-B carry-forward: the dark axe audit goes through the same guarded
+  // inTheme the popup's own dark axe audit already uses (revision 2's item
+  // 2) -- a bare page.emulateMedia + expect.poll here could run axe against
+  // a page that had already dropped back to light (the same matchMedia
+  // drop that motivated inTheme in the first place), silently auditing the
+  // wrong theme.
+  await inTheme(optionsTheme, "dark", () =>
+    assertNoAxeViolations((expression) => page.evaluate(expression), "options (dark, unpaired)"),
+  );
+  await captureInTheme(optionsTheme, "dark", "P07A-options-dark.png", screenshotPath);
 
   await cdp.detach();
   await page.close();

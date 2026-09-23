@@ -42,17 +42,27 @@ export interface RawCdpSession {
   readonly targetId: string;
   call(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
   evaluate<T = unknown>(expression: string): Promise<T>;
-  /** PNG bytes of the target's current frame; the caller verifies and writes it. */
-  screenshot(): Promise<Buffer>;
+  /** PNG bytes of the target's current compositor frame, taken without
+   * resizing the page (see `captureFrame` in `attachRawSession`); the caller
+   * verifies and writes it. */
+  captureFrame(): Promise<Buffer>;
   pressKey(options: { key: string; code: string; windowsVirtualKeyCode: number; text?: string }): Promise<void>;
   detach(): Promise<void>;
 }
 
 interface RawRpcMessage {
   id?: number;
+  method?: string;
+  params?: unknown;
   result?: unknown;
   error?: { message: string };
 }
+
+/** How long `captureFrame` waits for the first screencast frame. A frame
+ * normally arrives within milliseconds: starting a screencast makes the
+ * compositor produce one from the page's current surface even when nothing
+ * on the page is changing. */
+const FIRST_FRAME_TIMEOUT_MS = 5000;
 
 /** Attaches to any target (tab- or page-typed) via the browser-level
  * session, in non-flattened mode, and returns a small JSON-RPC-over-CDP
@@ -63,10 +73,21 @@ export async function attachRawSession(bs: CDPSession, targetId: string): Promis
 
   let nextMessageId = 1;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason: Error) => void }>();
+  /** One-shot waiters for protocol events (messages with a `method` and no
+   * `id`), keyed by method name. */
+  const eventWaiters = new Map<string, Array<(params: unknown) => void>>();
 
   const onMessage = (event: { sessionId: string; message: string }) => {
     if (event.sessionId !== sessionId) return;
     const parsed = JSON.parse(event.message) as RawRpcMessage;
+    if (parsed.id === undefined && parsed.method !== undefined) {
+      const waiters = eventWaiters.get(parsed.method);
+      if (waiters && waiters.length > 0) {
+        eventWaiters.delete(parsed.method);
+        for (const waiter of waiters) waiter(parsed.params);
+      }
+      return;
+    }
     if (parsed.id === undefined || !pending.has(parsed.id)) return;
     const waiter = pending.get(parsed.id);
     pending.delete(parsed.id);
@@ -106,10 +127,84 @@ export async function attachRawSession(bs: CDPSession, targetId: string): Promis
     return typed.result?.value as T;
   };
 
-  const screenshot = async (): Promise<Buffer> => {
-    const raw = await call("Page.captureScreenshot", { format: "png" });
-    const { data } = raw as { data: string };
-    return Buffer.from(data, "base64");
+  /** `promise` resolves with the params of the next `method` event on this
+   * session, or rejects after `timeoutMs`. Register it before sending the
+   * command that triggers the event, so a fast event can't slip past.
+   * `cancel` withdraws the wait -- timer and waiter both -- and leaves
+   * `promise` unsettled, for when that command itself failed. */
+  const nextEvent = (method: string, timeoutMs: number): { promise: Promise<unknown>; cancel: () => void } => {
+    let cancel = (): void => undefined;
+    const promise = new Promise((resolve, reject) => {
+      const withdraw = () => {
+        const waiters = eventWaiters.get(method)?.filter((candidate) => candidate !== waiter) ?? [];
+        if (waiters.length > 0) eventWaiters.set(method, waiters);
+        else eventWaiters.delete(method);
+      };
+      const waiter = (params: unknown) => {
+        clearTimeout(timer);
+        resolve(params);
+      };
+      const timer = setTimeout(() => {
+        withdraw();
+        reject(new Error(`no ${method} event within ${timeoutMs} ms`));
+      }, timeoutMs);
+      cancel = () => {
+        clearTimeout(timer);
+        withdraw();
+      };
+      eventWaiters.set(method, [...(eventWaiters.get(method) ?? []), waiter]);
+    });
+    return { promise, cancel };
+  };
+
+  /**
+   * P07-B revision 2 (iter-005), the CI fix: one frame from a screencast,
+   * not `Page.captureScreenshot`.
+   *
+   * `Page.captureScreenshot` wraps every capture in
+   * `WebContents::IncrementCapturerCount`/`DecrementCapturerCount`
+   * (content/browser/devtools/protocol/page_handler.cc). While a capture
+   * is open, `WebContentsImpl::GetPreferredSize()` reports the capture's
+   * own preferred size (empty for a screenshot), and dropping back to no
+   * capturers calls `OnPreferredSizeChanged`, which hands the popup's real
+   * preferred size back to its auto-sizing delegate. On an extension popup
+   * that fires a same-size `resize` in the page during every capture. A
+   * DevTools overlay with "show viewport size on resize" on (the DevTools
+   * frontend's OverlayModel default; `Overlay.setShowViewportSizeOnResize`
+   * on this session can't switch another session's off) then paints its
+   * "380px × 404px" label, sometimes into the very frame being captured.
+   * Every retry set off the same race again, which is how CI lost all four
+   * attempts of P07A-popup-dark.png (run 35758037837). Measured on a real
+   * popup: 7 of 8 plain captures carried the label, each fired one
+   * `resize`; 0 of 20 screencast frames carried it, and none fired a
+   * `resize`.
+   *
+   * A screencast frame is the compositor's current output: a DOM change
+   * made two animation frames before the capture was in every frame
+   * checked. `format: "png"` keeps it lossless (desktop screencasts use
+   * ARGB frames), at the page's own size in CSS pixels at DPR 1.
+   *
+   * P07-B revision 3, nit 5: if `Page.startScreencast` itself is refused
+   * (the popup closed, the target detached), the frame wait is withdrawn
+   * and that refusal is what the caller sees. Before, the wait was left
+   * behind and rejected on its own 5 s later with nobody listening -- an
+   * unhandled rejection in the test worker.
+   */
+  const captureFrame = async (): Promise<Buffer> => {
+    const frame = nextEvent("Page.screencastFrame", FIRST_FRAME_TIMEOUT_MS);
+    try {
+      await call("Page.startScreencast", { format: "png" });
+    } catch (error) {
+      frame.cancel();
+      throw error;
+    }
+    try {
+      const params = (await frame.promise) as { data: string; sessionId: number };
+      await call("Page.screencastFrameAck", { sessionId: params.sessionId });
+      return Buffer.from(params.data, "base64");
+    } finally {
+      await call("Page.stopScreencast");
+    }
   };
 
   const pressKey = async (options: { key: string; code: string; windowsVirtualKeyCode: number; text?: string }): Promise<void> => {
@@ -131,10 +226,11 @@ export async function attachRawSession(bs: CDPSession, targetId: string): Promis
 
   const detach = async (): Promise<void> => {
     bs.off("Target.receivedMessageFromTarget", onMessage);
+    eventWaiters.clear();
     await bs.send("Target.detachFromTarget", { sessionId }).catch(() => undefined);
   };
 
-  return { targetId, call, evaluate, screenshot, pressKey, detach };
+  return { targetId, call, evaluate, captureFrame, pressKey, detach };
 }
 
 export interface RealPopupHarness {
@@ -190,6 +286,44 @@ export async function launchWithExtensionDebugging(
   return { context, extId, bs, close };
 }
 
+/** Polls the popup's own DOM until it leaves the loading state: `preview`
+ * once a `renderPreview()` (a `button.primary`) exists, `fallback` once a
+ * `renderFallback()` (a `[role="alert"]`) does. Shared by real-popup.spec.ts
+ * and bridge-e2e.spec.ts -- both drive the real popup and need to know when
+ * it's done reading the tab before interacting with it further. */
+export async function waitForPopupState(session: RawCdpSession, timeoutMs = 8000): Promise<"preview" | "fallback"> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await session.evaluate<string>(
+      `document.querySelector("#app button.primary") ? "preview" : (document.querySelector("#app [role='alert']") ? "fallback" : "loading")`,
+    );
+    if (state === "preview" || state === "fallback") return state;
+    await sleep(100);
+  }
+  throw new Error("popup never left the loading state");
+}
+
+/** Real Tab key presses (CDP Input.dispatchKeyEvent -- a trusted input
+ * event, unlike a page-script-dispatched KeyboardEvent, which browsers
+ * don't honor for default actions like button activation) until focus
+ * lands on the Save button, bounded so a markup change that removes it
+ * fails loudly instead of looping forever. */
+export async function focusSaveButton(session: RawCdpSession): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const onSaveButton = await session.evaluate<boolean>(
+      `document.activeElement instanceof HTMLElement && document.activeElement.classList.contains("primary")`,
+    );
+    if (onSaveButton) return;
+    await session.pressKey({ key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await sleep(50);
+  }
+  throw new Error("Tab never reached button.primary within 8 presses");
+}
+
+export async function pressEnter(session: RawCdpSession): Promise<void> {
+  await session.pressKey({ key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+}
+
 /** Playwright's `page` corresponds to a "page"-type CDP target;
  * Extensions.triggerAction wants the "tab"-type target for the same tab.
  * Bridges the two by matching URL. */
@@ -213,8 +347,11 @@ export async function getTabTargetId(bs: CDPSession, context: BrowserContext, pa
  * The first thing sent on that session turns off DevTools' viewport-size
  * label ("380px × 418px", painted top-right after a resize) for this
  * session's own overlay, before the popup resizes itself to fit its preview.
- * That alone didn't keep the label out of captures, so real-popup.spec.ts
- * also captures only after a resize-quiet period (AFTER_RESIZE_QUIET). */
+ * That only covers this session's overlay, not the one that actually paints
+ * the label, so captures also wait out a resize-quiet period
+ * (theme-capture.ts's AFTER_RESIZE_QUIET) and are taken with
+ * `captureFrame`, which, unlike `Page.captureScreenshot`, fires no resize of
+ * its own. */
 export async function triggerRealPopup(bs: CDPSession, extId: string, tabTargetId: string): Promise<RawCdpSession> {
   await bs.send("Extensions.triggerAction", { id: extId, targetId: tabTargetId });
 

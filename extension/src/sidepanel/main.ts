@@ -17,7 +17,7 @@ if (!app) {
 
 mount(
   app,
-  el("div", { className: "panel stack" }, [
+  el("main", { className: "panel stack" }, [
     el("div", { className: "eyebrow", text: "Job Assistant" }),
     el("h1", { text: "Coming soon" }),
     el("p", { className: "small", text: "Sessions, tasks, and Applied/Deferred controls arrive in a later version." }),

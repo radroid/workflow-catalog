@@ -42,3 +42,10 @@ jobs:
 
       - name: Build catalog
         run: pnpm --filter catalog build
+
+      - name: Build and test the extension (vitest against dist/, then Playwright)
+        run: |
+          pnpm --filter @workflow-catalog/extension exec playwright install --with-deps chromium
+          pnpm --filter @workflow-catalog/extension build
+          EXTENSION_DIST_REQUIRED=1 pnpm --filter @workflow-catalog/extension test
+          pnpm --filter @workflow-catalog/extension test:e2e

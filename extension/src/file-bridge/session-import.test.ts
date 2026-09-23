@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { MAX_BRIDGE_BODY_BYTES } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { checkImportFileSize, parseSessionManifestFile } from "./session-import";
@@ -20,6 +23,15 @@ describe("parseSessionManifestFile", () => {
     if (!result.ok) return;
     expect(result.manifest.sessionId).toBe(validManifest.sessionId);
     expect(result.manifest.items).toHaveLength(2);
+  });
+
+  it("P07-B revision 4, K2: the README's example for the manual smoke test (fixtures/application-session.example.json) is a valid manifest", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const text = readFileSync(path.join(here, "../../fixtures/application-session.example.json"), "utf8");
+    const result = parseSessionManifestFile(text);
+    expect(result.ok, "it must import cleanly until the runner writes real ones (part C)").toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.items.every((item) => new URL(item.url).hostname.endsWith(".example")), "fictional URLs only").toBe(true);
   });
 
   it("rejects invalid JSON with a clear summary instead of throwing", () => {
