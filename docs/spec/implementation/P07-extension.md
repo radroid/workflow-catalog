@@ -27,6 +27,208 @@ Form filling, uploads, submission, cookies, native messaging.
 
 ## Report
 
+### 2026-09-23 — Revision 4 (part B, iter-005)
+
+Round 4 reviewed head `9529761`. The reviewer approved, with two nits. The
+UI critic returned REVISE with one issue and a polish item. The
+orchestrator's decisions K1–K4 are in
+`logs/handoff/P07-B-round-4-review.md` (integration `09f8bbe`; the brief
+first named `4c1f5f1`, and a correction followed). The same Opus
+escalation implementer did the work.
+
+Commits:
+- setup merge of integration `09f8bbe` (`e18038c`), which brought only
+  `logs/` and eve-runtime item 15;
+- the claim (`eebd220`);
+- the work (`59a1e79`);
+- this report.
+
+Files touched: `extension/**`, the four `P07B-options-foreign-server-*`
+shots and this file. Two orchestrator messages arrived, the brief and
+the correction; both carried the code word, and none claimed to be from
+the orchestrator without it.
+
+**K1: a refused pairing is announced once, by Status's alert.**
+- **The fix.** The Pairing line now has two slots in the same place in
+  the card:
+  - the existing live line (`role="status"`), for the outcomes of what
+    the person does on this page ("Pairing…", "Paired.", a wrong code…),
+    still announced;
+  - a new notice (`p.flash[data-notice]`, not a live region), for what a
+    status check found out: "Your pairing expired or was revoked.", in
+    amber.
+
+  Every path sets the sentence in the notice, silently:
+  - `syncPairingSection`, after Check again or a window-focus re-check;
+  - the load path.
+
+  Setting either slot clears the other. An empty slot takes no room, so
+  the card shows one line, as before.
+- **The focus move.** `syncPairingSection` now does its storage reads
+  first, then changes the page in one step. If focus was in the card, it
+  moves to the code field, whose description (`aria-describedby`, notice
+  then line) carries the sentence. That is read when focus lands, not
+  announced.
+- **Why not toggle `aria-live`.** Chrome reads a region's live state when
+  it serializes the accessibility tree, in a later task. Restoring
+  `polite` too early would still announce the change, so a toggle
+  depends on timing that the page can't see. The critic's logger also
+  matches `[role=status]` whatever `aria-live` says. A slot that is never
+  live has neither problem, and meets K1's "or an equivalent".
+- **The recorder.** `e2e/announcements.ts` records, in the page, what a
+  screen reader would announce from the page's DOM changes:
+  - an alert when it is inserted;
+  - text added to a live region already on the page;
+  - never a region that arrives filled, and never content that is only
+    removed.
+
+  Like the critic's logger, it judges each mutation record on its own,
+  and it counts a region at most once a batch. It is self-contained, so
+  the unit tests call it on happy-dom and the e2e passes it to
+  `page.evaluate` and `page.addInitScript`.
+- **Unit tests** (`options/main.test.ts`) assert that only the alert is
+  announced in three cases:
+  - Check again after a revoke; focus stays on the button;
+  - the window-focus re-check with focus on Un-pair; focus moves to the
+    code field, described by the notice;
+  - opening Settings while the runner refuses the stored token.
+
+  Two more tests cover the load path after the popup's refusal, and
+  pairing again. The recorder is first shown to hear "Pairing…" and
+  "Paired.", so it is not deaf to the live line.
+- **e2e in Chrome.** A new test runs the same three cases against the
+  real bridge ("K1 (P07-B revision 4)…"), with the same positive
+  control. The gate-6 and pairing-expired tests now read the notice.
+- **Visuals unchanged.** I re-captured the four
+  `P07B-options-pairing-expired-*` shots and compared them with the
+  committed ones pixel by pixel: 0 differing pixels in each. They were
+  not retaken.
+
+**K2: the reviewer's nits.**
+- **README step 7.** Until part C, it points to a hand-written fictional
+  manifest, `extension/fixtures/application-session.example.json`, built
+  from `sessionManifestSchema` in `packages/contracts/src/session.ts`.
+  `session-import.test.ts` keeps it valid and its URLs on `*.example`.
+- **The popup's outcomes list** (optional) now names five outcomes; the
+  fifth is "not stored".
+- **The H2 table** has a non-envelope 403 row. It gets the foreign-server
+  sentence, not "belongs to a different install". Every row now also
+  asserts that no `pairingExpired` or `pairingOriginMismatch` flag was
+  stored for the next check to misread.
+
+**K3: the outbox line.** With another program on the port, it now reads
+"1 saved job waiting to send; trying again." Status's alert gives the
+reason.
+- I dropped the clause whatever Status shows: when Status shows something
+  else, that is the current reason, and a capture's last failure would be
+  out of date.
+- The four `P07B-options-foreign-server-*` shots are retaken. A normal
+  e2e run takes the same verified captures into `test-results/`; I copied
+  those into place. A capture from the last chain run differs from them
+  only in the "Paired" time.
+- Only Settings shows the outbox line. A fresh capture of the popup's
+  `P07B-popup-queued-foreign-server-*` differs from the committed shot
+  only in the fixture server's port in the URL, so those shots were not
+  rewritten.
+- The unit and e2e tests check that Status says the sentence once.
+
+**K4: plain reasons in the popup's fallback.** `build-job-capture.ts`
+gives the fallback a plain sentence, never zod's messages:
+- an address the contracts refuse: "This page's address is too long or
+  unusual to capture." In practice that is longer than 2,048 characters,
+  since `url.ts` already refuses every scheme but http(s);
+- anything else: "This page couldn't be captured."
+
+The fallback's own next step follows (paste the posting in the runner's
+Jobs page). Tests cover:
+- the builder: a long address, a `javascript:` address, and a
+  non-address refusal through a mocked digest;
+- the popup's real `run()` with a long address.
+
+**Mutation proofs.** For each plant, I changed the source, ran the tests,
+then restored the file from its backup in `/tmp/wc-p07b-esc/mut-r4/`.
+`cmp` showed each file identical to its backup, and `git diff` was
+empty. The logs are in the same folder.
+- **K1a.** Revision 3's behaviour: `syncPairingSection` puts the sentence
+  in the live line. Four unit tests fail: the three K1 cases (two
+  announcements each) and the revision 3 revoke test. In Chrome, the K1
+  e2e fails too, on the empty notice.
+- **K1b.** The notice is made live (`aria-live="polite"`). Exactly the
+  three K1 unit cases fail, each with two announcements. In Chrome, the
+  K1 e2e fails on the announcement check: it hears the extra "Your
+  pairing expired or was revoked.". The load-path test passes, as it
+  should: that notice is set before the page is mounted.
+
+  My first K1b also added `role="status"`. The tests read the live line
+  as the card's first `[role="status"]`, so 21 failed on that selector,
+  and the plant proved little. I narrowed it to `aria-live`; both logs
+  are kept.
+- **K1c.** No focus move after the rebuild. Two tests fail: the K1
+  focus-re-check case, and revision 2's focus test.
+- **K4a.** The validation text built from zod's messages is back. Four
+  tests fail: the three builder tests and the popup test.
+- **K4b.** The branch checks the wrong field. The three address tests
+  fail, including the popup's.
+
+**Verify chain** on `59a1e79`, from the repo root. `extension/dist` was
+moved aside first; it held a build with a plant in it.
+- `pnpm install --frozen-lockfile`: "Already up to date".
+- `pnpm typecheck`: all six packages Done.
+- `pnpm test`:
+  - contracts 235; job-assistant 151; catalog 168;
+  - runner 155 (gates: approval 4/4, tool-surface 4/4, skills 4/4,
+    missing-tools 8/8);
+  - extension: 21 files passed and 1 skipped; 329 tests passed and 5
+    skipped (the tests that need `dist/`);
+  - `scripts/*.test.mjs`: pass 2, fail 0.
+- `pnpm -r lint`: 6/6 clean. `pnpm check:fixtures`: clean.
+- `git status --porcelain`: empty.
+- Extension build from clean source: scan clean. The built notice has no
+  `aria-live`.
+- `EXTENSION_DIST_REQUIRED=1` extension test: 22 files, 334 tests
+  passed, 0 skipped.
+- Full e2e, twice: "37 passed" both times (2.0m each). Port 4310 was free
+  before and after, and the tree stayed clean.
+
+Since revision 3, extension unit tests went from 324 to 334 (with
+`dist/`), and e2e from 36 to 37.
+
+**CI.**
+- 35923866822 on `eebd220`: success.
+- 35926443078 on `59a1e79`: success.
+- This report's run is in the reply to the orchestrator.
+
+**Skipped, and why.** There was no real screen reader. Announcements
+are modelled by `e2e/announcements.ts`, on the same rules as the critic's
+logger, and checked in happy-dom and in Chrome.
+
+**Assumptions and judgment calls.**
+- A non-live second slot rather than an `aria-live` toggle (K1, above).
+- K3 drops the clause whatever Status shows (above).
+- K4's two sentences, with the address as the named cause.
+- The README example is a checked-in fixture with a test, not JSON inline
+  in the README, so it can't drift from the schema.
+- The recorder judges each mutation record on its own, as the critic's
+  logger does. Under a per-batch model, "Paired." (set, then moved in
+  the same step) would count as silent. Both models give "only the
+  alert" for K1's cases, because the notice is never live and clearing
+  the live line adds nothing.
+
+**Disclosures.**
+- The first full e2e run on `59a1e79`, before the push, failed one test:
+  `extension.spec.ts` "the popup, opened without a genuine activeTab
+  grant, shows the no-readable-address fallback". It hit the 30 s test
+  timeout inside `page.goto`, while other agents held the machine's load
+  average at 46–56 on eight cores.
+  - That run's first three tests took 34–40 s each, against 2–5 s in the
+    passing runs, and the run took 4.5 minutes instead of 2.0–2.4.
+  - K4 doesn't touch this test's path: `popup/main.ts` shows that
+    fallback before it builds any capture.
+
+  The rerun passed 37/37, as did both chain runs. Logs:
+  `/tmp/wc-p07b-esc/r4-e2e-full-1.log` and `-2.log`.
+- The K1b plant's first form, as above.
+
 ### 2026-09-23 — Revision 3 (part B, iter-005)
 
 Round 3 reviewed head `d0e2b2c`. The reviewer returned REVISE with one
