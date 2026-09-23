@@ -1048,3 +1048,24 @@ The orchestrator's own fallback wake-up couldn't run either, so the loop stalled
   - A turn response follows with `keepAlive`, so eve never gives up on a silent stream.
   - If the stream ends early without an abort, eve throws. Only a manually opened `session.stream()` stops quietly.
   - `eve-runtime.md` §8 item 15 now says so.
+
+## 2026-09-23 — P07-B peer review, round 4 [REQUEST_CHANGES]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** a narrow confirmation round over revision 3 (d0e2b2c..9529761; H1–H4). An Opus reviewer and an Opus UI critic reviewed PR #12. The findings are in `logs/handoff/P07-B-round-4-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: APPROVE.**
+  - Chain green at the head and on the merge onto b383772. CI's 36 e2e tests passed with no retries.
+  - The gate-4 fix doesn't weaken the gate.
+  - 13 of 14 mutations were caught.
+  - Nits: README step 7's import source; a non-envelope 403 test row.
+- **UI critic: VERDICT: REVISE — 1 issue.** Every round-3 item holds, and axe is clean across 116 audits.
+  1. On the options page, a revoked or expired pairing is announced two or three times: Status's alert, the Pairing line's live update, and the code field's description when focus moves.
+
+**Action taken:**
+- Revision 4 went to the same Opus implementer, with decisions K1–K4: announce once, the reviewer's nits, the polish, and H2 in part A's fallback.
+- Round 5 confirms only K1–K4.
+- **Process note:** while looking for its scratch folder, the UI critic opened the orchestrator's roster and code-word files in /tmp; it says it used nothing from either. The files moved to a private folder with no `wc-` prefix. From now on, prompts limit agents to the /tmp paths they name.

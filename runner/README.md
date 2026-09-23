@@ -260,8 +260,107 @@ The **status page** (`ui/status.html`) shows:
 - the paired browsers, with Revoke and "New pairing code"
 - the workspace
 
-There is no Settings page yet. Revocation (mvp-spec §7.5) lives here until
-one exists. Fonts are Geist, self-hosted (`ui/assets/fonts`, SIL OFL).
+Revocation (mvp-spec §7.5) lives here until a pairing section joins
+Settings. Fonts are Geist, self-hosted (`ui/assets/fonts`, SIL OFL).
+
+The **Runs page** (`ui/runs.html`, P08-A) lists every run this instance has
+made (`GET /api/runs`), newest first, bounded to 200 records / 14 days. Each
+entry shows the date and time, the kind as a readable label, an outcome pill
+with its reason in plain language right beside it (an internal error code
+such as `MODEL_CALL_FAILED:` appears only in the "View JSON" disclosure, never
+the visible text), the duration, tokens in/out, the model, a catch-up badge,
+the item-cap note when a run stopped early ("stopped at the per-run cap (N);
+M jobs stay Saved"), a shortened form of the record's file path
+(`runs/<date>/<8 chars>….json`, the full relative path in the tooltip) with a
+"Copy path" button for the absolute path, and the "View JSON" disclosure.
+Each "Copy path" button is named for its run's kind and time, and shows
+"Copied" or "Couldn't copy" right beside it for a few seconds (hidden from
+screen readers; the live region makes the one announcement). "View JSON"
+shows the record exactly as it is on disk, with its workspace path and
+absolute path listed apart above it. A record whose model is `n/a` never
+called the model (paused, or a body that failed before any turn) and shows
+no duration/tokens/model line; `unknown` means a turn was sent but eve never
+said which model (a timeout before the first step), so the duration and
+tokens show and only the model is hidden. A record with no `finishedAt` at
+all (the runner stopped mid-run) shows a neutral "Did not finish (or still
+running)" pill instead of an outcome. Catch-up marks and past paused records
+use a neutral badge, not amber — amber is reserved for the *current* pause on
+the Settings page. A file that exists but fails to validate is skipped and
+named rather than crashing the list: up to 10 short paths in `<code>`, one
+per line (full path in the tooltip), then "and N more.". A whole date folder
+that fails to list (a permissions problem, say) is one entry, `runs/<date>/`
+(or `runs/` for the whole log), and the count then reads "run records or
+folders" — skipped with a note, never a 500. Empty state: "No runs yet.",
+shown once, never echoed into the live region.
+
+The **Settings page** (`ui/settings.html`) holds one `<section>` per concern,
+each with its own script, so later packets can add a section without
+touching another's. Today it has:
+
+- **Budget** (`ui/assets/settings-budget.js`, P08-A): the daily run limit
+  (1–50, default 10) and the per-run item cap (1–20, default 5) as bounded
+  number inputs with their range stated as hint text, runs used today, the
+  pause with its reason and a Resume button, and Save. An out-of-range or
+  non-numeric submission is caught client-side before any request: the field
+  gets `aria-invalid`, keeps focus, and the live region gets one plain
+  sentence — the server's raw 400 body is never shown. Backed by
+  `GET`/`POST /api/runs/budget` and `POST /api/runs/budget/resume`; every
+  message is built from the state the server just returned, never from what
+  the page saw earlier. A corrupt `runs/budget.json` is reported paused with
+  the reason "budget settings unreadable (runs/budget.json)" rather than
+  crashing, its path in `<code>`, and a note that the limits shown are the
+  defaults. Resume rewrites it with the default limits and unpauses ("Runs
+  resumed with the default limits: 10 runs a day, 5 jobs per run.", because
+  the resume response says `restoredDefaults`). Save rewrites it with the
+  submitted limits but keeps it paused until Resume, since decision 2 does
+  not let an unrelated Save silently clear a pause: the stored reason becomes
+  "budget settings were unreadable (runs/budget.json)", the note says the
+  limits are saved and Resume restarts runs, and Save announces "Budget
+  saved. Runs stay paused until you press Resume."; a later Resume keeps the
+  saved limits and says "Runs resumed.". When today's run folder
+  (`runs/<date>/`) can't be listed, the runs used today are unknown, so the
+  budget reads as paused with the fixed reason "run log unreadable
+  (runs/<date>/)" (derived on every read, never stored; `withRun` refuses
+  runs with paused records wherever one can be written). Settings shows
+  "unknown" usage and no Resume, since Resume can't make the folder
+  readable; the pause clears by itself once it is. `pauseKind` says which
+  pause is showing, first match wins: an unreadable budget file, a repaired
+  one, a stored pause, an unreadable run log. `GET /status` stays 200 even if
+  the budget can't be computed at all (then it reports paused, "budget status
+  unavailable"). **`paused` only ever means a pause that needs attention —
+  the stored manual/provider-limit pause or one of those unreadable-file
+  pauses — and is never set just because the daily limit was reached.** A
+  consumer that wants to know "is today's quota used up" compares
+  `runsUsedToday >= dailyRunLimit` itself (both fields are in the contract);
+  Settings shows this state as "Daily limit reached. New runs wait until
+  tomorrow.", below Save so it never moves Save from under the pointer. All
+  budget-file writes (`pauseBudget`, `resumeBudget`, `setBudgetLimits`, and
+  `withRun`'s own paused/limit check + `startRun`) go through one in-process
+  serialization (`store/budget.ts`'s `withBudgetLock`), so a Save racing a
+  provider-limit pause can never lose either one.
+
+Both pages share one persistent live region (`role="status"
+aria-live="polite"`) per page for every success and error, with section-
+specific wording ("Budget saved.", "Runs resumed.") that is re-announced even
+when repeated; its space is reserved while empty, so a message appearing
+never moves anything under the pointer. Both use `aria-disabled` rather than
+the `disabled` attribute on a busy button so focus is never dropped
+mid-action.
+
+`withRun` (`server/run-harness.ts`) never rejects before the run's body: an
+empty idempotency key, or a run record that can't be written, resolves with
+an in-memory failure record (logged, never written). `runTurn` reads eve's
+response stream event by event rather than trusting a single aggregated
+result, because eve@0.63.0 can end an aborted turn quietly with no thrown
+error (`docs/spec/research/eve-runtime.md` §8 item 15). A turn is ok when it
+ends at a `session.waiting` boundary (every conversation turn:
+`turn.completed → session.waiting`) or `session.completed` (task mode) with
+no failure event, no `turn.cancelled` and no abort. Only a non-empty
+`input.requested` list means the model is waiting on the person; that turn
+is cancelled and the run fails. `turn.cancelled`, a failure event or
+`session.failed` is not ok. Every cancel goes through the session, bounded
+to 5 s, not the turn response, which eve does not reliably act on before a
+turn has started or once it is parked.
 
 ## Workspace layout
 
@@ -269,7 +368,9 @@ The spec §5 layout, plus `.runner/` for the bridge's own state:
 
 ```text
 workspace.json    { workspaceId, workflowInstanceId, packageVersion, createdAt }   (WorkspaceManifest)
-sources/ jobs/ applications/ sessions/ runs/ outbox/ inbox/
+sources/ jobs/ applications/ sessions/ outbox/ inbox/
+runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
+runs/budget.json                        daily run limit, per-run item cap, and the pause (P08-A); survives restart
 .runner/devices/<deviceId>.json         paired devices (token hash, origin, expiry)
 .runner/pairing/<sha256>.json           outstanding pairing codes
 .runner/ui-login/<sha256>.json          outstanding UI sign-in links
@@ -352,7 +453,8 @@ change ships with a fixture that proves it (`eval-agent/`).
 | P05 | `agent/tools/prepare_application.ts`, `store/applications.ts`, `validate/`, `export/`, `ui/application.html`, preparation skills |
 | P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
-| P08 | `agent/schedules/`, `store/runs.ts`, `scheduler/`, `ui/runs.html`, the schedules and budget sections of `ui/settings.html`, and `server/routes/runs.ts` for `status()` (budget, schedules) and `start()` (catch-up). |
+| P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn` — free functions over `ctx`, not yet called from a real route), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
+| P08-B | `agent/schedules/`, `scheduler/` (catch-up + fallback trigger), the schedules section of `ui/settings.html`, and `server/routes/runs.ts`'s `status()` for `schedules` and `start()` (catch-up). Calls into `run-harness.ts`'s `withRun` to actually run something. |
 | P10 | `upgrade/`, the upgrade section of `ui/settings.html`, and an optional `server/routes/upgrade.ts`. |
 
 **Commands.** `GET /commands` is already complete over
