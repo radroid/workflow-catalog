@@ -1,7 +1,7 @@
 # P08 · Schedules, run log, and budget pause
 
-Status: claimed (part A done, PR open — part B not started)
-Assignee: iter-005 implementer (Sonnet, successor)
+Status: open (part A done iter 005, PR #13, squash 360ac69; part B not started)
+Assignee: — (part B unclaimed)
 Blocked by: P05
 Owns: runner/agent/schedules/, runner/store/runs.ts, runner/scheduler/ (catch-up + fallback trigger), runner/server/routes/runs.ts, runner/ui/runs.html, runner/ui/settings.html (schedules and budget sections)
 Spec: F10, F11, §8 schedules and run modes, hard-problems #4 and #7
@@ -24,6 +24,20 @@ Daily preparation of newly saved jobs and a weekly review that survive laptops s
 
 ## Out of scope
 Opening tabs from a schedule (never), catalog cron (none).
+
+## Carried into part B (from the part-A reviews, iter 005)
+Findings are in `logs/handoff/P08-A-round-3-review.md`.
+- **Reviewer's nits:**
+  1. Test a body that returns `{ turns: [] }` (the `n/a` side of `metaLine`, `run-harness.ts:372`).
+  2. When no turn reached eve (for example "eve is not running"), record the model as `n/a`, not `unknown` with 0/0 tokens.
+  3. Document that `hasSucceededWithIdempotencyKey` rejects when a folder can't be listed. A rejection means "unknown", never "not done", so no caller may write `.catch(() => false)`. Part B's catch-up and idempotent retries must fail closed on it.
+  4. `GET /api/runs/:runId` answers a clean 200 or 404 when `runs/` is unreadable, as `listRuns` does, not a 500.
+  6. `pauseBudget` can reject if `runs/budget.json` can't be written. Keep it contained wherever part B calls it outside `withRun`.
+- **UI critic's polish:**
+  - **P-a.** No "No runs yet." when records or folders were skipped. When `runs/` itself is unreadable, Settings must not promise that Resume restarts runs (Resume answers 500 today); say what to do instead.
+  - **P-b.** Folders are listed before files in the skipped note, or flagged by the server, and a lone folder reads as a folder.
+  - **P-c.** The run-log pause note says what to do: "Runs restart on their own once the runner can read this folder again; check its permissions." With a stored pause on top, the usage line gives a reason for "unknown".
+- **eve:** the authorization case in `eve-runtime.md` §8 item 15 applies to any schedule turn once a connection exists.
 
 ## Report
 

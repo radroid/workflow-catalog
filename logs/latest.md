@@ -1,10 +1,10 @@
 Latest: iter-005 in progress (resumed again at 16:04 on 2026-09-23 after a weekly usage limit). The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
 
-Running now: P07-B revision 4, the P08-A round-3 pair, and P03 revision 3, one worktree each. Reviewers' worktrees are removed once clean and pushed.
+Running now: P07-B revision 4 and P03 revision 3, one worktree each. Reviewers' worktrees are removed once clean and pushed.
 - **P03 (#11):** the Opus escalation (D8–D16, eve item 15) reached bbfa00e, with CI green. Round 3 returned REVISE from both. The reviewer found 1 issue: `turn.cancelled` counted as a success. The UI critic found 3: D9 refusals, double announcements, and the pinned line at 390. Revision 3 is with the same Opus implementer, with decisions J1–J8 (`logs/handoff/P03-round-3-review.md`). Round 4 is a narrow confirmation round.
 - **P07-B (#12):** round 4 on 9529761: the reviewer APPROVED; the UI critic returned REVISE (1 issue: a refused pairing is announced 2–3 times). Revision 4 is with the same Opus implementer, with decisions K1–K4 (`logs/handoff/P07-B-round-4-review.md`). Round 5 confirms only K1–K4.
-- **P08-A (#13):** the Opus escalation (I1–I4) reached 2c02190, with CI green. Round 3 is running as a narrow confirmation round: an Opus reviewer (4330 only if needed) and an Opus UI critic (4340, clone `/tmp/wc-ui7-p08a`). A REVISE goes back to the same Opus implementer (its worktree is kept). APPROVE means merge; whichever of P03 and P08-A merges second takes P03's `route-modules.test.ts`.
-- **Then:** P04 after P03; P05 (Opus) after P04; P03.1 after P03 and P04; P08-B after P05. After that, the wave plan continues.
+- **P08-A (#13): merged** (squash 360ac69) after round 3: both reviewers APPROVED. Its nits and polish go to P08-B ("Carried into part B" in the P08 packet).
+- **Then:** P04 after P03; P05 (Opus) after P04; P03.1 after P03 and P04; P08-B after P05. The runner follow-up (P02's `checkModel` to reuse P08-A's `runTurn`, eve item 15) comes after P03 merges. After that, the wave plan continues.
 
 If this session dies: every agent pushes its branch at green steps. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
 **Usage:** a weekly limit stopped every agent at about 17:05 on 9/22, and all resumed at 16:04 on 9/23. Keep review rounds narrow.
@@ -18,8 +18,8 @@ Must-carry (see "Rules and lessons learned" in the pause handoff):
 - **Ports are exclusive:**
   - owner 3000/3001;
   - 4310 only for the P07-B implementer (revision 4);
-  - the P03 implementer 4320; P08-A 4330;
-  - the UI critics 4340 (P08-A) and 4350 (P03); catalog 3106.
+  - the P03 implementer 4320;
+  - the UI critics 4340 and 4350; catalog 3106.
 - **Route modules:** P03's readdir-based test (D2) lands with P03. Until then, a packet adds its one name.
 - **eve:** directives compile per app root (§8 item 14). An aborted client turn ends quietly as `completed`, and `turn.cancelled` is not ok (§8 item 15). A provider 429 surfaces as `semanticErrorId "gateway-rate-limited"`.
 

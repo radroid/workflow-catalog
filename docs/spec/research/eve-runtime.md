@@ -288,6 +288,10 @@ export default eveChannel({
       - `session.completed` ends only task-mode sessions, such as a schedule firing. The P02 spike (`eve-spike.md`) recorded both sequences.
       - A turn is **waiting on the person** only when `input.requested` carried a non-empty request list (`result().inputRequests`).
       - `turn.cancelled` (always followed by `session.waiting`) is not ok.
+      - **Authorizations** (checked 2026-09-23, P08-A round-3 review):
+        - A turn response keeps following past `session.waiting` only while an `authorization.required` that carried a `webhookUrl` is still pending (`updatePendingAuthorizations` in `session-utils.js`).
+        - An `authorization.required` with no `webhookUrl`, followed by `session.waiting`, ends the response. A classifier that checks only failures, cancels and `input.requested` then reads that turn as ok.
+        - This can't happen while `runner/agent` has no connections. The first packet that adds one (P05 or later) must treat a pending authorization as waiting on the person.
       - A failure event, or a `session.failed` boundary, is not ok.
       - Found in the P08-A round-2 review (2026-09-22): a harness that read `session.waiting` as "needs input" recorded every normal run as a failure.
     - Callers: P08-A `runTurn` (fixed in its revision), P03's extraction route (R3 timeout), and P02's `checkModel` (a runner follow-up).
