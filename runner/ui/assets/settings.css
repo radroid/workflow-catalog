@@ -1,0 +1,116 @@
+/* Settings page: extends runner.css tokens (docs/spec/visuals/theme.css). Kept
+   separate from runner.css, which P08-A does not own. Page-level rules only
+   (the live region, form fields, the aria-disabled busy state); each section
+   that joins this page later can add its own stylesheet the same way. */
+
+/* The page's one persistent live region (role="status"): present throughout
+   the page's life, empty and visually silent until there is a success or
+   error to announce. min-height + the :empty override below (this file
+   loads after runner.css, so it wins on equal specificity by source order)
+   reserve the region's space even while empty, so a message appearing never
+   shifts the card below it out from under the pointer (P9). Every Budget
+   message fits one line at desktop widths and two at phone widths, so that
+   is what is reserved. */
+.status-message {
+  margin: 0 0 1rem;
+  overflow-wrap: anywhere;
+  min-height: 1.55em;
+}
+@media (max-width: 40rem) {
+  .status-message {
+    min-height: 3.1em;
+  }
+}
+.status-message:empty {
+  display: block;
+}
+/* Foreground text with a destructive left-border marker, not red text alone
+   (measured 3.75:1 in light mode, below 4.5:1) — issue 2. The announce()
+   helper also prefixes "Error: " so the signal survives without color too. */
+.status-message.error {
+  color: var(--foreground);
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.6rem;
+}
+.status-message.success {
+  color: var(--muted-foreground);
+}
+
+/* The heading takes focus after Resume (tabindex="-1"): the theme's ring, not the browser default. */
+#budget-title:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+#budget-title:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+  max-width: 16rem;
+}
+.field label {
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+.field input {
+  font: 500 0.95rem/1.3 var(--font-sans);
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--muted-foreground);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  width: 100%;
+}
+.field input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+/* A second pixel of red drawn inside the border, not a wider border: the input keeps its size, so marking it
+   invalid never moves Save (P9). */
+.field input[aria-invalid="true"] {
+  border-color: var(--destructive);
+  box-shadow: inset 0 0 0 1px var(--destructive);
+}
+.field .hint {
+  margin: 0;
+}
+
+/* Busy state uses aria-disabled, not the disabled attribute: a focused
+   button must never lose focus mid-action (native `disabled` moves focus to
+   <body>). Styled to look the same as runner.css's `.button:disabled`. */
+.button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#budget-pause {
+  margin-bottom: 1rem;
+}
+#budget-pause .button {
+  margin-top: 0.6rem;
+}
+#budget-pause-note {
+  margin-top: 0.4rem;
+}
+/* The reason's path ("runs/budget.json", "runs/2026-09-23/") is short, so it never breaks inside a date at 390;
+   the whole "(path)" moves to the next line instead. */
+#budget-pause-reason code {
+  white-space: nowrap;
+}
+
+#budget-form {
+  margin-bottom: 1rem;
+}
+
+#budget-usage {
+  color: var(--muted-foreground);
+  margin-bottom: 0.4rem;
+}
+#budget-limit-note {
+  margin: 0;
+}

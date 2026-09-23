@@ -90,7 +90,9 @@ p { margin: 0 0 0.75rem; }
 .badge { display: inline-block; min-width: 3.25rem; text-align: center; font: 500 0.75rem/1.6 var(--font-mono); border-radius: 999px; padding: 0 0.5rem; border: 1px solid var(--border); height: fit-content; }
 .badge.ok { background: var(--secondary); }
 .badge.warn { background: var(--decision); color: oklch(0.2 0 0); border-color: transparent; }
-.badge.fail { background: var(--destructive); color: oklch(1 0 0); border-color: transparent; }
+/* G7 (P08-A round-1 revision): dark text on the red fill, like .badge.warn — white-on-destructive measured
+   3.85:1 light / 3.04:1 dark (axe serious, below 4.5:1); this is about 4.7:1 light / 5.9:1 dark. */
+.badge.fail { background: var(--destructive); color: oklch(0.2 0 0); border-color: transparent; }
 
 .button {
   font: 500 0.875rem/1 var(--font-sans); cursor: pointer;
@@ -104,6 +106,12 @@ p { margin: 0 0 0.75rem; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.5rem 0.5rem 0.5rem 0; border-top: 1px solid var(--border); vertical-align: top; }
 th { font-weight: 500; color: var(--muted-foreground); border-top: 0; }
+
+/* G7 (P08-A round-1 revision): form-control borders need >=3:1 against the card (WCAG 1.4.11, polish P11);
+   --border is a hairline divider token measured at 1.27:1, not built for this. --muted-foreground already
+   clears normal text contrast, well above the 3:1 a border needs. A page's own more specific input rule (e.g.
+   settings.css's .field input) still has to opt into this value itself; this is the shared default. */
+input, select, textarea { border-color: var(--muted-foreground); }
 
 .code-display { font: 600 1.5rem/1.2 var(--font-mono); letter-spacing: 0.08em; margin: 0.5rem 0; }
 .notice { border-left: 3px solid var(--border); padding-left: 0.75rem; }
