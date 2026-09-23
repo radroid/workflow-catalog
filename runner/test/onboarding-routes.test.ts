@@ -9,7 +9,7 @@ import { ROUTES_DIR } from "../lib/paths.ts";
 import type { EveGateway } from "../server/eve-gateway.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
-import { buildExtractionPrompt, EXTRACTION_TIMEOUT_MS, MARKDOWN_UNREADABLE_EXTRACT_REFUSAL, MARKDOWN_UNREADABLE_REFUSAL } from "../server/routes/onboarding.ts";
+import { buildExtractionPrompt, EXTRACTION_STOPPED, EXTRACTION_TIMEOUT_MS, MARKDOWN_UNREADABLE_EXTRACT_REFUSAL, MARKDOWN_UNREADABLE_REFUSAL } from "../server/routes/onboarding.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { SOURCE_CATEGORY_LABELS } from "../store/profile-types.ts";
 import { PROFILE_BUSY_MESSAGE } from "../store/profile-writes.ts";
@@ -371,7 +371,7 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string }> };
     expect(body.ok).toBe(true);
     expect(body.status).toBe("completed");
-    expect(body.message).toBe("1 candidate claim extracted from Resume; 1 left out: quote not in the text.");
+    expect(body.message).toBe("1 candidate claim extracted from Resume; 1 had no matching quote.");
     expect(body.claims.map((claim) => claim.text)).toEqual(["Led the payments team at Northwind Labs."]);
   });
 
@@ -475,7 +475,7 @@ describe("/api/onboarding/sources/:category/extract: R7 and D14, idempotent per 
     expect((await post(bridge, "/sources/resume/uploads", { fileName: "five.txt", text: "z".repeat(100 * 1024) })).status).toBe(200);
     const over = await post(bridge, "/sources/resume/extract");
     expect(over.status).toBe(413);
-    expect(((await over.json()) as { error: { message: string } }).error.message).toBe("Everything saved for Resume is over 2 MiB. Shorten or remove an upload.");
+    expect(((await over.json()) as { error: { message: string } }).error.message).toBe("Resume has over 2 MiB saved. Shorten or remove an upload.");
     expect(fake.calls.count).toBe(1);
   });
 });
@@ -554,7 +554,7 @@ describe("V1/D9: hand edits to career-profile.md, through the routes", () => {
       expect(error.message).not.toMatch(UUID);
     }
     expect(MARKDOWN_UNREADABLE_REFUSAL).toBe("Not saved: career-profile.md has an edit the runner can't read. See the note at the top.");
-    expect(MARKDOWN_UNREADABLE_EXTRACT_REFUSAL).toBe("Not extracted: career-profile.md has an edit the runner can't read. See the note at the top.");
+    expect(MARKDOWN_UNREADABLE_EXTRACT_REFUSAL).toBe("Not extracted: career-profile.md has an edit the runner can't read. See the note.");
     expect(fake.calls.count).toBe(0);
     expect(await readFile(md, "utf8")).toBe(mdBefore);
     expect(await readFile(path.join(bridge.workspace.root, "career-profile.draft.json"), "utf8")).toBe(draftBefore);
@@ -637,6 +637,39 @@ describe("UI issue 2: route messages name things for a person", () => {
     }
     expect(messages[0]).toBe("Previous cover letters marked not applicable, with your reason kept.");
     expect(messages[4]).toBe("Work samples is not marked provided. Mark it provided, then extract.");
+  });
+
+  it("J5: every message a source's routes send is one short sentence, 90 characters at most, for every label", async () => {
+    const fake = fakeExtraction([{ status: "completed", extract: [{ text: "Staff roles, remote-first.", kind: "fact", evidenceRef: "pasted.txt#1", evidenceQuote: "Staff roles, remote-first." }, { ...LED_CLAIM }] }]);
+    const bridge = await realBridge(fake);
+    const messages: string[] = [];
+    const collect = async (response: Response) => {
+      const body = (await response.json()) as { message?: string; error?: { message: string } };
+      messages.push(body.message ?? body.error?.message ?? "");
+    };
+    for (const category of SOURCE_CATEGORIES) {
+      await collect(await post(bridge, `/sources/${category}/extract`)); // not marked provided
+      await collect(await post(bridge, `/sources/${category}`, { status: "provided" }));
+      await collect(await post(bridge, `/sources/${category}/extract`)); // nothing saved
+      await collect(await post(bridge, `/sources/${category}/content`, { text: "Staff roles, remote-first." }));
+      await collect(await post(bridge, `/sources/${category}/uploads`, { fileName: "notes.md", text: "Remote-first." }));
+      await collect(await post(bridge, `/sources/${category}/uploads`, { fileName: "notes.md", text: "Remote-first roles." }));
+      await collect(await post(bridge, `/sources/${category}`, { status: "unavailable", note: "Kept private." }));
+    }
+    // The longest labels: a turn with a quote not in the text, and more than 2 MiB saved.
+    await collect(await post(bridge, "/sources/socialProfiles", { status: "provided" }));
+    await collect(await post(bridge, "/sources/socialProfiles/extract"));
+    for (const name of ["one.txt", "two.txt", "three.txt", "four.txt", "five.txt"]) await post(bridge, "/sources/targetRolesAndPreferences/uploads", { fileName: name, text: "y".repeat(500 * 1024) });
+    await collect(await post(bridge, "/sources/targetRolesAndPreferences", { status: "provided" }));
+    await collect(await post(bridge, "/sources/targetRolesAndPreferences/extract"));
+    expect(messages).toContain("Social profiles (exported) is not marked provided. Mark it provided, then extract.");
+    expect(messages).toContain("Nothing saved for Social profiles (exported) yet. Paste its text or upload a file.");
+    expect(messages).toContain("1 candidate claim extracted from Social profiles (exported); 1 had no matching quote.");
+    expect(messages).toContain("Target roles & preferences has over 2 MiB saved. Shorten or remove an upload.");
+    expect(messages).toHaveLength(SOURCE_CATEGORIES.length * 7 + 4);
+    for (const message of [...messages, MARKDOWN_UNREADABLE_REFUSAL, MARKDOWN_UNREADABLE_EXTRACT_REFUSAL, EXTRACTION_STOPPED]) {
+      expect(message.length, message).toBeLessThanOrEqual(90);
+    }
   });
 });
 

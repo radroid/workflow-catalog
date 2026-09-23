@@ -44,7 +44,7 @@ import { defineRouteModule } from "../route-modules.ts";
 /** J3: what a write refused while career-profile.md can't be read says. The page's note at the top names the problem. */
 export const MARKDOWN_UNREADABLE_REFUSAL = "Not saved: career-profile.md has an edit the runner can't read. See the note at the top.";
 /** J3: the extraction route's refusal in that state. The page, having just saved the text, says both. */
-export const MARKDOWN_UNREADABLE_EXTRACT_REFUSAL = "Not extracted: career-profile.md has an edit the runner can't read. See the note at the top.";
+export const MARKDOWN_UNREADABLE_EXTRACT_REFUSAL = "Not extracted: career-profile.md has an edit the runner can't read. See the note.";
 /** J1: a turn eve cancelled (`turn.cancelled`, then `session.waiting`) never finished. */
 export const EXTRACTION_STOPPED = "The extraction was stopped before it finished. Try again.";
 
@@ -343,9 +343,10 @@ export default defineRouteModule({
         return errorResponse(409, "not_provided", `${label} is not marked provided. Mark it provided, then extract.`);
       }
       const sourceText = await s.sourceText(category);
-      if (!sourceText) return errorResponse(409, "no_source_content", `Nothing is saved for ${label} yet. Paste its text or upload a file first.`);
+      // J5: each message stays within 90 characters for the longest label.
+      if (!sourceText) return errorResponse(409, "no_source_content", `Nothing saved for ${label} yet. Paste its text or upload a file.`);
       if (Buffer.byteLength(sourceText, "utf8") > MAX_TOTAL_SOURCE_TEXT_BYTES) {
-        return errorResponse(413, "source_too_large", `Everything saved for ${label} is over 2 MiB. Shorten or remove an upload.`);
+        return errorResponse(413, "source_too_large", `${label} has over 2 MiB saved. Shorten or remove an upload.`);
       }
       const claimsFor = (p: OnboardingProfile) => p.claims.filter((claim) => claim.source === category);
 
@@ -401,7 +402,9 @@ export default defineRouteModule({
         const persisted = outcome.ok ? persistedExtraction(result.events, category) : undefined;
         if (persisted) await s.recordExtractionContentHash(category, sourceText);
         const after = await s.read();
-        const dropped = persisted && persisted.rejected > 0 ? `${persisted.message.replace(/\.$/, "")}; ${persisted.rejected} left out: quote not in the text.` : undefined;
+        // J5: built from the counts, so it stays one short sentence whatever the tool's own message says.
+        const found = persisted && (persisted.added > 0 ? `${persisted.added} candidate claim${persisted.added === 1 ? "" : "s"} extracted from ${label}` : `No new claims from ${label}`);
+        const dropped = persisted && persisted.rejected > 0 ? `${found}; ${persisted.rejected} had no matching quote.` : undefined;
         const message = !outcome.ok ? outcome.reason : persisted ? (dropped ?? persisted.message) : "The model finished without saving any claims. Try again.";
         return c.json({ ok: outcome.ok && persisted !== undefined, status: result.status, message, claims: claimsFor(after) });
       } catch (error) {
