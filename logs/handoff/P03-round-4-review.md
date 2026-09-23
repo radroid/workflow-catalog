@@ -1,6 +1,6 @@
 # P03 (#11): round-4 review of head fbb6444 (iter 005)
 
-A narrow confirmation round over revision 3 (bbfa00e..fbb6444, decisions J1–J8 in `logs/handoff/P03-round-3-review.md`). The UI critic's section is added when its verdict lands.
+A narrow confirmation round over revision 3 (bbfa00e..fbb6444, decisions J1–J8 in `logs/handoff/P03-round-3-review.md`). Both reviewers APPROVED, so PR #11 merged. The nits and polish are carried into P03.2.
 
 ## Reviewer (Opus): APPROVE (no issues, 5 nits, 1 follow-up)
 
@@ -42,3 +42,34 @@ Scratch: `/tmp/p03-r4-review/`:
 **Follow-up:**
 - `ui-pages.test.ts:67` loads happy-dom from the extension's install. That's acceptable for now: it's pinned at 20.14.5 and CI runs the test.
 - P03.1 adds `"happy-dom": "20.14.5"` to the runner's devDependencies. It already owns `runner/package.json` and the lockfile.
+
+## UI critic (Opus): APPROVE (polish only)
+
+Scratch: `/tmp/wc-ui8-p03-scratch/`:
+- `log.json`, and `lib.mjs` with the focus instruments;
+- the stage scripts and `ws/`;
+- `shots/` (144 files), with contact sheets at `shots/contact-*.png`.
+
+The clone is `/tmp/wc-ui8-p03`, at fbb6444. The harness has stopped and 4350 is free.
+
+**What holds:**
+- **Round-3 issues:**
+  - D9: one 88-character line, no field error, and the problem named by line.
+  - Announcements and focus, over 75 actions: each announced once; focus never on `<body>` in 2,738 frames; no focused node removed.
+  - The pinned line at 390: 30 px after a question and 48 px after a refusal.
+- **Polish 1–11:** all verified.
+- **J3–J6 and J8** are verified. On J5's "at most 90 characters", see polish 2 below.
+- **Shots:** all 62 are accurate and distinct.
+- **Sweep:** axe clean in both themes at both widths, D9 included; no sideways scroll; lowest contrast 6.76:1.
+
+**Polish:**
+1. A refused upload keeps focus on the file input, so only "Refused. Not uploaded." is announced, not the reason. Fix: put a short reason in the line when the refused control already has focus, e.g. "Not uploaded: only .txt or .md files can be uploaded."
+2. At 640 px and below, a message longer than two lines loses its last words, and a sliver of the third line shows. Two templates run over:
+   - "Accepted; … needs your answer, so approval is withdrawn." reaches 97 characters.
+   - "Saved. 2 edits are now proposed revisions; …" loses "them."
+
+   Fix: keep line messages to about 80 characters, with the consequence first, and clamp an inner element rather than the padded box.
+
+**Outside this round:**
+- The 413 upload reason reads "Request body is larger than 524288 bytes."
+- At 640 px and below, the tag and the message have no space between them, so assistive tech reads "LAST ACTIONAn answer is needed.".
