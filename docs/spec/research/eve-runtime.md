@@ -279,6 +279,13 @@ export default eveChannel({
       - Treat a turn as ok only when `summarizeTurnEvents(...).boundary` (a terminal `session.*` event) is present.
       - Cancel through the session.
       - Read the stream event by event, so partial `step.completed` usage survives a timeout.
+    - **Which boundary means what.** Don't confuse our "parked" with eve's.
+      - A normal conversation turn, which is what `client.sessions.create` gives, ends `turn.completed → session.waiting`. eve's docs call `session.waiting` "parked and ready for the next message": that is idle between turns, and it is **ok**.
+      - `session.completed` ends only task-mode sessions, such as a schedule firing. The P02 spike (`eve-spike.md`) recorded both sequences.
+      - A turn is **waiting on the person** only when `input.requested` carried a non-empty request list (`result().inputRequests`).
+      - `turn.cancelled` (always followed by `session.waiting`) is not ok.
+      - A failure event, or a `session.failed` boundary, is not ok.
+      - Found in the P08-A round-2 review (2026-09-22): a harness that read `session.waiting` as "needs input" recorded every normal run as a failure.
     - Callers: P08-A `runTurn` (fixed in its revision), P03's extraction route (R3 timeout), and P02's `checkModel` (a runner follow-up).
 
 **Recommended pin (read 2026-09-20):** `"eve": "0.63.0"` exact (no caret), `"ai"` and `"zod"` at whatever `eve init` writes for 0.63.0, Node `24` in `.nvmrc`/`engines`, and read docs from `node_modules/eve/docs` at that version rather than `main`. Re-evaluate the pin deliberately; do not float `eve@latest` in the template.
