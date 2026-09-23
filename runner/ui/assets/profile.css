@@ -1,0 +1,83 @@
+/*
+ * Profile page: status, pending revisions, and the career-profile.md editor.
+ * Tokens from runner.css (P02-owned, out of this packet's Owns); the shared
+ * rules below repeat onboarding.css's, for the same reason.
+ */
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* D12: the sticky "Last action" line, the page's one live region. JS keeps a
+   focused control clear of it (J5) and where it is on screen when the page
+   changes around it (J6.6), so the browser's own scroll anchoring is off. */
+html { scroll-padding-top: var(--last-action-offset, 5rem); overflow-anchor: none; }
+.last-action {
+  position: sticky; top: 0; z-index: 10;
+  margin: 0 0 1rem; padding: 0.625rem 0.875rem;
+  background: var(--muted); border-left: 3px solid var(--border);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  box-shadow: 0 1px 0 var(--border);
+  font-size: 0.875rem; overflow-wrap: anywhere;
+}
+.last-action .tag {
+  display: block; font: 500 0.675rem/1.5 var(--font-mono);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-foreground);
+}
+.last-action code { font: 0.95em var(--font-mono); }
+.last-action.done { border-left-color: var(--foreground); }
+.last-action.refused { border-left-color: #b91c1c; }
+/* J5: at most two lines at 640 px and below; the whole sentence stays in the DOM and the text's title. */
+@media (max-width: 640px) {
+  .last-action {
+    padding: 0.375rem 0.625rem; font-size: 0.8125rem; line-height: 1.4;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  }
+  .last-action .tag { display: inline; margin-right: 0.375rem; }
+}
+
+[tabindex="-1"]:focus { outline: none; }
+[tabindex="-1"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+.card.problem { border-color: #b91c1c; }
+.card.withdrawn { border-left: 3px solid var(--decision); }
+.applied-list { margin: 0 0 0.75rem; padding-left: 1.25rem; overflow-wrap: anywhere; }
+.withdrawal-next { font-weight: 500; margin-bottom: 0; }
+#status-summary { margin-bottom: 0; }
+.status-steps { margin: 0.375rem 0 0; padding-left: 1.25rem; overflow-wrap: anywhere; }
+
+.revision-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.625rem; }
+.revision { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.875rem 1rem; }
+.revision p { margin: 0; }
+.revision-meta { color: var(--muted-foreground); font-size: 0.8rem; margin-bottom: 0.375rem; }
+.revision-line { font-size: 0.9rem; overflow-wrap: anywhere; white-space: pre-line; }
+.revision-line + .revision-line { margin-top: 0.25rem; }
+.revision-label { color: var(--muted-foreground); }
+.revision-line .old { color: var(--muted-foreground); }
+.revision-line .new { font-weight: 500; }
+.revision-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+
+label { display: block; font-size: 0.85rem; color: var(--muted-foreground); margin: 0.5rem 0 0.25rem; }
+.markdown-editor {
+  display: block; width: 100%; min-height: 28rem; resize: vertical;
+  font: 0.85rem/1.6 var(--font-mono); color: inherit; background: var(--background);
+  border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.75rem;
+}
+.markdown-editor:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.markdown-editor[readonly] { background: var(--muted); }
+.markdown-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
+[aria-invalid="true"] { border-color: #b91c1c; }
+.field-error { color: #b91c1c; font-size: 0.85rem; margin: 0.375rem 0 0; overflow-wrap: anywhere; }
+
+.empty { color: var(--muted-foreground); font-size: 0.9rem; margin: 0; }
+
+.button[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+
+/* C8: measured 6.46:1 on white and 7.60:1 on black. */
+.error { color: #b91c1c; }
+@media (prefers-color-scheme: dark) {
+  .error, .field-error { color: #f87171; }
+  [aria-invalid="true"], .card.problem { border-color: #f87171; }
+  .last-action.refused { border-left-color: #f87171; }
+}

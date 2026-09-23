@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -88,10 +89,43 @@ describe("route modules", () => {
     expect(() => validateRouteModule("x", null)).toThrow(/export default defineRouteModule/);
   });
 
-  it("loads the runner's own modules: status, devices, pairing, model, runs", async () => {
+  it("loads exactly the *.ts files server/routes/ contains today, whatever packet added them (P04/P06/P08/P10 never need to edit this test)", async () => {
     const modules = await loadRouteModules(ROUTES_DIR);
-    expect(modules.map((m) => m.name)).toEqual(["devices", "model", "pairing", "runs", "status"]);
-    expect(buildEventRegistry(modules).size).toBe(0);
+
+    // "Expected" is derived from an independent, low-level readdir of
+    // ROUTES_DIR, filtered by the *exact same rule* loadRouteModules itself
+    // applies (server/route-modules.ts: "*.ts files, skipping tests
+    // (*.test.ts), type declarations and names starting with _ or .") —
+    // copied rather than imported because server/route-modules.ts is P02's
+    // (not in this packet's Owns), so this cannot share a symbol with it.
+    // Because "expected" is computed from the directory's actual contents
+    // rather than a hand-maintained literal, a future packet dropping in
+    // server/routes/<name>.ts needs no edit here: this test still passes,
+    // and still fails if loadRouteModules's own filtering ever drifts from
+    // that rule (a name it should include gets dropped, or vice versa).
+    const entries = await readdir(ROUTES_DIR);
+    const expectedNames = entries
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts") && !file.endsWith(".d.ts") && !/^[_.]/.test(file))
+      .map((file) => file.slice(0, -".ts".length))
+      .sort();
+    expect(modules.map((m) => m.name)).toEqual(expectedNames);
+
+    // P02's four modules must always be among them, named explicitly so an
+    // accidental deletion of one is still caught even though the assertion
+    // above is now directory-driven rather than a hardcoded full list.
+    expect(modules.map((m) => m.name)).toEqual(expect.arrayContaining(["devices", "model", "pairing", "status"]));
+
+    // The event registry's keys must be exactly the union of every loaded
+    // module's own declared `events` — not a hardcoded count. A module that
+    // declares events.foo but never ends up registered (or a stray key that
+    // ends up registered without any module declaring it) fails this,
+    // whatever the current module set is.
+    const declaredEventTypes = new Set<string>();
+    for (const { module } of modules) {
+      for (const type of Object.keys(module.events ?? {})) declaredEventTypes.add(type);
+    }
+    const registry = buildEventRegistry(modules);
+    expect(new Set(registry.keys())).toEqual(declaredEventTypes);
   });
 
   it("returns no modules for a missing directory", async () => {

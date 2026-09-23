@@ -1,0 +1,137 @@
+/*
+ * Onboarding page: sources, claims, statements, readiness and approval.
+ * Colours, radius and type come from runner.css's tokens (P02-owned, out of
+ * this packet's Owns, so page rules live here). The few literal colours below
+ * were measured for WCAG contrast against this page's own backgrounds.
+ */
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* D12: the sticky "Last action" line, the page's one live region. JS keeps
+   --last-action-offset at its height, so a focused control is never hidden
+   under it (J5), and keeps a focused control where it is on screen when the
+   page changes around it (J6.6), so the browser's own scroll anchoring is off. */
+html { scroll-padding-top: var(--last-action-offset, 5rem); overflow-anchor: none; }
+.last-action {
+  position: sticky; top: 0; z-index: 10;
+  margin: 0 0 1rem; padding: 0.625rem 0.875rem;
+  background: var(--muted); border-left: 3px solid var(--border);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  box-shadow: 0 1px 0 var(--border);
+  font-size: 0.875rem; overflow-wrap: anywhere;
+}
+.last-action .tag {
+  display: block; font: 500 0.675rem/1.5 var(--font-mono);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-foreground);
+}
+.last-action code { font: 0.95em var(--font-mono); }
+.last-action.done { border-left-color: var(--foreground); }
+.last-action.refused { border-left-color: #b91c1c; }
+/* J5: at 640 px and below the line is at most two lines; the whole sentence
+   stays in the DOM (so in its accessible text) and in the text's title. */
+@media (max-width: 640px) {
+  .last-action {
+    padding: 0.375rem 0.625rem; font-size: 0.8125rem; line-height: 1.4;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  }
+  .last-action .tag { display: inline; margin-right: 0.375rem; }
+}
+
+/* Anything focused by the page after an action (a card, a heading) uses the
+   theme's ring, and only when the keyboard is in use. */
+[tabindex="-1"]:focus { outline: none; }
+[tabindex="-1"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+.card.problem { border-color: #b91c1c; }
+.card.withdrawn { border-left: 3px solid var(--decision); }
+.card.withdrawn ul, .applied-list { margin: 0 0 0.75rem; padding-left: 1.25rem; }
+.withdrawal-next { font-weight: 500; margin-bottom: 0; }
+
+/* Readiness (issue 4): ●/○ are decoration; each line but the summary also says "Done:" or "Not yet:" to assistive tech (J6.5). */
+.readiness-lines { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.375rem; }
+.readiness-line { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.9rem; }
+.readiness-line .m { flex: none; width: 1rem; text-align: center; font-family: var(--font-mono); color: var(--muted-foreground); }
+.readiness-line.met .m { color: var(--foreground); }
+#approve-help { margin-bottom: 0.5rem; }
+#revision-hint { margin: 0.5rem 0 0; }
+
+/* Sources: every row's controls start at the same x (polish). */
+.source-row { padding: 0.875rem 0; border-top: 1px solid var(--border); }
+.source-row:first-child { border-top: 0; padding-top: 0.25rem; }
+.source-row-head { display: grid; grid-template-columns: minmax(0, 13rem) 7.5rem minmax(0, 1fr); align-items: center; gap: 0.5rem 0.75rem; }
+.source-row-head .name { font-weight: 500; }
+.source-row-head .badge { justify-self: start; }
+.source-status-buttons { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.source-details { margin-top: 0.625rem; }
+.source-details > p { margin-bottom: 0.5rem; }
+.source-reason-saved { overflow-wrap: anywhere; white-space: pre-line; }
+.source-panel { margin-top: 0.75rem; }
+.upload-names { overflow-wrap: anywhere; }
+.upload-row { margin-top: 0.75rem; }
+@media (max-width: 640px) {
+  .source-row-head { grid-template-columns: minmax(0, 1fr) auto; }
+  .source-status-buttons { grid-column: 1 / -1; }
+}
+
+.form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+
+label { display: block; font-size: 0.85rem; color: var(--muted-foreground); margin: 0.5rem 0 0.25rem; }
+textarea, input[type="text"], input[type="file"] {
+  font: inherit; color: inherit; background: var(--background);
+  border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
+  padding: 0.5rem 0.625rem; max-width: 100%;
+}
+textarea { display: block; width: 100%; resize: vertical; }
+input[type="file"] { font-size: 0.85rem; }
+textarea:focus-visible, input[type="text"]:focus-visible, input[type="file"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+[aria-invalid="true"] { border-color: #b91c1c; }
+.field-error { color: #b91c1c; font-size: 0.85rem; margin: 0.25rem 0 0; }
+
+/* Claims */
+.claim-list { display: flex; flex-direction: column; gap: 0.75rem; list-style: none; margin: 0; padding: 0; }
+.claim { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.875rem 1rem; }
+.claim p { margin: 0; }
+.claim-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; }
+.claim-head .badge { flex: none; }
+.claim-body { min-width: 0; }
+.claim-text { font-weight: 500; overflow-wrap: anywhere; }
+.claim-meta { color: var(--muted-foreground); font-size: 0.8rem; margin-top: 0.15rem; }
+.claim-evidence { color: var(--muted-foreground); font-size: 0.85rem; margin-top: 0.3rem; overflow-wrap: anywhere; }
+.claim-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.625rem; }
+@media (max-width: 640px) {
+  /* The badge takes its own line above the text, so the text keeps the card's width. */
+  .claim-head { flex-direction: column; gap: 0.375rem; }
+  .claim-head .badge { order: -1; }
+}
+.claim-question { margin-top: 0.75rem; }
+.claim-question .notice { font-size: 0.9rem; overflow-wrap: anywhere; }
+.question-reason { color: var(--muted-foreground); }
+.notes-title { margin: 0.625rem 0 0.25rem; }
+.question-notes { margin: 0; padding-left: 1.25rem; font-size: 0.875rem; overflow-wrap: anywhere; }
+
+/* Issue 5: white on #b91c1c is 6.47:1 in both themes (runner.css's red fill was 3.85:1 light, 3.04:1 dark). */
+.badge.fail { background: #b91c1c; color: #fff; border-color: transparent; }
+
+/* Boundaries, preferences and presentation notes */
+.statement-kind + .statement-kind { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 1rem; }
+.statement-kind h3 { font-size: 0.95rem; font-weight: 600; margin: 0 0 0.25rem; }
+.statement-kind input[type="text"] { flex: 1 1 12rem; min-width: 0; }
+.statement-list { margin: 0 0 0.5rem; padding-left: 1.25rem; font-size: 0.9rem; overflow-wrap: anywhere; }
+
+.empty { color: var(--muted-foreground); font-size: 0.9rem; }
+
+/* A busy button keeps focus and its place in the tab order (never the
+   disabled attribute); the click handler ignores it. */
+.button[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.button[aria-pressed="true"] { background: var(--secondary); border-color: var(--foreground); }
+
+/* C8: runner.css's .error red measured 6.46:1 on white and 7.60:1 on black with these values. */
+.error { color: #b91c1c; }
+@media (prefers-color-scheme: dark) {
+  .error, .field-error { color: #f87171; }
+  [aria-invalid="true"], .card.problem { border-color: #f87171; }
+  .last-action.refused { border-left-color: #f87171; }
+}
