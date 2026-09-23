@@ -306,7 +306,10 @@ from 46 to 66.
   pushed at a unit-green step without running e2e first.
 - 35915946218 on `555d87f`: success (4m25s).
 - 35917905879 on `23199d4`, the head the chain above ran on: success.
-- The report commits: their runs are in the reply to the orchestrator.
+- 35918588650 on `7cb5c4c`, this report: failure. A check in gate 4's e2e
+  raced the bridge's answer; see "After the report" below.
+- 35918717422 on `569d87b`, the report corrected: success (4m18s).
+- The fix's run is in the reply to the orchestrator.
 
 **Skipped, and why.**
 - There was no real screen reader, as before. Announcements are checked in
@@ -362,10 +365,48 @@ an old token is refused, pair again.
   I split each into plain commands, as the clarified rule allows. No deny
   rule or permission check refused anything.
 - This round's first push (`628fba1`) went red in CI, as above.
+- The first report commit (`7cb5c4c`) went red in CI too, on the gate 4
+  race below.
 
 **Sharpen next time.** Put the tone rules (H1) and the message rules (H2)
 in the packet before part B starts. Three rounds of UI review converged on
 them.
+
+**After the report: a check in gate 4 raced the bridge (CI 35918588650).**
+- **What failed.** CI failed on `7cb5c4c`, which changed only this file.
+  Gate 4's e2e ("Save queues when the runner is unreachable, and the queued
+  capture is delivered once it's back") found one capture still queued,
+  where it expected none.
+- **Cause.** The race is in the test, not the extension. The bridge
+  journals a capture before it answers: `runner/server/events.ts` appends
+  the record as pending, records its dispatch, then responds. The test
+  polled the journal and checked the outbox once, as soon as the capture
+  appeared. The worker removes the entry only when the answer arrives, so
+  the check could land in between. The check dates from revisions 1 and 2;
+  this was the first run to hit it.
+- **Fix (`c613ecc`).** The test waits up to 10 s for the outbox to empty.
+  The worker waits 30 s before a second try, so a failed delivery still
+  fails the test.
+- **Proof.** I planted a temporary delay in `recordDispatch` of the test's
+  bridge; it was never committed.
+  - With 1.5 s, the old check fails with CI's exact error (expected 0,
+    received 1), and the new check passes.
+  - With 7 s, past the extension's 5 s request timeout, the delivery
+    really fails. The new check still fails: "Timeout 10000ms exceeded",
+    received 1.
+
+  The spec was backed up in `/tmp/wc-p07b-esc/flake-r3/`, and before the
+  commit `git diff` showed only the fix. The logs are in the same folder.
+- **The other checks.** The e2e's other journal and outbox checks don't
+  race. Each runs after the popup's status line, which appears only once
+  the Save's request has settled and any queueing is done. A bridge answer
+  always comes after its journal writes.
+- **Rerun on `c613ecc`.**
+  - The full chain gave the same numbers as above: extension 319 passed and
+    5 skipped on a clean tree, and 324 passed with 0 skipped once `dist/`
+    was built and `EXTENSION_DIST_REQUIRED=1` set.
+  - e2e twice: "36 passed" both times, 2.0m each.
+  - Port 4310 was free before and after, and the tree stayed clean.
 
 ### 2026-09-22 — Revision 2 (part B, iter-005 Opus escalation)
 
