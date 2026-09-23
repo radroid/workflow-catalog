@@ -104,13 +104,20 @@ const draftProfileSchema = z
   })
   .strict();
 
-/** D9: career-profile.md (or a markdown edit sent by the Profile page) can't be read, so nothing was written. */
+/**
+ * D9: career-profile.md (or a markdown edit sent by the Profile page) can't be
+ * read, so nothing was written. `problem` is the reader's plain sentence,
+ * named by line number ("Line 14: …") and never by a marker's id (revision 3,
+ * J3); the pages show it in their note about the file.
+ */
 export class ProfileMarkdownError extends Error {
   override readonly name = "ProfileMarkdownError";
   readonly origin: "file" | "request";
-  constructor(message: string, origin: "file" | "request") {
-    super(message);
+  readonly problem: string;
+  constructor(problem: string, origin: "file" | "request") {
+    super(origin === "file" ? `career-profile.md has an edit the runner can't read. ${problem} Nothing was saved.` : `Your edit can't be read. ${problem} Nothing was saved.`);
     this.origin = origin;
+    this.problem = problem;
   }
 }
 
@@ -160,8 +167,10 @@ export interface ProfileStoreOptions {
 
 export interface LoadResult {
   readonly profile: OnboardingProfile;
-  /** D9: why career-profile.md can't be read, or null when it is fine. */
+  /** D9: why career-profile.md can't be read ("Line 14: …"), or null when it is fine. */
   readonly markdownError: string | null;
+  /** J3: the file as it is on disk while it can't be read (the Profile page shows it instead of the runner's render); null otherwise. */
+  readonly markdownOnDisk: string | null;
 }
 
 export interface MarkdownSaveResult {
@@ -179,17 +188,14 @@ interface Reconciled {
   readonly rerender: boolean;
 }
 
+/** Put before an action's message when the write also saved hand edits to career-profile.md: short, since the whole message is one pinned line (J5). */
 function editsNote(applied: number, proposed: number): string {
   const parts: string[] = [];
-  if (applied > 0) parts.push(`${applied === 1 ? "your edit" : `your ${applied} edits`} to career-profile.md ${applied === 1 ? "was" : "were"} saved`);
-  if (proposed > 0) parts.push(`${proposed === 1 ? "your edit" : `your ${proposed} edits`} to career-profile.md ${proposed === 1 ? "is" : "are"} now a proposed revision${proposed === 1 ? "" : "s"}`);
+  if (applied > 0) parts.push(`${applied === 1 ? "file edit" : `${applied} file edits`} saved`);
+  if (proposed > 0) parts.push(`${proposed === 1 ? "file edit" : `${proposed} file edits`} proposed as ${proposed === 1 ? "a revision" : "revisions"}`);
   if (parts.length === 0) return "";
-  const sentence = parts.join(", and ");
+  const sentence = parts.join(", ");
   return `${sentence[0]!.toUpperCase()}${sentence.slice(1)}.`;
-}
-
-function fileProblem(problem: string): string {
-  return `career-profile.md has an edit the runner can't read. ${problem} Nothing was saved. Fix the file, or discard your edits to career-profile.md.`;
 }
 
 export class ProfileStore {
@@ -305,7 +311,7 @@ export class ProfileStore {
     if (onDisk === renderProfileMarkdown(current)) return unchanged;
     if ((await this.#readFingerprint()) === sha256(onDisk)) return { ...unchanged, rerender: true };
     const read = readMarkdownEdits(current, onDisk);
-    if (!read.ok) throw new ProfileMarkdownError(fileProblem(read.problem), "file");
+    if (!read.ok) throw new ProfileMarkdownError(read.problem, "file");
     return this.#applyEdits(current, read.edits);
   }
 
@@ -346,20 +352,22 @@ export class ProfileStore {
   /**
    * The profile for a page to show, with any hand edits to career-profile.md
    * applied first (under the lock). When the file can't be read, returns the
-   * JSON profile and the reason as `markdownError`, and writes nothing.
+   * JSON profile, the reader's problem as `markdownError`, and the file as it
+   * is on disk (J3), and writes nothing.
    */
   async load(): Promise<LoadResult> {
     try {
       const { profile } = await this.#transaction((reconciled) => ({ profile: reconciled, write: false }));
-      return { profile, markdownError: null };
+      return { profile, markdownError: null, markdownOnDisk: null };
     } catch (error) {
       if (!(error instanceof ProfileMarkdownError)) throw error;
-      return { profile: await this.read(), markdownError: error.message };
+      return { profile: await this.read(), markdownError: error.problem, markdownOnDisk: (await this.#readMarkdownFile()) ?? null };
     }
   }
 
+  /** Readiness of the profile as `load` sees it, so a hand edit to career-profile.md counts before anything else is written (N7). */
   async readiness(): Promise<Readiness> {
-    return computeReadiness(await this.read());
+    return computeReadiness((await this.load()).profile);
   }
 
   async accountSource(category: SourceCategory, status: "provided" | "unavailable" | "not_applicable", note?: string): Promise<ReduceResult> {
@@ -441,9 +449,7 @@ export class ProfileStore {
           profile: current,
           write: false,
           message: "",
-          refusal: new StaleMarkdownError(
-            `${editsNote(reconciled.applied, reconciled.proposed)} The file was changed outside this page since the page loaded, so this page's copy is out of date. Your text here was not saved; copy it, reload, and make the edit again.`,
-          ),
+          refusal: new StaleMarkdownError("Not saved: the file changed outside this page. Copy your text, then reload."),
         };
       }
       if (base !== undefined && base !== sha256(renderProfileMarkdown(current))) {
@@ -451,11 +457,11 @@ export class ProfileStore {
           profile: current,
           write: false,
           message: "",
-          refusal: new StaleMarkdownError("The profile changed since this page loaded, so this page's copy is out of date. Your text here was not saved; copy it, reload, and make the edit again."),
+          refusal: new StaleMarkdownError("Not saved: the profile changed since this page loaded. Copy your text, then reload."),
         };
       }
       const read = readMarkdownEdits(current, markdown);
-      if (!read.ok) return { profile: current, write: false, message: "", refusal: new ProfileMarkdownError(`Your edit can't be read. ${read.problem} Nothing was saved.`, "request") };
+      if (!read.ok) return { profile: current, write: false, message: "", refusal: new ProfileMarkdownError(read.problem, "request") };
       const next = this.#applyEdits(current, read.edits);
       const parts = [
         next.applied > 0 ? `${next.applied === 1 ? "1 edit was" : `${next.applied} edits were`} applied` : "",

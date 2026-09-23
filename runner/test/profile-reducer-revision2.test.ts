@@ -42,7 +42,7 @@ function accounted(): OnboardingProfile {
   return profile;
 }
 
-function withClaims(profile: OnboardingProfile, texts: ReadonlyArray<{ text: string; kind?: "fact" | "metric" | "credential" }>): OnboardingProfile {
+function withClaims(profile: OnboardingProfile, texts: ReadonlyArray<{ text: string; kind?: "fact" | "metric" | "credential" | "title" }>): OnboardingProfile {
   return apply(profile, {
     type: "extractClaims",
     category: "resume",
@@ -108,9 +108,31 @@ describe("UI issue 2: messages name claims and sources for a person", () => {
       expect(message).not.toMatch(RAW_KEYS);
       expect(message).not.toContain("(s)");
     }
-    expect(messages).toContain("Previous cover letters marked not applicable, with your reason kept. That still counts as accounted for; nothing is invented to fill the gap.");
-    expect(messages).toContain("“Led the payments team at Northwind Labs.” confirmed. You confirmed it without adding detail.");
-    expect(messages).toContain("Revision rejected. The boundary keeps its current text.");
+    expect(messages).toContain("Previous cover letters marked not applicable, with your reason kept.");
+    // J6.4: the reason names the real trigger, the always-ask word, not the claim's kind.
+    expect(messages).toContain("“Led the payments team at Northwind Labs.” needs your answer first: it says “Led”.");
+    expect(messages).toContain("“Led the payments team at Northwind Labs.” confirmed without detail.");
+    expect(messages).toContain("Edit to “B.S. Computer Science, Fernwood Univers…” proposed; version 1 stays in force.");
+    expect(messages).toContain("Revision rejected; the boundary keeps its current text.");
+    // J5: each message is one short sentence, 90 characters at most.
+    for (const message of messages) expect(message.length, message).toBeLessThanOrEqual(90);
+  });
+
+  it("J6.4: the needs-an-answer message names the kind that always asks, or the always-ask word as written", () => {
+    let profile = withClaims(accounted(), [
+      { text: "Cut the Harbor release time by 40%.", kind: "metric" },
+      { text: "Maintainer of Ledgerkit, used by 40 teams.", kind: "fact" },
+      { text: "Staff engineer at Northwind Labs.", kind: "title" },
+    ]);
+    const [metric, maintainer, title] = profile.claims;
+    const confirm = (claimId: string) => {
+      const result = reduce(profile, { type: "decideClaim", claimId, decision: "confirmed", now: NOW, newId: randomUUID });
+      profile = result.profile;
+      return result.message;
+    };
+    expect(confirm(metric!.id)).toBe("“Cut the Harbor release time by 40%.” needs your answer first: it's a metric claim.");
+    expect(confirm(maintainer!.id)).toBe("“Maintainer of Ledgerkit, used by 40 tea…” needs your answer first: it says “Maintainer”.");
+    expect(confirm(title!.id)).toBe("“Staff engineer at Northwind Labs.” needs your answer first: it's a title claim.");
   });
 
   it("confirming a question without detail records a plain statement, not a placeholder in quotes (UI issue 2)", () => {
@@ -118,7 +140,7 @@ describe("UI issue 2: messages name claims and sources for a person", () => {
     const claim = profile.claims[0]!;
     profile = apply(profile, { type: "decideClaim", claimId: claim.id, decision: "confirmed", now: NOW, newId: randomUUID });
     const answer = reduce(profile, { type: "answerQuestion", claimId: claim.id, hasEvidence: true, now: LATER, newId: randomUUID });
-    expect(answer.message).toBe("“Cut the Harbor release time from a day to under an hour.” confirmed. You confirmed it without adding detail.");
+    expect(answer.message).toBe("“Cut the Harbor release time from a day…” confirmed without detail.");
     expect(answer.profile.claims[0]!.evidence).toEqual({ kind: "statement", ref: `claim:${claim.id}#answer-without-detail`, quote: NO_DETAIL_STATEMENT });
   });
 });
@@ -143,7 +165,7 @@ describe("D10: a note on an open question leaves the claim open", () => {
     for (const note of ["No, I can't back that number up.", "exclude", "what do you mean?"]) {
       const result = reduce(profile, { type: "recordQuestionNote", claimId: claim.id, note, now: LATER, newId: randomUUID });
       expect(result.ok).toBe(true);
-      expect(result.message).toContain("The question stays open");
+      expect(result.message).toBe("Note saved; the question on “Cut the Harbor release time from a day…” stays open.");
       profile = result.profile;
     }
     expect(profile.claims[0]!.status).toBe("disputed");
@@ -171,7 +193,7 @@ describe("D11: withdrawing approval applies its pending revisions", () => {
     const dispute = reduce(profile, { type: "decideClaim", claimId: ledgerkit!.id, decision: "disputed", now: LATER, newId: randomUUID, question: "Which part?" });
     expect(dispute.ok).toBe(true);
     profile = dispute.profile;
-    expect(dispute.message).toBe("“Contributed to Ledgerkit.” now has an open question: Which part? Approval of version 1 is withdrawn: answer the open question, then approve again.");
+    expect(dispute.message).toBe("“Contributed to Ledgerkit.” now has an open question; approval withdrawn.");
 
     expect(profile.approval).toBeNull();
     expect(pendingRevisions(profile)).toEqual([]);
@@ -212,7 +234,7 @@ describe("D11: withdrawing approval applies its pending revisions", () => {
     const result = reduce(profile, { type: "addStatement", kind: "preference", text: "Remote-first roles.", now: LATER, newId: randomUUID });
     expect(result.profile.approval).toBeNull();
     expect(currentWithdrawal(result.profile)?.cause).toEqual({ kind: "statement", change: "added", statementKind: "preference", statementText: "Remote-first roles." });
-    expect(result.message).toBe("Your preference is recorded. Approval of version 1 is withdrawn: review the change, then approve again.");
+    expect(result.message).toBe("Your preference is recorded; approval withdrawn.");
   });
 });
 
@@ -227,7 +249,7 @@ describe("D15 (VN7): an edit that adds an always-ask item re-opens the question"
     expect(edited.status).toBe("disputed");
     expect(edited.question).toContain("Worked on the Harbor deployment pipeline, used by 40 teams.");
     expect(edited.answeredAt).toBeUndefined();
-    expect(edit.message).toBe("“Worked on the Harbor deployment pipeline, used by 40 teams.” changed what it claims, so it needs your answer again before it can be confirmed.");
+    expect(edit.message).toBe("“Worked on the Harbor deployment pipelin…” changed, so it needs your answer again.");
   });
 
   it("unapproved: rewording that adds no always-ask item keeps it confirmed", () => {
@@ -255,7 +277,7 @@ describe("D15 (VN7): an edit that adds an always-ask item re-opens the question"
     expect(reopened.status).toBe("disputed");
     expect(reopened.question).toBeDefined();
     expect(profile.approval).toBeNull();
-    expect(accept.message).toBe("Accepted. “Maintainer of Ledgerkit.” now needs your answer to a question before it can be confirmed, so approval of version 1 is withdrawn. Answer it on the Onboarding page, then approve again.");
+    expect(accept.message).toBe("Accepted; “Maintainer of Ledgerkit.” needs your answer, so approval is withdrawn.");
     // The other pending revision was applied with the withdrawal (D11).
     expect(profile.claims.find((c) => c.id === harbor!.id)?.text).toBe("Rebuilt the Harbor deployment pipeline.");
     expect(pendingRevisions(profile)).toEqual([]);

@@ -9,7 +9,7 @@ import { ROUTES_DIR } from "../lib/paths.ts";
 import type { EveGateway } from "../server/eve-gateway.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
-import { buildExtractionPrompt, EXTRACTION_TIMEOUT_MS } from "../server/routes/onboarding.ts";
+import { buildExtractionPrompt, EXTRACTION_TIMEOUT_MS, MARKDOWN_UNREADABLE_EXTRACT_REFUSAL, MARKDOWN_UNREADABLE_REFUSAL } from "../server/routes/onboarding.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { SOURCE_CATEGORY_LABELS } from "../store/profile-types.ts";
 import { PROFILE_BUSY_MESSAGE } from "../store/profile-writes.ts";
@@ -237,7 +237,7 @@ describe("D13: source text, uploads and path confinement", () => {
     expect(saved).toEqual({ text: RESUME_TEXT, uploads: [] }); // raw: no "## pasted.txt" header
     expect((await post(bridge, "/sources/resume/content", { text: saved.text })).status).toBe(200);
     const again = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string };
-    expect(again).toMatchObject({ ok: true, status: "unchanged", message: "Resume hasn't changed since its claims were extracted, so there is nothing new to extract." });
+    expect(again).toMatchObject({ ok: true, status: "unchanged", message: "Resume hasn't changed since its claims were extracted." });
     expect(fake.calls.count).toBe(1);
     expect(await readFile(path.join(bridge.workspace.root, "sources", "resume", "pasted.txt"), "utf8")).toBe(RESUME_TEXT);
   });
@@ -270,7 +270,7 @@ describe("D13: source text, uploads and path confinement", () => {
     const bridge = await realBridge();
     await post(bridge, "/sources/workSamples/uploads", { fileName: "Ledgerkit notes.md", text: "First draft." });
     const second = (await (await post(bridge, "/sources/workSamples/uploads", { fileName: "ledgerkit notes.md", text: "Second draft." })).json()) as { message: string; uploads: string[] };
-    expect(second.message).toBe("Replaced ledgerkit-notes.md for Work samples. It had been uploaded before under the same name.");
+    expect(second.message).toBe("Replaced the earlier ledgerkit-notes.md for Work samples.");
     expect(second.uploads).toEqual(["ledgerkit-notes.md"]);
     const view = await getJson<{ uploads: Record<string, string[]> }>(bridge, "");
     expect(view.uploads).toEqual({ workSamples: ["ledgerkit-notes.md"] });
@@ -344,7 +344,7 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const response = await post(bridge, "/sources/resume/extract");
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean; status: string; message: string };
-    expect(body).toMatchObject({ ok: false, status: "waiting", message: "Extraction from Resume did not finish: The model call failed. (model_error)" });
+    expect(body).toMatchObject({ ok: false, status: "waiting", message: "The extraction failed: The model call failed (model_error)." });
   });
 
   it("a session.failed status is not ok", async () => {
@@ -371,7 +371,7 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string }> };
     expect(body.ok).toBe(true);
     expect(body.status).toBe("completed");
-    expect(body.message).toBe("1 candidate claim extracted from Resume. Each stays a candidate until you confirm, dispute, or exclude it. 1 claim was left out because its quote wasn't found in the text.");
+    expect(body.message).toBe("1 candidate claim extracted from Resume; 1 left out: quote not in the text.");
     expect(body.claims.map((claim) => claim.text)).toEqual(["Led the payments team at Northwind Labs."]);
   });
 
@@ -387,7 +387,7 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     expect(response.status).toBe(504);
     expect(((await response.json()) as { error: { code: string; message: string } }).error).toEqual({
       code: "extraction_timed_out",
-      message: "No answer from the model within 90 s. The turn was stopped; try again.",
+      message: "No answer from the model within 90 s, so the extraction was stopped. Try again.",
     });
   });
 
@@ -396,7 +396,7 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; message: string };
-    expect(body).toMatchObject({ ok: false, message: "Extraction from Resume did not finish: The turn ended before the model finished. Try again." });
+    expect(body).toMatchObject({ ok: false, message: "The extraction ended before the model finished. Try again." });
     expect(fake.calls.cancelCount).toBe(1);
     await post(bridge, "/sources/resume/extract");
     expect(fake.calls.count).toBe(2); // no hash was recorded, so the same text runs again
@@ -448,7 +448,7 @@ describe("/api/onboarding/sources/:category/extract: R7 and D14, idempotent per 
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const first = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string };
-    expect(first).toEqual({ ok: false, status: "completed", message: "The model finished without saving any claims from Resume. Nothing was recorded; try again.", claims: [] });
+    expect(first).toEqual({ ok: false, status: "completed", message: "The model finished without saving any claims. Try again.", claims: [] });
     expect(await readdir(path.join(bridge.workspace.root, ".runner", "onboarding")).catch(() => [])).not.toContain("resume.json");
     const second = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
     expect(second).toMatchObject({ ok: true, status: "completed" });
@@ -475,7 +475,7 @@ describe("/api/onboarding/sources/:category/extract: R7 and D14, idempotent per 
     expect((await post(bridge, "/sources/resume/uploads", { fileName: "five.txt", text: "z".repeat(100 * 1024) })).status).toBe(200);
     const over = await post(bridge, "/sources/resume/extract");
     expect(over.status).toBe(413);
-    expect(((await over.json()) as { error: { message: string } }).error.message).toBe("Everything saved for Resume adds up to more than 2 MiB. Remove or shorten an upload, then extract again.");
+    expect(((await over.json()) as { error: { message: string } }).error.message).toBe("Everything saved for Resume is over 2 MiB. Shorten or remove an upload.");
     expect(fake.calls.count).toBe(1);
   });
 });
@@ -505,8 +505,13 @@ describe("V4/D8: concurrent requests never lose a write", () => {
   it("answers 503 'The profile is busy' when another process holds the lock past the wait", async () => {
     const bridge = await realBridge();
     await writeFile(path.join(bridge.workspace.root, ".runner", "profile.lock"), `${JSON.stringify({ token: "eve-process", pid: 999999, acquiredAt: new Date().toISOString() })}\n`);
+    const started = Date.now();
     const response = await post(bridge, "/sources/resume", { status: "provided" });
+    const elapsed = Date.now() - started;
     expect(response.status).toBe(503);
+    // N2 (revision 3): the route waits the default 5 s, no less and not much more.
+    expect(elapsed).toBeGreaterThanOrEqual(4_900);
+    expect(elapsed).toBeLessThan(6_500);
     expect(((await response.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "profile_busy", message: PROFILE_BUSY_MESSAGE });
   });
 });
@@ -519,41 +524,70 @@ describe("V1/D9: hand edits to career-profile.md, through the routes", () => {
     const text = await readFile(md, "utf8");
     await writeFile(md, text.replace(view.boundaries[0]!.text, "Never invent a metric, a credential or a responsibility."));
     const response = await post(bridge, "/statements/preference", { text: "Remote-first roles." });
-    expect(((await response.json()) as { message: string }).message).toBe("Your edit to career-profile.md was saved. Your preference is recorded.");
+    expect(((await response.json()) as { message: string }).message).toBe("File edit saved. Your preference is recorded.");
     const after = await getJson<{ boundaries: Array<{ text: string }>; preferences: Array<{ text: string }> }>(bridge, "");
     expect(after.boundaries[0]!.text).toBe("Never invent a metric, a credential or a responsibility.");
     expect(after.preferences.map((p) => p.text)).toEqual(["Remote-first roles."]);
   });
 
   it("an unreadable edit (a deleted marker, probe B2) refuses every write with 409, changes nothing, shows the error, and discarding recovers", async () => {
-    const bridge = await realBridge();
+    const fake = fakeExtraction([{ status: "completed", extract: [LED_CLAIM] }]);
+    const bridge = await realBridge(fake);
     const view = await getJson<{ boundaries: Array<{ id: string }> }>(bridge, "");
     const md = path.join(bridge.workspace.root, "career-profile.md");
     await writeFile(md, (await readFile(md, "utf8")).replace(` \`[${view.boundaries[0]!.id}]\``, ""));
     const mdBefore = await readFile(md, "utf8");
     const draftBefore = await readFile(path.join(bridge.workspace.root, "career-profile.draft.json"), "utf8");
 
-    for (const [pathname, body] of [
-      ["/statements/preference", { text: "Remote-first roles." }],
-      ["/sources/resume", { status: "provided" }],
-      ["/approve", {}],
+    // J3: every refused write says one short line, with no UUID; the page's note carries the problem.
+    for (const [pathname, body, message] of [
+      ["/statements/preference", { text: "Remote-first roles." }, MARKDOWN_UNREADABLE_REFUSAL],
+      ["/sources/resume", { status: "provided" }, MARKDOWN_UNREADABLE_REFUSAL],
+      ["/approve", {}, MARKDOWN_UNREADABLE_REFUSAL],
+      // N3: extraction is refused too, before any model call.
+      ["/sources/resume/extract", undefined, MARKDOWN_UNREADABLE_EXTRACT_REFUSAL],
     ] as const) {
       const response = await post(bridge, pathname, body);
       expect(response.status).toBe(409);
       const error = ((await response.json()) as { error: { code: string; message: string } }).error;
-      expect(error.code).toBe("markdown_unreadable");
-      expect(error.message).toContain("Nothing was saved. Fix the file, or discard your edits to career-profile.md.");
+      expect(error).toEqual({ code: "markdown_unreadable", message });
+      expect(error.message).not.toMatch(UUID);
     }
+    expect(MARKDOWN_UNREADABLE_REFUSAL).toBe("Not saved: career-profile.md has an edit the runner can't read. See the note at the top.");
+    expect(MARKDOWN_UNREADABLE_EXTRACT_REFUSAL).toBe("Not extracted: career-profile.md has an edit the runner can't read. See the note at the top.");
+    expect(fake.calls.count).toBe(0);
     expect(await readFile(md, "utf8")).toBe(mdBefore);
     expect(await readFile(path.join(bridge.workspace.root, "career-profile.draft.json"), "utf8")).toBe(draftBefore);
 
-    const shown = await getJson<{ markdownError: string | null }>(bridge, "");
-    expect(shown.markdownError).toContain("the boundary “Do not invent metrics, credentials, or responsibilities.” is missing");
+    // J3: the note names the problem by line number, never by the marker's id, and comes with the file as it is on disk.
+    const shown = await getJson<{ markdownError: string | null; markdownOnDisk: string | null; markdown: string }>(bridge, "");
+    expect(shown.markdownError).toMatch(/^Line \d+: the line for the boundary “Do not invent metrics, credentials, or responsibilities\.” is missing, or its marker was changed\. Put it back as it was\.$/);
+    expect(shown.markdownError).not.toMatch(UUID);
+    expect(shown.markdownOnDisk).toBe(mdBefore);
+    expect(shown.markdown).not.toBe(mdBefore); // the render, which the Profile page doesn't offer while the file can't be read
+    const markdownRoute = await getJson<{ markdownError: string | null; markdownOnDisk: string | null }>(bridge, "/markdown");
+    expect(markdownRoute).toMatchObject({ markdownError: shown.markdownError, markdownOnDisk: mdBefore });
 
     const discard = await post(bridge, "/markdown/discard");
-    expect(((await discard.json()) as { message: string }).message).toBe("Your edits to career-profile.md were discarded. The file was rewritten from your profile.");
-    expect((await getJson<{ markdownError: string | null }>(bridge, "")).markdownError).toBeNull();
+    expect(((await discard.json()) as { message: string }).message).toBe("Discarded your edits: career-profile.md was rewritten from your profile.");
+    const recovered = await getJson<{ markdownError: string | null; markdownOnDisk: string | null }>(bridge, "");
+    expect(recovered).toMatchObject({ markdownError: null, markdownOnDisk: null });
     expect((await post(bridge, "/statements/preference", { text: "Remote-first roles." })).status).toBe(200);
+  });
+
+  it("N7: GET /readiness applies a hand edit first, the same as GET /", async () => {
+    const bridge = await realBridge();
+    await accountAll(bridge);
+    const store = new ProfileStore(bridge.ctx.workspace, bridge.ctx.clock);
+    const extracted = await store.extractClaims("resume", [{ text: "Worked on the payments team.", kind: "fact", evidenceRef: "resume.md#a", evidenceQuote: "Worked on the payments team" }]);
+    const claimId = extracted.profile.claims[0]!.id;
+    expect((await getJson<{ reasons: string[] }>(bridge, "/readiness")).reasons).toContain("Not ready: 1 claim still needs a decision (“Worked on the payments team.”).");
+    // A hand edit to the claim's words, made in career-profile.md and not yet saved by any write.
+    const md = path.join(bridge.workspace.root, "career-profile.md");
+    const text = await readFile(md, "utf8");
+    expect(text).toContain(`- Worked on the payments team. \`[${claimId}]\``);
+    await writeFile(md, text.replace(`- Worked on the payments team. \`[${claimId}]\``, `- Worked on the Harbor payments team. \`[${claimId}]\``));
+    expect((await getJson<{ reasons: string[] }>(bridge, "/readiness")).reasons).toContain("Not ready: 1 claim still needs a decision (“Worked on the Harbor payments team.”).");
   });
 
   it("POST /markdown: applies an edit against the current copy, 409s a stale copy, 422s an unreadable one", async () => {
@@ -601,8 +635,30 @@ describe("UI issue 2: route messages name things for a person", () => {
       expect(message).not.toMatch(UUID);
       expect(message).not.toMatch(/previousCoverLetters|targetRolesAndPreferences|workSamples|not_applicable|`/);
     }
-    expect(messages[0]).toBe("Previous cover letters marked not applicable, with your reason kept. That still counts as accounted for; nothing is invented to fill the gap.");
+    expect(messages[0]).toBe("Previous cover letters marked not applicable, with your reason kept.");
     expect(messages[4]).toBe("Work samples is not marked provided. Mark it provided, then extract.");
+  });
+});
+
+describe("the page view (GET /)", () => {
+  it("N4: carries D10's notes on an open question, keyed by claim id, and drops them once the question is answered", async () => {
+    const bridge = await realBridge();
+    await accountAll(bridge);
+    const store = new ProfileStore(bridge.ctx.workspace, bridge.ctx.clock);
+    const extracted = await store.extractClaims("resume", [{ text: "Cut the Harbor release time by 40%.", kind: "metric", evidenceRef: "resume.md#a", evidenceQuote: "Cut the Harbor release time by 40%" }]);
+    const claimId = extracted.profile.claims[0]!.id;
+    expect((await (await post(bridge, `/claims/${claimId}/decide`, { decision: "disputed", question: "Where does the 40% come from?" })).json()) as { ok: boolean }).toMatchObject({ ok: true });
+    expect((await store.recordQuestionNote(claimId, "The 40% is from the Harbor release report.")).ok).toBe(true);
+
+    const view = await getJson<{ notes: Record<string, Array<{ text: string; at: string }>>; questionReasons: Record<string, string> }>(bridge, "");
+    expect(view.notes).toEqual({ [claimId]: [{ text: "The 40% is from the Harbor release report.", at: bridge.ctx.clock.now().toISOString() }] });
+    // J6.4: why the question is asked, named by its trigger.
+    expect(view.questionReasons).toEqual({ [claimId]: "it's a metric claim" });
+
+    expect((await (await post(bridge, `/claims/${claimId}/answer`, { hasEvidence: true, statement: "From the Harbor release report." })).json()) as { ok: boolean }).toMatchObject({ ok: true });
+    const answered = await getJson<{ notes: Record<string, unknown>; questionReasons: Record<string, string> }>(bridge, "");
+    expect(answered.notes).toEqual({});
+    expect(answered.questionReasons).toEqual({});
   });
 });
 

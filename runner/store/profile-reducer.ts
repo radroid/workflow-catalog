@@ -1,5 +1,5 @@
 import type { Claim, ClaimEvidence, ClaimKind, SourceStatus } from "@workflow-catalog/contracts";
-import { draftQuestion, editAddsAlwaysAskItem, needsQuestion } from "./profile-questions.ts";
+import { draftQuestion, editAddsAlwaysAskItem, needsQuestion, questionReason } from "./profile-questions.ts";
 import {
   isSourcesComplete,
   SOURCE_CATEGORY_LABELS,
@@ -23,7 +23,10 @@ import {
  *
  * Messages are for a person to read (P03 revision 2, UI critic issue 2): a
  * claim is named by its own words, a source by its label, and never by an id
- * or an internal key.
+ * or an internal key. Each is one short sentence (revision 3, J5): the page
+ * pins it in a line that clamps to two lines on a phone, so the detail lives
+ * in the page's cards (a withdrawal's version and next step, a question and
+ * why it is asked), not here.
  */
 
 export interface ExtractedClaimInput {
@@ -114,6 +117,16 @@ function pluralVerb(n: number, verb: string): string {
 export function quoteClaim(text: string, max = 60): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   return `“${oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine}”`;
+}
+
+/** A claim or statement named in an action's message: quoted and cut at 40 characters, so the message stays one short sentence (J5). */
+function named(text: string): string {
+  return quoteClaim(text, 40);
+}
+
+/** How a message ends: "; approval withdrawn" when the action withdrew approval (the page's withdrawal card says which version and what to do next). */
+function ending(withdrew: boolean): string {
+  return withdrew ? "; approval withdrawn." : ".";
 }
 
 /**
@@ -426,14 +439,6 @@ function withdrawApproval(profile: OnboardingProfile, now: string, newId: () => 
   return { ...next, approval: null, revisions: [...next.revisions, marker] };
 }
 
-/** The sentence a message ends with when an action withdrew approval of `version`. */
-function withdrawnNote(version: number, next: OnboardingProfile): string {
-  const pending = readiness(next).pendingClaims.length;
-  return pending > 0
-    ? ` Approval of version ${version} is withdrawn: answer the open question, then approve again.`
-    : ` Approval of version ${version} is withdrawn: review the change, then approve again.`;
-}
-
 function sourceStatusLabel(status: SourceStatus): string {
   return status === "not_applicable" ? "not applicable" : status;
 }
@@ -445,11 +450,8 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       const entry = note ? { status: action.status, note } : { status: action.status };
       const next: OnboardingProfile = { ...profile, sources: { ...profile.sources, [action.category]: entry } };
       const label = SOURCE_CATEGORY_LABELS[action.category];
-      if (action.status === "provided") return ok(next, `${label} marked provided. Paste or upload its text, then extract claims from it.`);
-      return ok(
-        next,
-        `${label} marked ${sourceStatusLabel(action.status)}${note ? ", with your reason kept" : ""}. That still counts as accounted for; nothing is invented to fill the gap.`,
-      );
+      if (action.status === "provided") return ok(next, `${label} marked provided: add its text, then extract claims.`);
+      return ok(next, `${label} marked ${sourceStatusLabel(action.status)}${note ? ", with your reason kept" : ""}.`);
     }
 
     case "extractClaims": {
@@ -481,52 +483,41 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
         added.push(claim);
       }
       const next: OnboardingProfile = { ...profile, claims: [...profile.claims, ...added] };
-      return ok(
-        next,
-        added.length > 0
-          ? `${plural(added.length, "candidate claim")} extracted from ${label}. Each stays a candidate until you confirm, dispute, or exclude it.`
-          : `Extraction from ${label} is idempotent: no new claims, nothing duplicated.`,
-      );
+      return ok(next, added.length > 0 ? `${plural(added.length, "candidate claim")} extracted from ${label}.` : `No new claims from ${label}: nothing was duplicated.`);
     }
 
     case "decideClaim": {
       const claim = findClaim(profile, action.claimId);
       if (!claim) return refuse(profile, "That claim does not exist. Extract claims first.");
-      const label = quoteClaim(claim.text);
+      const label = named(claim.text);
 
       if (action.decision === "confirmed" && needsQuestion(claim) && claim.answeredAt === undefined) {
         const question = action.question ?? claim.question ?? draftQuestion(claim);
         const next = replaceClaim(profile, claim.id, (c) => ({ ...c, status: "disputed", question }));
-        return ok(next, `${label} is a ${claim.kind} claim, so it needs your answer before it can be confirmed: ${question}`);
+        // Polish 4: the reason is the real trigger (the kind, or the always-ask word, quoted).
+        return ok(next, `${label} needs your answer first: ${questionReason(claim) ?? "it always gets a question"}.`);
       }
 
       if (action.decision === "disputed") {
         const question = action.question ?? claim.question ?? draftQuestion(claim);
         let next = replaceClaim(profile, claim.id, (c) => ({ ...c, status: "disputed", question }));
-        let message = `${label} now has an open question: ${question}`;
-        if (next.approval !== null) {
-          const version = next.approval.version;
-          next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claim.id, change: "disputed" });
-          message += withdrawnNote(version, next);
-        }
-        return ok(next, message);
+        const withdrew = next.approval !== null;
+        if (withdrew) next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claim.id, change: "disputed" });
+        return ok(next, `${label} now has an open question${ending(withdrew)}`);
       }
 
       const nextClaim: Claim = action.decision === "excluded" ? { ...claim, status: "excluded" } : { ...claim, status: "confirmed" };
       let next = replaceClaim(profile, claim.id, () => nextClaim);
-      let message = action.decision === "excluded" ? `${label} excluded. It never appears in a generated document.` : `${label} confirmed.`;
-      if (next.approval !== null && action.decision !== "excluded") {
-        const version = next.approval.version;
-        next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claim.id, change: "confirmed" });
-        message += withdrawnNote(version, next);
-      }
-      return ok(next, message);
+      if (action.decision === "excluded") return ok(next, `${label} excluded.`);
+      const withdrew = next.approval !== null;
+      if (withdrew) next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claim.id, change: "confirmed" });
+      return ok(next, `${label} confirmed${ending(withdrew)}`);
     }
 
     case "answerQuestion": {
       const claim = findClaim(profile, action.claimId);
       if (!claim || claim.status !== "disputed") return refuse(profile, "There is no open question to answer for that claim.");
-      const label = quoteClaim(claim.text);
+      const label = named(claim.text);
 
       if (action.hasEvidence) {
         const detail = cleanText(action.statement ?? "");
@@ -535,9 +526,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
           : { kind: "statement", ref: `claim:${claim.id}${NO_DETAIL_REF_SUFFIX}`, quote: NO_DETAIL_STATEMENT };
         const versionAtDecision = profile.approval?.version;
         let next = replaceClaim(profile, claim.id, (c) => ({ ...c, status: "confirmed", answeredAt: action.now, evidence }));
-        let message = detail
-          ? `${label} confirmed. Your answer is recorded as your own statement, not as an external fact.`
-          : `${label} confirmed. You confirmed it without adding detail.`;
+        const confirmed = detail ? `${label} confirmed with your answer` : `${label} confirmed without detail`;
         const superseded: CareerProfileRevision = {
           id: action.newId(),
           summary: encodeSupersededEvidence(claim.id, claim.evidence),
@@ -547,16 +536,13 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
           decidedAt: action.now,
         };
         next = { ...next, revisions: [...next.revisions, superseded] };
-        if (next.approval !== null) {
-          const version = next.approval.version;
-          next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claim.id, change: "answered" });
-          message += withdrawnNote(version, next);
-        }
-        return ok(next, message);
+        const withdrew = next.approval !== null;
+        if (withdrew) next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claim.id, change: "answered" });
+        return ok(next, `${confirmed}${ending(withdrew)}`);
       }
 
       const next = replaceClaim(profile, claim.id, (c) => ({ ...c, status: "excluded", answeredAt: action.now }));
-      return ok(next, `${label} excluded, because you have no evidence for it. It will not appear in a generated document.`);
+      return ok(next, `${label} excluded: you have no evidence for it.`);
     }
 
     case "recordQuestionNote": {
@@ -571,10 +557,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
         status: "accepted",
         decidedAt: action.now,
       };
-      return ok(
-        { ...profile, revisions: [...profile.revisions, record] },
-        `Your note on ${quoteClaim(claim.text)} is saved. The question stays open until you confirm or exclude the claim.`,
-      );
+      return ok({ ...profile, revisions: [...profile.revisions, record] }, `Note saved; the question on ${named(claim.text)} stays open.`);
     }
 
     case "approve": {
@@ -585,7 +568,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       }
       const version = highestVersionUsed(profile) + 1;
       const next: OnboardingProfile = { ...profile, approval: { version, at: action.now } };
-      return ok(next, `Career profile v${version} approved. Generation is now unlocked.`);
+      return ok(next, `Version ${version} approved: generation is unlocked.`);
     }
 
     case "editClaimText": {
@@ -593,7 +576,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       if (!claim) return refuse(profile, "That claim does not exist.");
       const text = cleanText(action.text);
       if (!text) return refuse(profile, "A claim's text cannot be empty.");
-      if (text === claim.text) return ok(profile, `${quoteClaim(claim.text)} is unchanged.`);
+      if (text === claim.text) return ok(profile, `${named(claim.text)} is unchanged.`);
 
       if (claim.status === "confirmed" && profile.approval !== null) {
         const revision: CareerProfileRevision = {
@@ -603,14 +586,12 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
           status: "proposed",
         };
         const next: OnboardingProfile = { ...profile, revisions: [...profile.revisions, revision] };
-        return ok(next, `A revision to ${quoteClaim(claim.text)} is proposed. Version ${profile.approval.version} stays in force until you accept it on the Profile page.`);
+        return ok(next, `Edit to ${named(claim.text)} proposed; version ${profile.approval.version} stays in force.`);
       }
 
       const { profile: next, reopened } = setClaimText(profile, claim, text);
-      if (reopened) {
-        return ok(next, `${quoteClaim(text)} changed what it claims, so it needs your answer again before it can be confirmed.`);
-      }
-      return ok(next, claim.status === "confirmed" ? `${quoteClaim(text)} edited. The profile is not approved yet, so no revision is needed.` : `${quoteClaim(text)} edited.`);
+      if (reopened) return ok(next, `${named(text)} changed, so it needs your answer again.`);
+      return ok(next, `${named(text)} edited.`);
     }
 
     case "editStatementText": {
@@ -625,7 +606,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
 
       if (profile.approval === null) {
         const next: OnboardingProfile = { ...profile, [field]: list.map((s) => (s.id === statement.id ? { ...s, text } : s)) };
-        return ok(next, `The ${label} was edited. The profile is not approved yet, so no revision is needed.`);
+        return ok(next, `The ${label} was edited.`);
       }
 
       const revision: CareerProfileRevision = {
@@ -635,7 +616,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
         status: "proposed",
       };
       const next: OnboardingProfile = { ...profile, revisions: [...profile.revisions, revision] };
-      return ok(next, `A revision to this ${label} is proposed. Version ${profile.approval.version} stays in force until you accept it on the Profile page.`);
+      return ok(next, `Edit to this ${label} proposed; version ${profile.approval.version} stays in force.`);
     }
 
     case "addStatement": {
@@ -650,13 +631,9 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       if (!text) return refuse(profile, `Type the ${label} first.`);
       const statement = { id: action.newId(), text };
       let next: OnboardingProfile = { ...profile, [field]: [...profile[field], statement] };
-      let message = `Your ${label} is recorded.`;
-      if (next.approval !== null) {
-        const version = next.approval.version;
-        next = withdrawApproval(next, action.now, action.newId, { kind: "statement", statementKind: action.kind, statementId: statement.id, change: "added" });
-        message += withdrawnNote(version, next);
-      }
-      return ok(next, message);
+      const withdrew = next.approval !== null;
+      if (withdrew) next = withdrawApproval(next, action.now, action.newId, { kind: "statement", statementKind: action.kind, statementId: statement.id, change: "added" });
+      return ok(next, `Your ${label} is recorded${ending(withdrew)}`);
     }
 
     case "acceptRevision": {
@@ -676,18 +653,14 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
         // confirmed, so the profile cannot stay approved (D11 then applies
         // the other pending revisions to the draft).
         const claimEdit = decodeClaimEditSummary(revision.summary)!;
-        const version = profile.approval.version;
         let next = markRevision(applied.profile, revision.id, "accepted", action.now);
         next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claimEdit.claimId, change: "reopened" });
-        return ok(
-          next,
-          `Accepted. ${quoteClaim(claimEdit.text)} now needs your answer to a question before it can be confirmed, so approval of version ${version} is withdrawn. Answer it on the Onboarding page, then approve again.`,
-        );
+        return ok(next, `Accepted; ${named(claimEdit.text)} needs your answer, so approval is withdrawn.`);
       }
 
       const version = highestVersionUsed(profile) + 1;
       const next: OnboardingProfile = { ...markRevision(applied.profile, revision.id, "accepted", action.now, version), approval: { version, at: action.now } };
-      return ok(next, `Profile is now v${version}. Documents prepared from the previous version keep saying which version they used.`);
+      return ok(next, `Accepted: the profile is now version ${version}.`);
     }
 
     case "rejectRevision": {
@@ -695,7 +668,7 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
       if (!revision) return refuse(profile, "That revision is no longer waiting for a decision.");
       const statementEdit = decodeStatementEditSummary(revision.summary);
       const target = statementEdit ? statementLabel(statementEdit.kind) : "claim";
-      return ok(markRevision(profile, revision.id, "rejected", action.now), `Revision rejected. The ${target} keeps its current text.`);
+      return ok(markRevision(profile, revision.id, "rejected", action.now), `Revision rejected; the ${target} keeps its current text.`);
     }
 
     default: {

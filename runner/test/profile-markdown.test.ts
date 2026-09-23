@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInitialProfile } from "../store/profile-types.ts";
-import { reduce } from "../store/profile-reducer.ts";
+import { cleanText, reduce } from "../store/profile-reducer.ts";
 import { applyMarkdownEdits, parseProfileMarkdownEdits, readMarkdownEdits, renderProfileMarkdown } from "../store/profile-markdown.ts";
 
 /**
@@ -15,6 +15,18 @@ function idGen(prefix: string): () => string {
 }
 
 const NOW = "2026-01-01T00:00:00.000Z";
+
+/** A tiny seeded PRNG (mulberry32): deterministic, no new dependency, so a failure always reproduces from the printed seed. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe("profile-markdown", () => {
   it("renders the six mvp-spec §3 F5 sections in order, each `[id]`-marked", () => {
@@ -106,23 +118,11 @@ describe("profile-markdown", () => {
   });
 
   describe("D5: multi-line text round-trips", () => {
-    // A tiny seeded PRNG (mulberry32) — deterministic, no new dependency, so a
-    // failure always reproduces from the printed seed. Generates 1-4 line
-    // claim/statement text, some lines short, some long, to reproduce R8's
-    // exact failure mode: "Ran the migration\n- Owned the rollback plan"
-    // (a continuation line that itself starts with "- ") collapsing to just
-    // its last line once round-tripped through the old single-line regex.
-    function mulberry32(seed: number): () => number {
-      let a = seed >>> 0;
-      return () => {
-        a = (a + 0x6d2b79f5) >>> 0;
-        let t = a;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-
+    // Generates 1-4 line claim/statement text, some lines short, some long,
+    // to reproduce R8's exact failure mode: "Ran the migration\n- Owned the
+    // rollback plan" (a continuation line that itself starts with "- ")
+    // collapsing to just its last line once round-tripped through the old
+    // single-line regex.
     const WORDS = ["Ran", "the", "migration", "Owned", "rollback", "plan", "-", "led", "a", "team", "of", "engineers", "across", "three", "quarters", "`weird`", "[brackets]"];
 
     function randomLine(rand: () => number): string {
@@ -192,5 +192,98 @@ describe("profile-markdown", () => {
       const updated = applyMarkdownEdits(profile, edited);
       expect(updated.boundaries.find((b) => b.id === boundaryId)?.text).toBe(text);
     });
+  });
+});
+
+describe("N6 (revision 3): marker-shaped text never breaks the runner's own file", () => {
+  // Claim text comes from a model reading a source, so a hostile source can
+  // make any line of it end in something shaped like a marker: an unknown id,
+  // another item's real id, or the claim's own, perhaps followed by
+  // backslashes or a no-break space (which the reader's marker pattern also
+  // accepts as trailing space).
+  const WORDS = ["Ran", "the", "Harbor", "rollout", "at", "Northwind", "Labs", "-", "`[", "]`", "\\"];
+  const TAILS = ["", "\\", "\\\\", " ", " \\", " \\"];
+  const FAKE_IDS = ["x", "not-a-real-id", "id-999"];
+
+  function pick<T>(rand: () => number, items: readonly T[]): T {
+    return items[Math.floor(rand() * items.length)]!;
+  }
+
+  function hostileLine(rand: () => number, realIds: readonly string[]): string {
+    let line = Array.from({ length: 1 + Math.floor(rand() * 4) }, () => pick(rand, WORDS)).join(" ");
+    if (rand() < 0.75) {
+      const id = rand() < 0.5 ? pick(rand, realIds) : pick(rand, FAKE_IDS);
+      line = `${line}${rand() < 0.8 ? " " : ""}\`[${id}]\`${pick(rand, TAILS)}`;
+    }
+    return rand() < 0.2 ? `- ${line}` : line;
+  }
+
+  function hostileText(rand: () => number, realIds: readonly string[]): string {
+    return Array.from({ length: 1 + Math.floor(rand() * 3) }, () => hostileLine(rand, realIds)).join("\n");
+  }
+
+  function ok(result: ReturnType<typeof reduce>) {
+    expect(result.ok, result.message).toBe(true);
+    return result.profile;
+  }
+
+  for (let seed = 1; seed <= 40; seed++) {
+    it(`reads back hostile claim, evidence, question, note and preference text exactly (seed ${seed})`, () => {
+      const rand = mulberry32(9000 + seed);
+      const newId = idGen("id");
+      let profile = createInitialProfile(newId); // boundaries id-1, id-2; the claims get id-3 and id-4
+      profile = ok(reduce(profile, { type: "accountSource", category: "resume", status: "provided" }));
+      const realIds = ["id-1", "id-2", "id-3", "id-4"];
+      const text = () => hostileText(rand, realIds);
+      profile = ok(
+        reduce(profile, {
+          type: "extractClaims",
+          category: "resume",
+          extracted: [
+            { text: text(), kind: "fact", evidenceRef: "resume.md#a", evidenceQuote: text() },
+            { text: text(), kind: "fact", evidenceRef: "resume.md#b", evidenceQuote: "b" },
+          ],
+          now: NOW,
+          newId,
+        }),
+      );
+      const [first, second] = profile.claims;
+      profile = ok(reduce(profile, { type: "decideClaim", claimId: first!.id, decision: "confirmed", now: NOW, newId }));
+      profile = ok(reduce(profile, { type: "decideClaim", claimId: second!.id, decision: "disputed", question: text(), now: NOW, newId }));
+      profile = ok(reduce(profile, { type: "recordQuestionNote", claimId: second!.id, note: text(), now: NOW, newId }));
+      profile = ok(reduce(profile, { type: "addStatement", kind: "preference", text: text(), now: NOW, newId }));
+
+      const rendered = renderProfileMarkdown(profile);
+      const strict = readMarkdownEdits(profile, rendered);
+      expect(strict.ok, strict.ok ? "" : `seed ${seed}: ${strict.problem}\n${rendered}`).toBe(true);
+      if (strict.ok) {
+        for (const claim of profile.claims) expect(strict.edits.get(claim.id)).toBe(claim.text);
+        expect(strict.edits.get(profile.preferences[0]!.id)).toBe(profile.preferences[0]!.text);
+      }
+      // The lenient reader agrees, and an unchanged save changes nothing.
+      expect(applyMarkdownEdits(profile, rendered)).toEqual(profile);
+
+      // A person's edit to the disputed claim's words reads back as exactly that edit.
+      const newText = text();
+      const edited = renderProfileMarkdown({ ...profile, claims: profile.claims.map((claim) => (claim.id === second!.id ? { ...claim, text: newText } : claim)) });
+      const read = readMarkdownEdits(profile, edited);
+      expect(read.ok, read.ok ? "" : `seed ${seed}: ${read.problem}`).toBe(true);
+      if (read.ok) expect(read.edits.get(second!.id)).toBe(cleanText(newText)); // the store keeps text cleaned (a no-break space can't end it)
+    });
+  }
+
+  it("escapes only what needs it: a line ending in a marker-shaped token gets one backslash, and nothing else changes", () => {
+    const newId = idGen("id");
+    let profile = createInitialProfile(newId);
+    profile = reduce(profile, { type: "accountSource", category: "resume", status: "provided" }).profile;
+    profile = reduce(profile, {
+      type: "extractClaims",
+      category: "resume",
+      extracted: [{ text: "Ran the Harbor rollout `[id-1]`\nand the Quill rollout\\", kind: "fact", evidenceRef: "resume.md#a", evidenceQuote: "Harbor" }],
+      now: NOW,
+      newId,
+    }).profile;
+    const markdown = renderProfileMarkdown(profile);
+    expect(markdown).toContain("- Ran the Harbor rollout `[id-1]`\\\n  and the Quill rollout\\ `[id-3]`\n");
   });
 });

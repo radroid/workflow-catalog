@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ALWAYS_ASK_KINDS, ALWAYS_ASK_WORDS, draftQuestion, needsQuestion, usesAlwaysAskWord } from "../store/profile-questions.ts";
+import { ALWAYS_ASK_KINDS, ALWAYS_ASK_WORDS, draftQuestion, needsQuestion, questionReason, usesAlwaysAskWord } from "../store/profile-questions.ts";
 
 /**
  * P03 revision 1, R4: `profile-questions.ts`'s doc comment says its
@@ -64,6 +64,36 @@ describe("needsQuestion / usesAlwaysAskWord / draftQuestion", () => {
       const question = draftQuestion({ kind, text: "Cut deploy time in half." });
       expect(question).toContain("Cut deploy time in half.");
       expect(question.trim().endsWith("?")).toBe(true);
+    }
+  });
+});
+
+describe("questionReason (revision 3, J6.4): why a claim gets a question, named by its real trigger", () => {
+  it("names a kind that always asks", () => {
+    expect(questionReason({ kind: "metric", text: "Cut deploy time in half." })).toBe("it's a metric claim");
+    expect(questionReason({ kind: "title", text: "Staff engineer." })).toBe("it's a title claim");
+    expect(questionReason({ kind: "date", text: "Joined Northwind Labs in 2021." })).toBe("it's a date claim");
+    // The kind wins over a word: a metric that also says "Led" is asked because it's a metric.
+    expect(questionReason({ kind: "metric", text: "Led a 30% cut in deploy time." })).toBe("it's a metric claim");
+  });
+
+  it("otherwise quotes the always-ask word as written, the earliest one in the text", () => {
+    expect(questionReason({ kind: "fact", text: "Led the payments team." })).toBe("it says “Led”");
+    expect(questionReason({ kind: "credential", text: "The only certified operator on the team." })).toBe("it says “The only”");
+    expect(questionReason({ kind: "fact", text: "Maintainer of Ledgerkit, which I founded." })).toBe("it says “Maintainer”");
+    expect(questionReason({ kind: "fact", text: "Ledgerkit is used by 40 teams; I led it." })).toBe("it says “used by”");
+  });
+
+  it("is undefined when nothing mechanical asks: a claim disputed by hand", () => {
+    expect(questionReason({ kind: "fact", text: "Worked on the payments team." })).toBeUndefined();
+    expect(questionReason({ kind: "fact", text: "This is unledded text." })).toBeUndefined();
+    // Agrees with needsQuestion everywhere.
+    for (const claim of [
+      { kind: "fact", text: "Founded Quill." },
+      { kind: "credential", text: "B.S. Computer Science." },
+      { kind: "fact", text: "The fastest release on the team." },
+    ] as const) {
+      expect(questionReason(claim) !== undefined).toBe(needsQuestion(claim));
     }
   });
 });

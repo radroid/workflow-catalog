@@ -88,19 +88,47 @@ export function toMarkdownView(profile: OnboardingProfile): ProfileMarkdownView 
   };
 }
 
+/**
+ * A line that ends in something shaped like a marker (`` `[x]` ``), perhaps
+ * followed by whitespace the reader's ID_MARKER would also accept (a
+ * no-break space, say) and then backslashes. Every line ID_MARKER matches
+ * matches this too.
+ */
+const MARKER_TAIL = /`\[[^\]\s`]+\]`\s*\\*$/;
+/** The same, ending in at least one backslash: a line `escapeLine` escaped. */
+const ESCAPED_MARKER_TAIL = /`\[[^\]\s`]+\]`\s*\\+$/;
+
+/**
+ * N6 (P03 revision 3): a text line that ends in a marker-shaped token would
+ * read back as a marker and make the runner's own file unreadable (claim text
+ * comes from a model reading a source, so a hostile source could plant one).
+ * Such a line gets one more backslash when rendered, so it no longer ends in
+ * a marker, and `unescapeLine` takes one off when reading, so every text
+ * round-trips exactly: a line that needed no escape can't look escaped,
+ * because ESCAPED_MARKER_TAIL only matches lines MARKER_TAIL matches.
+ */
+function escapeLine(line: string): string {
+  return MARKER_TAIL.test(line) ? `${line}\\` : line;
+}
+
+function unescapeLine(line: string): string {
+  return ESCAPED_MARKER_TAIL.test(line) ? line.slice(0, -1) : line;
+}
+
 /** A bullet whose text may contain `\n`: the first line carries `- `, later lines are indented two spaces, and the `` `[id]` `` marker ends the last line. */
 function bulletLine(id: string, text: string): string {
-  const lines = text.split("\n");
+  const lines = text.split("\n").map(escapeLine);
   const rendered = lines.map((line, index) => (index === 0 ? `- ${line}` : `  ${line}`));
   const last = rendered.length - 1;
   rendered[last] = `${rendered[last]} \`[${id}]\``;
   return rendered.join("\n");
 }
 
-/** A nested, never-read-back line under a bullet. VN8: its own later lines are indented four spaces, so a multi-line quote or question stays visibly inside its bullet. */
+/** A nested, never-read-back line under a bullet. VN8: its own later lines are indented four spaces, so a multi-line quote or question stays visibly inside its bullet. N6: escaped like a bullet's text, so an unmarked bullet's nested lines never read as a marker either. */
 function nestedLine(text: string): string {
   return text
     .split("\n")
+    .map(escapeLine)
     .map((line, index) => (index === 0 ? `  - ${line}` : `    ${line}`))
     .join("\n");
 }
@@ -286,7 +314,7 @@ function scan(lines: readonly string[]): Scan {
       }
     }
     if (id) {
-      blocks.push({ id, text: collected.join("\n"), line: i + 1 });
+      blocks.push({ id, text: collected.map(unescapeLine).join("\n"), line: i + 1 });
       skeleton.push({ text: `- [${id}]`, line: i + 1, id });
       i = next;
     } else {
@@ -320,8 +348,9 @@ function editableItems(profile: OnboardingProfile): Map<string, { readonly label
   return items;
 }
 
+/** Text echoed in a problem: one line, cut short, and with anything marker-shaped hidden, so a marker's id never reaches the page (J3). */
 function clip(text: string, max = 80): string {
-  const oneLine = text.trim();
+  const oneLine = text.trim().replace(/`\[[^\]`]*\]`/g, "`[…]`");
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 
@@ -339,34 +368,29 @@ function clip(text: string, max = 80): string {
  *   question or note. Blank lines, line endings and trailing spaces are
  *   ignored.
  *
- * The problem is one plain sentence naming the line and what to do.
+ * The problem is one plain sentence that starts with the line it is about
+ * ("Line 14: …", revision 3, J3) and says what to do. A marker's id never
+ * appears in it: a claim or statement is named by its words.
  */
 export function readMarkdownEdits(profile: OnboardingProfile, markdown: string): MarkdownRead {
   const disk = scan(normaliseLines(markdown));
   const expected = scan(normaliseLines(renderProfileMarkdown(profile)));
   const items = editableItems(profile);
+  const problem = (text: string): MarkdownRead => ({ ok: false, problem: text });
 
   const seen = new Map<string, number>();
   for (const block of disk.blocks) {
     const item = items.get(block.id);
-    if (!item) {
-      return { ok: false, problem: `Line ${block.line} ends in the marker [${block.id}], which matches nothing in your profile. New items can't be added by editing the file; add them on the Onboarding page.` };
-    }
+    if (!item) return problem(`Line ${block.line}: the marker at the end of this line matches nothing in your profile. Put back the marker it had.`);
     const earlier = seen.get(block.id);
-    if (earlier !== undefined) {
-      return { ok: false, problem: `The marker for ${item.label} appears twice, on lines ${earlier} and ${block.line}. Keep one of them.` };
-    }
+    if (earlier !== undefined) return problem(`Lines ${earlier} and ${block.line} both carry the marker for ${item.label}. Keep one of them.`);
     seen.set(block.id, block.line);
-    if (!cleanText(block.text)) {
-      return { ok: false, problem: `The line for ${item.label} (line ${block.line}) is empty. A line can't be removed by editing the file; exclude a claim on the Onboarding page instead.` };
-    }
+    if (!cleanText(block.text)) return problem(`Line ${block.line}: the words of ${item.label} are gone. To leave it out, exclude it on the Onboarding page.`);
   }
   for (const [id, item] of items) {
     if (!seen.has(id)) {
-      return {
-        ok: false,
-        problem: `The line for ${item.label} is missing, or its marker was changed. A line can't be removed by editing the file. Put the line back with its marker as it was.`,
-      };
+      const where = expected.blocks.find((block) => block.id === id)?.line;
+      return problem(`Line ${where ?? "?"}: the line for ${item.label} is missing, or its marker was changed. Put it back as it was.`);
     }
   }
 
@@ -376,20 +400,16 @@ export function readMarkdownEdits(profile: OnboardingProfile, markdown: string):
     const want = expected.skeleton[k];
     if (got?.text === want?.text) continue;
     if (got?.id !== undefined && expected.skeleton.some((entry) => entry.id === got.id)) {
-      const item = items.get(got.id)!;
-      return {
-        ok: false,
-        problem: `The line for ${item.label} (line ${got.line}) was moved. Moving a line doesn't change a claim; confirm, exclude or answer it on the Onboarding page, and put the line back where it was.`,
-      };
+      return problem(`Line ${got.line}: the line for ${items.get(got.id)!.label} was moved. Put it back where it was.`);
     }
     if (got && BULLET_START.test(got.text)) {
-      return { ok: false, problem: `Line ${got.line}, "${clip(got.text.slice(2))}", has no marker. New items can't be added by editing the file; add them on the Onboarding page.` };
+      return problem(`Line ${got.line}: this line has no marker. New items can't be added in the file; add them on the Onboarding page.`);
     }
-    if (got && want) {
-      return { ok: false, problem: `Line ${got.line} was changed, but only the words before a marker can be edited. It should read: "${clip(want.text)}".` };
-    }
-    if (got) return { ok: false, problem: `Line ${got.line}, "${clip(got.text)}", was added. Only the words before a marker can be edited.` };
-    return { ok: false, problem: `The line "${clip(want!.text)}" was removed. Only the words before a marker can be edited.` };
+    if (got && want?.id !== undefined) return problem(`Line ${got.line}: the line for ${items.get(want.id)!.label} should come here. Put the lines back in order.`);
+    if (got && want) return problem(`Line ${got.line}: only the words before a marker can be edited. This line should read “${clip(want.text)}”.`);
+    if (got) return problem(`Line ${got.line}: this line was added. Only the words before a marker can be edited.`);
+    if (want!.id !== undefined) return problem(`Line ${want!.line}: the line for ${items.get(want!.id)!.label} should come here. Put the lines back in order.`);
+    return problem(`Line ${want!.line}: “${clip(want!.text)}” was removed. Put it back as it was.`);
   }
 
   return { ok: true, edits: new Map(disk.blocks.map((block) => [block.id, cleanText(block.text)])) };

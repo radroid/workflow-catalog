@@ -185,7 +185,7 @@ describe("profile-reducer: 5 - Scheduled prep runs twice", () => {
     // The laptop slept through the schedule; the run fires again with the same content.
     const retry = reduce(profile, { type: "extractClaims", category: "resume", extracted, now: LATER, newId });
     expect(retry.ok).toBe(true);
-    expect(retry.message).toMatch(/idempotent/);
+    expect(retry.message).toBe("No new claims from Resume: nothing was duplicated.");
     profile = retry.profile;
     expect(profile.claims).toHaveLength(1); // still exactly one — no duplicate
   });

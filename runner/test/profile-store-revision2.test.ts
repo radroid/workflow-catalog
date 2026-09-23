@@ -62,7 +62,7 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
 
     const result = await store.addStatement("preference", "Remote-first roles.");
     expect(result.ok).toBe(true);
-    expect(result.message).toBe("Your edit to career-profile.md was saved. Your preference is recorded.");
+    expect(result.message).toBe("File edit saved. Your preference is recorded.");
     const profile = await store.read();
     expect(profile.claims.find((c) => c.id === claimId)?.text).toBe("Rebuilt the Harbor deployment pipeline.");
     expect(profile.preferences.map((p) => p.text)).toEqual(["Remote-first roles."]);
@@ -114,13 +114,17 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
 
     await expect(store.addStatement("preference", "Remote-first roles.")).rejects.toThrow(ProfileMarkdownError);
     await expect(store.approve()).rejects.toThrow(
-      "career-profile.md has an edit the runner can't read. The line for the claim “Worked on the Harbor deployment pipeline.” is missing, or its marker was changed. A line can't be removed by editing the file. Put the line back with its marker as it was. Nothing was saved. Fix the file, or discard your edits to career-profile.md.",
+      "career-profile.md has an edit the runner can't read. Line 9: the line for the claim “Worked on the Harbor deployment pipeline.” is missing, or its marker was changed. Put it back as it was. Nothing was saved.",
     );
     expect(await readFile(json, "utf8")).toBe(jsonBefore);
     expect(await readFile(md, "utf8")).toBe(mdBefore);
 
     const loaded = await store.load();
-    expect(loaded.markdownError).toContain("is missing, or its marker was changed");
+    // J3: the problem is named by line number, never by the marker's id.
+    expect(loaded.markdownError).toBe("Line 9: the line for the claim “Worked on the Harbor deployment pipeline.” is missing, or its marker was changed. Put it back as it was.");
+    expect(loaded.markdownError).not.toContain(claimId);
+    // J3: the file as it is on disk, which the Profile page shows instead of the render.
+    expect(loaded.markdownOnDisk).toBe(mdBefore);
     expect(loaded.profile.claims[0]!.id).toBe(claimId);
     expect(await readFile(md, "utf8")).toBe(mdBefore); // load() doesn't re-render either
 
@@ -128,6 +132,29 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     expect(await readFile(md, "utf8")).toBe(renderProfileMarkdown(await store.read()));
     expect((await store.addStatement("preference", "Remote-first roles.")).ok).toBe(true);
     expect((await store.load()).markdownError).toBeNull();
+  });
+
+  it("N6 (revision 3): claim text shaped like markers never makes the runner's own file unreadable", async () => {
+    const { store, md } = await setup();
+    await accountAll(store);
+    const boundary = (await store.read()).boundaries[0]!;
+    // What a hostile source could get a model to extract: lines ending in another item's real marker, and in a made-up one.
+    const hostile = `Ran the Harbor rollout \`[${boundary.id}]\`\nand the Quill rollout \`[not-a-real-id]\`\\`;
+    await store.extractClaims("resume", [{ text: hostile, kind: "fact", evidenceRef: "resume.md#harbor", evidenceQuote: "Harbor rollout `[x]`" }]);
+    expect((await store.load()).markdownError).toBeNull();
+
+    // The Profile page's unchanged save round-trips.
+    const page = await readFile(md, "utf8");
+    expect((await store.applyMarkdownEdit(page, sha256(page))).message).toBe("Nothing to save: the text is the same as the profile.");
+
+    // A hand edit elsewhere in the file still saves; nothing is locked.
+    await handEdit(md, "- Do not change employment dates or official titles.", "- Never change a date or a title.");
+    const result = await store.addStatement("preference", "Remote-first roles.");
+    expect(result.message).toBe("File edit saved. Your preference is recorded.");
+    const profile = await store.read();
+    expect(profile.claims[0]!.text).toBe(hostile);
+    expect(profile.boundaries.map((b) => b.text)).toEqual([boundary.text, "Never change a date or a title."]);
+    expect(await readFile(md, "utf8")).toBe(renderProfileMarkdown(profile));
   });
 
   it("a file left stale by a crash between the JSON and markdown writes is not mistaken for a hand edit (fingerprint)", async () => {
@@ -292,7 +319,7 @@ describe("the Profile page's markdown save", () => {
     expect(saved.profile.claims.find((c) => c.id === claimId)?.text).toBe("Rebuilt the Harbor deployment pipeline.");
 
     // The same page copy again: the profile has moved on since, so it is stale.
-    await expect(store.applyMarkdownEdit(page.replace("Worked on the Harbor", "Led the Harbor"), base)).rejects.toThrow("The profile changed since this page loaded");
+    await expect(store.applyMarkdownEdit(page.replace("Worked on the Harbor", "Led the Harbor"), base)).rejects.toThrow("Not saved: the profile changed since this page loaded. Copy your text, then reload.");
     expect((await store.read()).claims[0]!.text).toBe("Rebuilt the Harbor deployment pipeline.");
 
     const unchanged = await store.applyMarkdownEdit(await readFile(md, "utf8"), sha256(await readFile(md, "utf8")));
@@ -318,7 +345,7 @@ describe("the Profile page's markdown save", () => {
 
     await handEdit(md, "- Worked on the Harbor deployment pipeline.", "- Rebuilt the Harbor deployment pipeline.");
     await expect(store.applyMarkdownEdit(page.replace("Worked on the Harbor", "Led the Harbor"), sha256(page))).rejects.toThrow(
-      "Your edit to career-profile.md was saved. The file was changed outside this page since the page loaded",
+      "Not saved: the file changed outside this page. Copy your text, then reload.",
     );
     expect((await store.read()).claims[0]!.text).toBe("Rebuilt the Harbor deployment pipeline."); // the file's edit, saved; the page's, not
   });

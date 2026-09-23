@@ -41,6 +41,23 @@ export function needsQuestion(claim: { readonly kind: ClaimKind; readonly text: 
   return ALWAYS_ASK_KINDS.includes(claim.kind) || usesAlwaysAskWord(claim.text);
 }
 
+/**
+ * Why a claim gets a question, for a person to read (P03 revision 3, polish
+ * 4): "it's a metric claim" when its kind always asks, else the always-ask word
+ * its text uses, quoted as written ("it says “Led”"), the earliest one in the
+ * text. Undefined when neither applies: a claim disputed by hand, or a
+ * question a model asked for reasons of its own.
+ */
+export function questionReason(claim: { readonly kind: ClaimKind; readonly text: string }): string | undefined {
+  if (ALWAYS_ASK_KINDS.includes(claim.kind)) return `it's a ${claim.kind} claim`;
+  let first: RegExpExecArray | undefined;
+  for (const word of ALWAYS_ASK_WORDS) {
+    const match = new RegExp(`\\b${escapeRegExp(word)}\\b`, "i").exec(claim.text);
+    if (match && (first === undefined || match.index < first.index)) first = match;
+  }
+  return first ? `it says “${first[0]}”` : undefined;
+}
+
 /** A number in claim text: "30%", "1.2k", "40", "3x". Numbers are how a metric, a date, or a scope ("used by 40 teams") usually enters a claim. */
 const NUMBER = /\d+(?:[.,]\d+)*\s*(?:%|percent\b|x\b|×|k\b|m\b|bn\b)?/gi;
 

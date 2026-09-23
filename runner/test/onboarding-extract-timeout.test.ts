@@ -20,6 +20,13 @@ import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
  * (`MessageResponse.cancel()` sends nothing before the client has seen the
  * turn start, or once the turn is parked), and record no content hash, so
  * the same text is extracted again next time.
+ *
+ * J1 (P03 revision 3): a turn eve cancelled ends `turn.cancelled`, then
+ * `session.waiting`; it is not ok either. The control is the P02 spike's
+ * normal turn (docs/spec/research/eve-spike.md), with the extract_claims
+ * result in the middle: `session.started → turn.started → message.received →
+ * step.started → action.result → message.appended → message.completed →
+ * step.completed → turn.completed → session.waiting`.
  */
 
 const COOKIE = `${UI_COOKIE}=${UI_TOKEN}`;
@@ -27,13 +34,15 @@ const SAME_ORIGIN = { cookie: COOKIE, origin: BRIDGE, "content-type": "applicati
 const SESSION = "s-extract";
 const CANCEL_PATH = `/eve/v1/session/${SESSION}/cancel`;
 const SHORT_DEADLINE_MS = 300;
-const TIMED_OUT = { code: "extraction_timed_out", message: "No answer from the model within 300 ms. The turn was stopped; try again." };
+const TIMED_OUT = { code: "extraction_timed_out", message: "No answer from the model within 300 ms, so the extraction was stopped. Try again." };
 const RESUME_TEXT = "Led the payments team at Northwind Labs. Cut the Harbor release time from a day to under an hour.";
 const LED_CLAIM = { text: "Led the payments team at Northwind Labs.", kind: "fact" as const, evidenceRef: "pasted.txt#1", evidenceQuote: "Led the payments team at Northwind Labs." };
 
 type Plan =
-  /** A whole turn: extract_claims persists a claim, then `session.waiting`. */
+  /** The spike's normal turn, with extract_claims persisting a claim: ends `turn.completed → session.waiting`. */
   | "finished"
+  /** extract_claims persists a claim, then eve cancels the turn: `turn.cancelled → session.waiting` (J1). */
+  | "cancelled"
   /** The deadline fires while the first event stream is still opening. */
   | "hang-open"
   /** extract_claims persists a claim, the stream lease ends, and the deadline fires while the client reopens the stream. */
@@ -79,13 +88,13 @@ function stubEve(plan: Plan, bridge: () => TestBridge): FakeEve {
       signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
 
-  const extractClaimsResult = async (): Promise<Record<string, unknown>> => {
+  const extractClaimsResult = async (sequence: number): Promise<Record<string, unknown>> => {
     const { workspace, clock } = bridge();
     const output = await verifyAndPersistExtractedClaims({ sourceCategory: "resume", claims: [LED_CLAIM] }, new ProfileStore(workspace, clock));
     return streamEvent("action.result", {
       callId: "call-1",
       result: { kind: "tool-result", callId: "call-1", toolName: "extract_claims", output },
-      sequence: 2,
+      sequence,
       status: "completed",
       stepIndex: 0,
       turnId: "t1",
@@ -115,15 +124,28 @@ function stubEve(plan: Plan, bridge: () => TestBridge): FakeEve {
     const body = new ReadableStream<Uint8Array>({
       async start(controller) {
         controller.enqueue(encoder.encode("\n"));
-        controller.enqueue(line(streamEvent("turn.started", { sequence: 0, turnId: "t1" })));
-        controller.enqueue(line(streamEvent("step.started", { modelId: "fake-model", sequence: 1, stepIndex: 0, turnId: "t1" })));
-        if (plan === "finished" || plan === "lease-end-then-hang-reopen") controller.enqueue(line(await extractClaimsResult()));
-        if (plan === "finished") {
+        if (plan === "finished" || plan === "cancelled") {
+          controller.enqueue(line(streamEvent("session.started", {})));
+          controller.enqueue(line(streamEvent("turn.started", { sequence: 0, turnId: "t1" })));
+          controller.enqueue(line(streamEvent("message.received", { message: "Extract candidate claims…", sequence: 1, turnId: "t1" })));
+          controller.enqueue(line(streamEvent("step.started", { modelId: "fake-model", sequence: 2, stepIndex: 0, turnId: "t1" })));
+          controller.enqueue(line(await extractClaimsResult(3)));
+          if (plan === "finished") {
+            controller.enqueue(line(streamEvent("message.appended", { messageDelta: "Done.", sequence: 4, stepIndex: 0, turnId: "t1" })));
+            controller.enqueue(line(streamEvent("message.completed", { finishReason: "stop", message: "Done.", sequence: 5, stepIndex: 0, turnId: "t1" })));
+            controller.enqueue(line(streamEvent("step.completed", { finishReason: "stop", sequence: 6, stepIndex: 0, turnId: "t1" })));
+            controller.enqueue(line(streamEvent("turn.completed", { sequence: 7, turnId: "t1" })));
+          } else {
+            controller.enqueue(line(streamEvent("turn.cancelled", { sequence: 4, turnId: "t1" })));
+          }
           controller.enqueue(line(streamEvent("session.waiting", { continuationToken: SESSION, wait: "next-user-message" })));
           controller.close();
           return;
         }
+        controller.enqueue(line(streamEvent("turn.started", { sequence: 0, turnId: "t1" })));
+        controller.enqueue(line(streamEvent("step.started", { modelId: "fake-model", sequence: 1, stepIndex: 0, turnId: "t1" })));
         if (plan === "lease-end-then-hang-reopen") {
+          controller.enqueue(line(await extractClaimsResult(2)));
           // eve's server ends every stream lease after 60 s; the client then reopens the stream.
           controller.enqueue(line({ $eve: "stream.lease-ended", version: 1 }));
           controller.close();
@@ -188,16 +210,36 @@ afterEach(() => {
 });
 
 describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §8 item 15)", () => {
-  it("control: a finished turn that persisted claims is ok, records the hash, and cancels nothing", async () => {
+  it("control: the spike's normal turn (… turn.completed → session.waiting) that persisted claims is ok, records the hash, and cancels nothing", async () => {
     const { bridge, eve } = await bridgeWithRealClient("finished");
     await provideResume(bridge);
     const response = await post(bridge, "/sources/resume/extract");
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string }> };
-    expect(body).toMatchObject({ ok: true, status: "waiting" });
+    expect(body).toMatchObject({ ok: true, status: "waiting", message: "1 candidate claim extracted from Resume." });
     expect(body.claims.map((claim) => claim.text)).toEqual([LED_CLAIM.text]);
     expect(eve.cancels()).toBe(0);
     expect(await hashRecorded(bridge)).toBe(true);
+    // Unchanged text is not sent to eve again (R7).
+    expect(((await (await post(bridge, "/sources/resume/extract")).json()) as { status: string }).status).toBe("unchanged");
+    expect(eve.sessionsCreated()).toBe(1);
+  });
+
+  it("J1: a cancelled turn (extract_claims persisted → turn.cancelled → session.waiting) is not ok, records no hash, keeps the saved claim, and the same text runs again", async () => {
+    const { bridge, eve } = await bridgeWithRealClient("cancelled");
+    await provideResume(bridge);
+    const response = await post(bridge, "/sources/resume/extract");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string; status: string }> };
+    expect(body).toMatchObject({ ok: false, status: "waiting", message: "The extraction was stopped before it finished. Try again." });
+    // As on the timeout path: the claim the tool step saved before the cancel stays a candidate.
+    expect(body.claims.map((claim) => [claim.text, claim.status])).toEqual([[LED_CLAIM.text, "candidate"]]);
+    expect(await hashRecorded(bridge)).toBe(false);
+    // The turn already ended (session.waiting follows the cancel), so there is nothing to cancel.
+    expect(eve.cancels()).toBe(0);
+    const again = await post(bridge, "/sources/resume/extract");
+    expect(((await again.json()) as { status: string }).status).not.toBe("unchanged");
+    expect(eve.sessionsCreated()).toBe(2);
   });
 
   it("the deadline fires while the stream is opening: result() resolves quietly, and the route still reports a timeout and cancels the session", async () => {
@@ -247,7 +289,7 @@ describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §
     expect(await response.json()).toMatchObject({
       ok: false,
       status: "waiting",
-      message: "Extraction from Resume did not finish: The model asked a question instead of finishing. This page can't show or answer it; try again, or simplify the source text.",
+      message: "The model asked a question this page can't show, so the extraction stopped. Try again.",
     });
     expect(eve.cancels()).toBe(1);
     expect(eve.requests.at(-1)).toBe(`POST ${CANCEL_PATH}`);

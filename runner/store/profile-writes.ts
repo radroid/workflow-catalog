@@ -156,9 +156,9 @@ async function release(file: string, token: string): Promise<void> {
   });
 }
 
-async function acquire(file: string, waitMs: number, staleMs: number, log: (message: string) => void): Promise<string> {
+/** Takes the lock file, retrying until `deadline` (an epoch ms). A writer whose deadline passed while it queued still gets one try, so a free lock is never refused. */
+async function acquire(file: string, deadline: number, staleMs: number, log: (message: string) => void): Promise<string> {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + waitMs;
   let delay = FIRST_POLL_MS;
   for (;;) {
     const token = await tryCreate(file);
@@ -182,9 +182,14 @@ export async function withProfileLock<T>(workspace: Workspace, work: () => Promi
   const waitMs = options.waitMs ?? DEFAULT_LOCK_WAIT_MS;
   const staleMs = options.staleMs ?? DEFAULT_STALE_LOCK_MS;
   const log = options.log ?? ((message: string) => console.warn(`[profile] ${message}`));
+  // N1 (P03 revision 3): the wait starts when the write is asked for, not when
+  // it reaches the head of this process's chain, so writers queued behind one
+  // that is waiting on another process all give up about `waitMs` after they
+  // asked (not at 5, 10, 15 s).
+  const deadline = Date.now() + waitMs;
   return serialise(chains, workspace.root, async () => {
     const file = await workspace.resolveReal(...PROFILE_LOCK_SEGMENTS);
-    const token = await acquire(file, waitMs, staleMs, log);
+    const token = await acquire(file, deadline, staleMs, log);
     try {
       return await work();
     } finally {

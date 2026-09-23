@@ -136,9 +136,8 @@ describe("D9: readMarkdownEdits, the strict reader", () => {
     const profile = sample();
     const harbor = profile.claims[0]!;
     const edited = renderProfileMarkdown(profile).replace(` \`[${harbor.id}]\``, "");
-    expect(problem(profile, edited)).toBe(
-      "The line for the claim “Worked on the Harbor deployment pipeline.” is missing, or its marker was changed. A line can't be removed by editing the file. Put the line back with its marker as it was.",
-    );
+    // J3: named by line number and by its words, never by the marker's id.
+    expect(problem(profile, edited)).toBe("Line 9: the line for the claim “Worked on the Harbor deployment pipeline.” is missing, or its marker was changed. Put it back as it was.");
   });
 
   it("refuses a damaged marker", () => {
@@ -159,15 +158,27 @@ describe("D9: readMarkdownEdits, the strict reader", () => {
     const profile = sample();
     const harbor = profile.claims[0]!;
     const markdown = renderProfileMarkdown(profile);
-    expect(problem(profile, markdown.replace("## Preferences\n\n_None recorded yet._", "## Preferences\n\n- Remote only. `[not-a-real-id]`"))).toContain("ends in the marker [not-a-real-id], which matches nothing in your profile");
-    expect(problem(profile, markdown.replace("## Preferences\n\n_None recorded yet._", `## Preferences\n\n- Again. \`[${harbor.id}]\``))).toContain("appears twice");
-    expect(problem(profile, markdown.replace(`- Worked on the Harbor deployment pipeline. \`[${harbor.id}]\``, `- \`[${harbor.id}]\``))).toMatch(/is missing|is empty/);
+    // J3: an unknown marker is named by its line, and the marker itself is never echoed.
+    const unknown = problem(profile, markdown.replace("## Preferences\n\n_None recorded yet._", "## Preferences\n\n- Remote only. `[not-a-real-id]`"));
+    expect(unknown).toMatch(/^Line \d+: the marker at the end of this line matches nothing in your profile\. Put back the marker it had\.$/);
+    expect(unknown).not.toContain("not-a-real-id");
+    const twice = problem(profile, markdown.replace("## Preferences\n\n_None recorded yet._", `## Preferences\n\n- Again. \`[${harbor.id}]\``));
+    expect(twice).toMatch(/^Lines 9 and \d+ both carry the marker for the claim “Worked on the Harbor deployment pipeline\.”\. Keep one of them\.$/);
+    expect(twice).not.toContain(harbor.id);
+    // No space before the marker: it isn't read as one, so the claim's line is missing.
+    expect(problem(profile, markdown.replace(`- Worked on the Harbor deployment pipeline. \`[${harbor.id}]\``, `- \`[${harbor.id}]\``))).toBe(
+      "Line 9: the line for the claim “Worked on the Harbor deployment pipeline.” is missing, or its marker was changed. Put it back as it was.",
+    );
+    // Only the marker left: the words are gone.
+    expect(problem(profile, markdown.replace(`- Worked on the Harbor deployment pipeline. \`[${harbor.id}]\``, `-  \`[${harbor.id}]\``))).toBe(
+      "Line 9: the words of the claim “Worked on the Harbor deployment pipeline.” are gone. To leave it out, exclude it on the Onboarding page.",
+    );
   });
 
   it("refuses a new bullet with no marker, instead of dropping it", () => {
     const profile = sample();
     const edited = renderProfileMarkdown(profile).replace("## Preferences\n\n_None recorded yet._", "## Preferences\n\n- Remote-first roles only.");
-    expect(problem(profile, edited)).toMatch(/Line \d+, "Remote-first roles only\.", has no marker\. New items can't be added by editing the file; add them on the Onboarding page\./);
+    expect(problem(profile, edited)).toMatch(/^Line \d+: this line has no marker\. New items can't be added in the file; add them on the Onboarding page\.$/);
   });
 
   it("refuses a bullet moved to another section", () => {
@@ -176,13 +187,15 @@ describe("D9: readMarkdownEdits, the strict reader", () => {
     const markdown = renderProfileMarkdown(profile);
     const bullet = `- Cut report time by 30%. \`[${metric.id}]\``;
     const moved = markdown.replace(`${bullet}\n`, "").replace("## Confirmed claims\n\n", `## Confirmed claims\n\n${bullet}\n`);
-    expect(problem(profile, moved)).toContain("the claim “Cut report time by 30%.” (line 9) was moved");
+    expect(problem(profile, moved)).toBe("Line 9: the line for the claim “Cut report time by 30%.” was moved. Put it back where it was.");
   });
 
   it("refuses an edit to a line that is never read back: evidence, a question, a heading", () => {
     const profile = sample();
     const markdown = renderProfileMarkdown(profile);
-    expect(problem(profile, markdown.replace("(resume.md#harbor)", "(my own memory)"))).toMatch(/^Line \d+ was changed, but only the words before a marker can be edited\. It should read: "- \*\*Evidence:\*\* "Harbor internal deployment pipeline" \(resume\.md#harbor\)"\.$/);
+    expect(problem(profile, markdown.replace("(resume.md#harbor)", "(my own memory)"))).toBe(
+      "Line 10: only the words before a marker can be edited. This line should read “- **Evidence:** \"Harbor internal deployment pipeline\" (resume.md#harbor)”.",
+    );
     expect(problem(profile, markdown.replace("Measured against what,", "Measured against the Q2 report,"))).toContain("only the words before a marker can be edited");
     expect(problem(profile, markdown.replace("## Excluded", "## Left out"))).toContain("only the words before a marker can be edited");
   });

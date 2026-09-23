@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { ProfileBusyError, serialise, withProfileLock } from "../store/profile-writes.ts";
+import { DEFAULT_LOCK_WAIT_MS, ProfileBusyError, serialise, withProfileLock } from "../store/profile-writes.ts";
 import { newWorkspace } from "./helpers.ts";
 
 /**
@@ -114,6 +114,33 @@ describe("withProfileLock", () => {
       await writeFile(lock, `${JSON.stringify({ token: "someone-else", pid: 1, acquiredAt: "2026-09-22T08:00:00.000Z" })}\n`);
     });
     expect(await readFile(lock, "utf8")).toContain("someone-else");
+  });
+
+  it("N1/N2 (revision 3): writers queued behind one another all give up about 5 s after they asked, not at 5, 10 and 15 s", async () => {
+    const workspace = await newWorkspace();
+    const lock = path.join(workspace.root, ".runner", "profile.lock");
+    // Another process holds a fresh lock for the whole test.
+    await writeFile(lock, `${JSON.stringify({ token: "other", pid: 1, acquiredAt: new Date().toISOString() })}\n`);
+    const started = Date.now();
+    let ran = 0;
+    // Default options: this process's own chain and the default 5 s wait (N2 pins it).
+    const writers = [1, 2, 3].map(() =>
+      withProfileLock(workspace, async () => {
+        ran++;
+      }).then(
+        () => ({ error: undefined as unknown, at: Date.now() - started }),
+        (error: unknown) => ({ error, at: Date.now() - started }),
+      ),
+    );
+    const outcomes = await Promise.all(writers);
+    expect(DEFAULT_LOCK_WAIT_MS).toBe(5_000);
+    for (const outcome of outcomes) {
+      expect(outcome.error).toBeInstanceOf(ProfileBusyError);
+      expect(outcome.at).toBeGreaterThanOrEqual(4_900);
+      expect(outcome.at).toBeLessThan(6_500);
+    }
+    expect(ran).toBe(0);
+    expect(await readFile(lock, "utf8")).toContain('"token":"other"');
   });
 
   it("gives up with ProfileBusyError, without running the work, when the lock stays held", async () => {
