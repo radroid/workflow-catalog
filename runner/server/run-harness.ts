@@ -100,11 +100,25 @@ export interface TurnResult {
   readonly detail?: string;
   /** True when `status: "failed"` was specifically a provider rate limit. `runTurn` has already paused the budget by the time this is set. */
   readonly providerLimit?: boolean;
+  /**
+   * P04 (additive): the turn's raw stream events, in order, present only when
+   * `RunTurnInput.collectEvents` was set. A caller reads a tool's own output
+   * from these the way P03's onboarding route reads `action.result` off
+   * `MessageResult.events` — `captures.ts`'s extraction turn is the first
+   * caller, so it never needs its own turn classifier (there are two already;
+   * a runner follow-up will merge them). Every existing caller that omits
+   * `collectEvents` gets exactly the `TurnResult` shape it always has: this
+   * field is simply absent, not `undefined`-valued, on every return path
+   * below.
+   */
+  readonly events?: readonly MessageStreamEvent[];
 }
 
 export interface RunTurnInput {
   readonly message: string;
   readonly timeoutMs?: number;
+  /** P04: also collect the turn's events onto the result (see `TurnResult.events`). Defaults to false, so every existing call site is unaffected. */
+  readonly collectEvents?: boolean;
 }
 
 /** Semantic-error-catalog rule ids that mean "the provider (or the AI Gateway in front of it) rate-limited this request" — decision 1's primary signal. */
@@ -148,7 +162,11 @@ async function cancelSession(session: ClientSession | undefined): Promise<void> 
  */
 export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<TurnResult> {
   const eve = ctx.eve;
-  if (!eve) return { status: "failed", tokens: ZERO_TOKENS, detail: "eve is not running." };
+  const collectEvents = input.collectEvents ?? false;
+  const events: MessageStreamEvent[] = [];
+  /** Appends `events` (P04, additive) only for a caller that asked for them; every existing call site's result shape is unchanged. */
+  const withEvents = (result: TurnResult): TurnResult => (collectEvents ? { ...result, events } : result);
+  if (!eve) return withEvents({ status: "failed", tokens: ZERO_TOKENS, detail: "eve is not running." });
   const timeoutMs = input.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
   const signal = AbortSignal.timeout(timeoutMs);
 
@@ -166,6 +184,7 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
     // Event by event (G1): a quietly-ending abort during an open or reconnect never throws here, so the partial
     // usage and model survive it and the signal.aborted check below is what actually catches it.
     for await (const event of created.response) {
+      events.push(event);
       switch (event.type) {
         case "step.started":
           model = event.data.modelId;
@@ -187,7 +206,7 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
     }
   } catch (caught) {
     if (!signal.aborted) {
-      return { status: "failed", tokens, ...(model !== undefined ? { model } : {}), detail: nonEmptyOrFallback(shorten(errorMessage(caught))) };
+      return withEvents({ status: "failed", tokens, ...(model !== undefined ? { model } : {}), detail: nonEmptyOrFallback(shorten(errorMessage(caught))) });
     }
     // An abort while an open stream is being read does throw (eve-runtime.md §8 item 15); fall through to the
     // signal.aborted branch below with whatever partial usage/model was read before it.
@@ -197,31 +216,31 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
 
   if (signal.aborted) {
     await cancelSession(session);
-    return { status: "timeout", ...partial, detail: `No answer within ${timeoutMs / 1000} s.` };
+    return withEvents({ status: "timeout", ...partial, detail: `No answer within ${timeoutMs / 1000} s.` });
   }
 
   if (failure) {
     const providerLimit = isProviderLimitFailure(failure);
     if (providerLimit) await pauseBudget(ctx.workspace, ctx.clock, PROVIDER_LIMIT_REASON);
     const detail = providerLimit ? `${PROVIDER_LIMIT_REASON} (${shorten(failure.data.message)})` : `${failure.data.code}: ${shorten(failure.data.message)}`;
-    return { status: "failed", ...partial, detail, providerLimit };
+    return withEvents({ status: "failed", ...partial, detail, providerLimit });
   }
 
-  if (cancelled) return { status: "cancelled", ...partial, detail: "The turn was cancelled before it finished." };
+  if (cancelled) return withEvents({ status: "cancelled", ...partial, detail: "The turn was cancelled before it finished." });
 
   if (!boundary) {
     // Not aborted, no failure event, yet the stream ended with no boundary event: never call this "ok" (G1).
-    return { status: "failed", ...partial, detail: "The turn ended without a result." };
+    return withEvents({ status: "failed", ...partial, detail: "The turn ended without a result." });
   }
 
   if (inputRequests > 0) {
     await cancelSession(session);
-    return { status: "parked", ...partial, detail: "The model asked for input instead of finishing the run." };
+    return withEvents({ status: "parked", ...partial, detail: "The model asked for input instead of finishing the run." });
   }
 
   // A session.waiting (conversation) or session.completed (task) boundary with no failure, no cancellation, no
   // input request and no abort: the turn finished.
-  return { status: "ok", ...partial };
+  return withEvents({ status: "ok", ...partial });
 }
 
 // --- withRun -------------------------------------------------------------

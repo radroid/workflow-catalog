@@ -14,4 +14,7 @@ export const P02_TOOLS = ["load_skill", "open_application_group"] as const;
 /** extract_claims (claim-extraction) and ask_follow_up (follow-up-questions). */
 export const P03_TOOLS = ["ask_follow_up", "extract_claims"] as const;
 
-export const REGISTERED_TOOLS: readonly string[] = [...P02_TOOLS, ...P03_TOOLS].sort();
+/** extract_job (job capture's structured extraction, mirroring P03's extract_claims). */
+export const P04_TOOLS = ["extract_job"] as const;
+
+export const REGISTERED_TOOLS: readonly string[] = [...P02_TOOLS, ...P03_TOOLS, ...P04_TOOLS].sort();
