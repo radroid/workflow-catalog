@@ -1069,3 +1069,20 @@ The orchestrator's own fallback wake-up couldn't run either, so the loop stalled
 - Revision 4 went to the same Opus implementer, with decisions K1–K4: announce once, the reviewer's nits, the polish, and H2 in part A's fallback.
 - Round 5 confirms only K1–K4.
 - **Process note:** while looking for its scratch folder, the UI critic opened the orchestrator's roster and code-word files in /tmp; it says it used nothing from either. The files moved to a private folder with no `wc-` prefix. From now on, prompts limit agents to the /tmp paths they name.
+
+## 2026-09-23 — P08-A peer review, round 3 [APPROVED]
+
+**Iter:** 005
+**Source:** peer-review
+**Severity:** low
+
+**Charter / context:** a narrow confirmation round over the Opus escalation's revision 2 (371cd63..2c02190; I1–I4). An Opus reviewer and an Opus UI critic reviewed PR #13. The findings are in `logs/handoff/P08-A-round-3-review.md`.
+**Verdict text / failure detail:**
+- **Reviewer: VERDICT: APPROVE** (no issues, 6 nits). I1 and I2 were probed with the real `Client` and chmod'd folders: 0 unhandled rejections, and `/status` stays 200. The chain is green at the head, on the merge, and on a trial merge with P03 (560/560).
+- **UI critic: VERDICT: APPROVE** (polish P-a to P-c). All three round-2 issues are fixed, all 40 shots are accurate, and axe found nothing.
+
+**Action taken:**
+- PR #13 was squash-merged into overnight/integration as 360ac69. The remote branch and the worktrees are removed. The P08 packet says part A is done, and GOALS P3.B is ticked.
+- The nits and polish go to P08-B (the P08 packet's new section, "Carried into part B").
+- The authorization case (nit 5) is now in `eve-runtime.md` §8 item 15, as a note for P05.
+- The P03 implementer was told to merge integration and keep its readdir-based `route-modules.test.ts`.
