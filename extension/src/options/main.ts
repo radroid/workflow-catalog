@@ -92,10 +92,27 @@ function tooManyTriesMessage(retryAfterSeconds: number | undefined): string {
 const pairingStatusId = nextId("pairing-status");
 const pairingStatus = el("p", { className: "flash", attrs: { id: pairingStatusId, role: "status", "aria-live": "polite" } });
 
-/** Sets the Pairing section's persistent line (its tones: shared/tone.ts --
- * "Pairing…" is `info`, "Paired."/"Un-paired." `ok`, anything the person
- * has to fix `act`). */
+/**
+ * P07-B revision 4, K1: the Pairing line's other slot, in the same place
+ * in the card, for what a status check found out about the pairing (the
+ * bridge refused its token). It is not a live region: Status's alert
+ * already announces the refusal, and revision 3 set this sentence in the
+ * live line above, so a screen reader heard it a second time a
+ * millisecond later. Shown in amber, and part of the code field's
+ * description, which is read when focus lands on the field, not
+ * announced. Like the live line, it is one node that every rebuild
+ * re-appends. At most one of the two slots has text, and an empty one
+ * takes no room (base.css), so the card shows one line either way.
+ */
+const pairingNoticeId = nextId("pairing-notice");
+const pairingNotice = el("p", { className: "flash", attrs: { id: pairingNoticeId, "data-notice": "" } });
+
+/** Sets the Pairing section's persistent line, announced (its tones:
+ * shared/tone.ts -- "Pairing…" is `info`, "Paired."/"Un-paired." `ok`,
+ * anything the person has to fix `act`). These are the outcomes of what
+ * the person does on this page. */
 function setPairingStatus(text: string, tone: Tone): void {
+  pairingNotice.replaceChildren();
   pairingStatus.replaceChildren(...withInlineCode(text));
   pairingStatus.className = FLASH_CLASS[tone];
 }
@@ -105,15 +122,25 @@ function setPairingStatus(text: string, tone: Tone): void {
  * somewhere else, the old outcome must go -- revision 2 kept "Paired."
  * next to "Not paired yet." after a revoke (and as the code field's
  * description), and "Un-paired." next to a device paired from another
- * tab. Emptied, the line takes no room (base.css). */
+ * tab. Emptied, the line takes no room (base.css). Clearing is never
+ * announced: nothing is added. */
 function clearPairingStatus(): void {
   pairingStatus.replaceChildren();
   pairingStatus.className = FLASH_CLASS.act;
+  pairingNotice.replaceChildren();
 }
 
-/** The persistent line's text once a pairing has expired or been revoked
+/** The Pairing line's text once a pairing has expired or been revoked
  * (the bridge refused its token). */
 const PAIRING_EXPIRED_LINE = "Your pairing expired or was revoked.";
+
+/** K1: says the pairing expired or was revoked, silently (the notice
+ * slot), in place of this page's last outcome. */
+function showPairingExpired(): void {
+  clearPairingStatus();
+  pairingNotice.replaceChildren(PAIRING_EXPIRED_LINE);
+  pairingNotice.className = FLASH_CLASS.act;
+}
 
 function pairCommand(everPaired: boolean): string {
   return everPaired ? "npm run pair" : "npm run setup";
@@ -155,7 +182,7 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
   const paired = current !== null;
 
   const codeInput = el("input", {
-    attrs: { type: "text", id: codeFieldId, placeholder: "e.g. 7KQ2M-X9RTB", "aria-describedby": pairingStatusId },
+    attrs: { type: "text", id: codeFieldId, placeholder: "e.g. 7KQ2M-X9RTB", "aria-describedby": `${pairingNoticeId} ${pairingStatusId}` },
   }) as HTMLInputElement;
   const codeLabel = el("label", { className: "small", attrs: { for: codeFieldId } }, [
     "Code from ",
@@ -286,7 +313,8 @@ function pairingSection(current: StoredDeviceToken | null, everPaired: boolean):
       actions,
       // Polish: the outcome message belongs next to the button that
       // caused it, not stranded below the (possibly now-hidden) code
-      // field.
+      // field. The notice (K1) takes the same place; only one has text.
+      pairingNotice,
       pairingStatus,
       formWrap,
       statusPageLink(),
@@ -318,15 +346,25 @@ function showPairing(current: StoredDeviceToken | null, everPaired: boolean): HT
  * refused the token this page showed, and nothing otherwise (e.g. a
  * pairing made or dropped in another tab) -- instead of keeping this
  * page's last outcome.
+ *
+ * P07-B revision 4, K1: that sentence goes in the notice slot, silently.
+ * The check that found the refusal has just announced it in Status's
+ * alert; revision 3 set it in the live line, which said it again a
+ * millisecond later. Every storage read comes first, then the page
+ * changes in one step.
  */
 async function syncPairingSection(): Promise<void> {
   const current = await getDeviceToken();
   if ((current?.deviceId ?? null) === pairingShownFor) return;
+  const expired = current === null && (await getPairingExpired());
+  const everPaired = await hasPairedBefore(current);
   const hadFocus = app!.querySelector('[data-section="pairing"]')?.contains(document.activeElement) ?? false;
-  if (current === null && (await getPairingExpired())) setPairingStatus(PAIRING_EXPIRED_LINE, "act");
+  if (expired) showPairingExpired();
   else clearPairingStatus();
-  const fresh = showPairing(current, await hasPairedBefore(current));
+  const fresh = showPairing(current, everPaired);
   if (hadFocus) {
+    // The control that had focus is gone with the old card. With nothing
+    // paired, the code field is next; its description carries the notice.
     const next = current ? '[data-action="unpair"]' : 'input[type="text"]';
     fresh.querySelector<HTMLElement>(next)?.focus();
   }
@@ -341,9 +379,9 @@ async function syncPairingSection(): Promise<void> {
  *
  * P07-B revision 3, H2: no field names or status codes. Another program
  * answering on the port gets one sentence with a next step, the same one
- * the outbox line agrees with (revision 2 said the runner's response
- * "didn't match the expected shape", or "unexpected error (HTTP 404)");
- * a real 5xx says the runner had a problem.
+ * the Pairing line shows when a pairing meets it (revision 2 said the
+ * runner's response "didn't match the expected shape", or "unexpected
+ * error (HTTP 404)"); a real 5xx says the runner had a problem.
  */
 function statusFailureMessage(error: BridgeError): string {
   if (error.code === "not_paired") return "Pair this browser above to see the runner's status.";
@@ -523,15 +561,21 @@ interface OutboxContext {
 
 /**
  * P07-B revision 1, B10, and revision 2: "N saved jobs waiting to send",
- * with the reason when it's one a person can act on (B3: something other
- * than the runner is answering on its port), or "All saved jobs sent." --
- * but only once something was actually queued in this browser session
- * (polish: not on a fresh install). Empty means no line at all.
+ * or waiting on a pairing, or "All saved jobs sent." -- but only once
+ * something was actually queued in this browser session (polish: not on a
+ * fresh install). Empty means no line at all. (Revisions 1-3 also named
+ * another program on the port here; see K3 below.)
  *
  * P07-B revision 3: waiting on a pairing only while the pause holds
  * (outbox.ts's `pauseInEffect`), and "paired again" for a browser that
  * already was -- revision 2 said "waiting until this browser is paired"
  * next to a paired device.
+ *
+ * P07-B revision 4, K3: when another program answered on the runner's
+ * port, Status's alert says so, and revision 3's line said it again right
+ * below it. The line now says only that the capture waits and is being
+ * retried. When Status shows something else, that is the current reason;
+ * a capture's last failure would be out of date.
  */
 function outboxSummaryText(entries: readonly OutboxEntry[], context: OutboxContext): string {
   if (entries.length === 0) return context.usedThisSession ? "All saved jobs sent." : "";
@@ -545,7 +589,7 @@ function outboxSummaryText(entries: readonly OutboxEntry[], context: OutboxConte
       !pauseInEffect(entry, context.pairedDeviceId) &&
       (entry.lastErrorCode === "invalid_response" || entry.lastErrorCode === "unknown_error"),
   );
-  if (notTheRunner) return `${jobs} waiting to send. Something other than the runner is answering on its port; trying again.`;
+  if (notTheRunner) return `${jobs} waiting to send; trying again.`;
   return `${jobs} waiting to send.`;
 }
 
@@ -749,9 +793,9 @@ async function render(): Promise<void> {
   const current = await getDeviceToken();
   // P07-B revision 3, UI issue 1: opened after the bridge refused this
   // browser's token (e.g. the popup's 401), the Pairing card starts out
-  // saying so -- the same line a rebuild on this page would set. Set before
-  // the page is mounted, so it is not announced on top of Status's alert.
-  if (current === null && (await getPairingExpired())) setPairingStatus(PAIRING_EXPIRED_LINE, "act");
+  // saying so -- the same notice a rebuild on this page would set, and
+  // like it never announced on top of Status's alert (revision 4, K1).
+  if (current === null && (await getPairingExpired())) showPairingExpired();
   const pairing = pairingSection(current, await hasPairedBefore(current));
   pairingShownFor = current?.deviceId ?? null;
   const lastCapture = await getLastJobCapture();

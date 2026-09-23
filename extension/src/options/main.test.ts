@@ -1,5 +1,6 @@
 import "../shared/zod-jitless";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installAnnouncementRecorder, stopAnnouncementRecorder, takeAnnouncements } from "../../e2e/announcements";
 
 /** Same dynamic-import pattern as popup/main.test.ts, for the same reason:
  * options/main.ts asserts #app exists and starts rendering as soon as it's
@@ -527,6 +528,39 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
     return records;
   }
 
+  function pairingSection(): Element {
+    return document.querySelector('[data-section="pairing"]')!;
+  }
+
+  /** The Pairing line's live slot: the outcome of what the person did on
+   * this page, announced. */
+  function pairingLine(): Element {
+    return pairingSection().querySelector('[role="status"]')!;
+  }
+
+  /** The Pairing line's other slot (revision 4, K1): what a status check
+   * found out about the pairing, shown but not announced. */
+  function pairingNotice(): Element {
+    return pairingSection().querySelector("[data-notice]")!;
+  }
+
+  /** An element's accessible description from `aria-describedby`: the
+   * referenced elements' text, in order, as the accessibility tree joins
+   * it. */
+  function descriptionOf(element: Element): string {
+    return (element.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function submitCode(code: string): void {
+    (document.querySelector('input[type="text"]') as HTMLInputElement).value = code;
+    (document.querySelector("form") as HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  }
+
   it("'Check again' keeps focus, holds 'Checking…' long enough to see, and restates an unchanged problem: the alert re-inserted once, nothing else in the section touched (revision 3 polish)", async () => {
     installFakeChrome({ deviceToken: PAIRED });
     let statusCalls = 0;
@@ -741,8 +775,9 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
     expect(pairingStatus.className, "the person has to act: amber").toBe("flash");
   });
 
-  it("B3: the outbox line says why a capture is waiting when something other than the runner answered on its port", async () => {
+  it("B3 and revision 4, K3: with another program answering on the runner's port, Status's alert says so and the outbox line doesn't repeat it", async () => {
     installFakeChrome({
+      deviceToken: PAIRED,
       jobCaptureOutboxUsedThisSession: true,
       "jobCaptureOutbox:11111111-1111-4111-8111-111111111111": {
         capture: {
@@ -760,12 +795,14 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
         lastErrorCode: "invalid_response",
       },
     });
+    stubFetch(() => new Response("<!doctype html><title>Some other app</title>", { status: 200, headers: { "content-type": "text/html" } }));
     await import("./main");
-    await vi.waitFor(() =>
-      expect(statusSection().textContent).toContain(
-        "1 saved job waiting to send. Something other than the runner is answering on its port; trying again.",
-      ),
+    await vi.waitFor(() => expect(statusSection().textContent).toContain("1 saved job waiting to send; trying again."));
+    expect(statusSection().querySelector('[role="alert"]')?.textContent).toBe(
+      "Something other than the runner is answering on its port. Close that program, then start the runner with npm run runner.",
     );
+    const said = statusSection().textContent ?? "";
+    expect(said.split("Something other than the runner is answering on its port"), "said once, by the alert").toHaveLength(2);
   });
 
   it("the outbox line follows the queue as it changes, without a re-check", async () => {
@@ -808,20 +845,7 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       occurredAt: "2026-09-22T00:00:00.000Z",
     };
 
-    function pairingSection(): Element {
-      return document.querySelector('[data-section="pairing"]')!;
-    }
-
-    function pairingLine(): Element {
-      return pairingSection().querySelector('[role="status"]')!;
-    }
-
-    function submitCode(code: string): void {
-      (document.querySelector('input[type="text"]') as HTMLInputElement).value = code;
-      (document.querySelector("form") as HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    }
-
-    it("UI issue 1, revoked: after 'Paired.', a re-check that finds the pairing refused replaces the line with 'Your pairing expired or was revoked.' -- amber, and what the code field is described by -- instead of 'Paired.' next to 'Not paired.'", async () => {
+    it("UI issue 1, revoked: after 'Paired.', a re-check that finds the pairing refused replaces the line with 'Your pairing expired or was revoked.' -- amber, in the notice slot since revision 4 (K1), and what the code field is described by -- instead of 'Paired.' next to 'Not paired.'", async () => {
       installFakeChrome();
       let revoked = false;
       globalThis.fetch = ((input: RequestInfo | URL) => {
@@ -843,10 +867,11 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       await vi.waitFor(() => expect(pairingSection().textContent).toContain("Not paired."), { timeout: 2000 });
 
       expect(pairingLine(), "still the one persistent live region").toBe(line);
-      expect(line.textContent).toBe("Your pairing expired or was revoked.");
-      expect(line.className, "the person has to pair again: amber").toBe("flash");
+      expect(line.textContent, "this page's last outcome is gone").toBe("");
+      expect(pairingNotice().textContent).toBe("Your pairing expired or was revoked.");
+      expect(pairingNotice().className, "the person has to pair again: amber").toBe("flash");
       const codeField = pairingSection().querySelector('input[type="text"]')!;
-      expect(document.getElementById(codeField.getAttribute("aria-describedby")!)?.textContent).toBe("Your pairing expired or was revoked.");
+      expect(descriptionOf(codeField)).toBe("Your pairing expired or was revoked.");
       expect(pairingSection().textContent, "revision 2 kept 'Paired.' here").not.toContain("Paired.");
     });
 
@@ -866,6 +891,7 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       await vi.waitFor(() => expect(pairingSection().textContent).toContain("3f9d2c1b"));
 
       expect(line.textContent, "revision 2 kept 'Un-paired.' next to the new device").toBe("");
+      expect(pairingNotice().textContent, "nothing was refused").toBe("");
       expect(pairingSection().textContent).not.toContain("Un-paired");
     });
 
@@ -873,8 +899,9 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       installFakeChrome({ pairingExpired: true, pairedBeforeThisSession: true });
       await import("./main");
       await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull());
-      expect(pairingLine().textContent).toBe("Your pairing expired or was revoked.");
-      expect(pairingLine().className).toBe("flash");
+      expect(pairingNotice().textContent).toBe("Your pairing expired or was revoked.");
+      expect(pairingNotice().className).toBe("flash");
+      expect(pairingLine().textContent).toBe("");
       expect(pairingSection().textContent).toContain("Not paired.");
       expect(pairingSection().textContent).not.toContain("Not paired yet.");
     });
@@ -885,6 +912,9 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       // Not "Your pairing has expired": a 401 page that isn't the
       // runner's says nothing about this browser's token.
       ["a 401 outside the runner's envelope", () => new Response("<!doctype html><title>Sign in</title>", { status: 401, headers: { "content-type": "text/html" } })],
+      // Revision 4, K2: nor "belongs to a different install" for a 403
+      // page that isn't the runner's.
+      ["a 403 outside the runner's envelope", () => new Response("<!doctype html><title>Forbidden</title>", { status: 403, headers: { "content-type": "text/html" } })],
       ["a JSON answer that isn't the runner's status", () => jsonResponse(200, { hello: "world" })],
     ])("H2: %s on the runner's port reads as one plain sentence with a next step -- no field names, no status codes -- and keeps the pairing", async (_name, answer) => {
       installFakeChrome({ deviceToken: PAIRED });
@@ -899,6 +929,8 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       expect(alert.textContent).not.toMatch(/HTTP|shape|\b[1-5]\d\d\b|invalid_response|unknown_error/);
       expect(alert.className).toBe("flash");
       expect(pairingSection().textContent, "not the runner refusing the token").toContain("8b0c6f0e");
+      const flags = await chrome.storage.session.get(["pairingExpired", "pairingOriginMismatch"]);
+      expect(flags, "nothing for the next check to read as an expired pairing or another install").toEqual({});
     });
 
     it("H2: pairing while another program answers on the runner's port says so in the Pairing line -- the same sentence as Status, not the code's fault", async () => {
@@ -998,6 +1030,122 @@ describe("P07-B revision 2, C2 and polish: Status updates in place, and Pairing 
       await import("./main");
       await vi.waitFor(() => expect(statusSection().textContent).toContain("1 saved job waiting to send."));
       expect(statusSection().textContent).not.toContain("until this browser is paired");
+    });
+  });
+
+  describe("P07-B revision 4, K1: a refused pairing is announced once, by Status's alert", () => {
+    // What a screen reader would say, recorded from the page's DOM changes
+    // by e2e/announcements.ts (the same recorder the e2e runs in Chrome).
+    const ALERT = "Your pairing has expired or was revoked. Pair again above.";
+    const NOTICE = "Your pairing expired or was revoked.";
+
+    afterEach(() => {
+      stopAnnouncementRecorder();
+    });
+
+    /** Pairs through the form, as the round-4 critic's cases start, with
+     * `/status` answering 200 until `revoke()` and 401 after it. Records
+     * from the start, so the recorder is shown to hear this page's own
+     * outcomes. */
+    async function pairOnThisPage(): Promise<{ revoke(): void }> {
+      installFakeChrome();
+      let revoked = false;
+      globalThis.fetch = ((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/pair")) return Promise.resolve(jsonResponse(200, { deviceId: PAIRED.deviceId, token: PAIRED.token }));
+        if (url.endsWith("/status")) return Promise.resolve(revoked ? jsonResponse(401, TOKEN_INVALID) : jsonResponse(200, STATUS_OK));
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }) as typeof fetch;
+      installAnnouncementRecorder();
+      await import("./main");
+      await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull());
+      submitCode("7KQ2M-X9RTB");
+      await vi.waitFor(() => expect(pairingLine().textContent).toBe("Paired."));
+      await vi.waitFor(() => expect(statusSection().textContent).toContain("Connected"));
+      await settle();
+      const heard = takeAnnouncements();
+      expect(heard, "the recorder hears the live line").toContain("Pairing…");
+      expect(heard).toContain("Paired.");
+      return {
+        revoke: () => {
+          revoked = true;
+        },
+      };
+    }
+
+    it("'Check again' after a revoke: only the alert is announced; 'Paired.' goes, and the notice shows silently, in amber", async () => {
+      const runner = await pairOnThisPage();
+      runner.revoke();
+      const button = checkAgainButton();
+      button.focus();
+      button.click();
+      await vi.waitFor(() => expect(pairingSection().textContent).toContain("Not paired."), { timeout: 2000 });
+      await settle();
+
+      expect(takeAnnouncements(), "revision 3 also announced the Pairing line, 1 ms after the alert").toEqual([ALERT]);
+      expect(pairingNotice().textContent).toBe(NOTICE);
+      expect(pairingNotice().className).toBe("flash");
+      expect(pairingLine().textContent).toBe("");
+      expect(document.activeElement, "focus stays on the button").toBe(button);
+    });
+
+    it("the window-focus re-check after a revoke, with focus in the card: only the alert is announced, and focus moves to the code field, whose description carries the notice", async () => {
+      const runner = await pairOnThisPage();
+      runner.revoke();
+      const unpair = [...pairingSection().querySelectorAll("button")].find((b) => b.textContent === "Un-pair") as HTMLButtonElement;
+      unpair.focus();
+      window.dispatchEvent(new Event("focus"));
+      await vi.waitFor(() => expect(pairingSection().textContent).toContain("Not paired."), { timeout: 2000 });
+      await settle();
+
+      expect(takeAnnouncements()).toEqual([ALERT]);
+      const codeField = pairingSection().querySelector('input[type="text"]')!;
+      expect(document.activeElement, "the Un-pair button went with the old card").toBe(codeField);
+      expect(descriptionOf(codeField), "read when focus lands, not announced").toBe(NOTICE);
+      expect(pairingNotice().textContent).toBe(NOTICE);
+    });
+
+    it("opening Settings while the runner refuses the stored token: only the alert is announced", async () => {
+      installFakeChrome({ deviceToken: PAIRED });
+      stubFetch(() => jsonResponse(401, TOKEN_INVALID));
+      installAnnouncementRecorder();
+      await import("./main");
+      await vi.waitFor(() => expect(pairingSection().textContent).toContain("Not paired."));
+      await vi.waitFor(() => expect(statusSection().querySelector('[role="alert"]')).not.toBeNull());
+      await settle();
+
+      expect(takeAnnouncements()).toEqual([ALERT]);
+      expect(pairingNotice().textContent).toBe(NOTICE);
+      expect(pairingLine().textContent).toBe("");
+    });
+
+    it("opening Settings after the popup's refusal (the load path, already quiet in revision 3): only the alert is announced", async () => {
+      installFakeChrome({ pairingExpired: true, pairedBeforeThisSession: true });
+      installAnnouncementRecorder();
+      await import("./main");
+      await vi.waitFor(() => expect(statusSection().querySelector('[role="alert"]')).not.toBeNull());
+      await settle();
+
+      expect(takeAnnouncements()).toEqual([ALERT]);
+      expect(pairingNotice().textContent).toBe(NOTICE);
+    });
+
+    it("pairing again after a refusal: the notice gives way to this page's own announced outcome", async () => {
+      installFakeChrome({ pairingExpired: true, pairedBeforeThisSession: true });
+      stubFetch((url) =>
+        url.endsWith("/pair") ? jsonResponse(200, { deviceId: PAIRED.deviceId, token: PAIRED.token }) : jsonResponse(200, STATUS_OK),
+      );
+      await import("./main");
+      await vi.waitFor(() => expect(pairingNotice().textContent).toBe(NOTICE));
+      await settle();
+      installAnnouncementRecorder();
+
+      submitCode("7KQ2M-X9RTB");
+      await vi.waitFor(() => expect(pairingLine().textContent).toBe("Paired."));
+      await settle();
+
+      expect(pairingNotice().textContent, "one line at a time").toBe("");
+      expect(takeAnnouncements()).toEqual(expect.arrayContaining(["Pairing…", "Paired."]));
     });
   });
 });

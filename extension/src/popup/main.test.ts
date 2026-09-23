@@ -140,4 +140,28 @@ describe("popup main.ts run() (review issue 2: never save one job's text under a
     expect(app?.querySelector('[role="alert"]')).not.toBeNull();
     expect(app?.querySelector("button.primary")).toBeNull();
   });
+
+  it("P07-B revision 4, K4: a page whose address the contracts refuse gets a plain sentence in the fallback, then its next step -- not zod's messages", async () => {
+    const url = `https://jobs.example/postings/a?ref=${"a".repeat(2_100)}`;
+    globalThis.chrome = {
+      tabs: { query: async () => [{ id: 1, url }] },
+      scripting: {
+        executeScript: async () => [
+          { result: { ok: true, text: "Posting A's real text, long enough to pass the minimum captured length floor here.", structured: {}, url } },
+        ],
+      },
+    } as unknown as typeof chrome;
+
+    const { run } = await import("./main");
+    await run();
+
+    const app = document.querySelector("#app");
+    const alert = app?.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("This page's address is too long or unusual to capture.");
+    expect(app?.textContent, "revision 3 showed 'This capture didn't pass validation:' and zod's own messages").not.toMatch(
+      /validation|expected|too big|<=|characters/i,
+    );
+    expect(app?.textContent).toContain("Paste the posting in the runner's Jobs page instead");
+    expect(app?.querySelector("button.primary")).toBeNull();
+  });
 });

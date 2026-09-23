@@ -60,6 +60,7 @@ import {
   expectReadableInertButton,
   waitForDownload,
 } from "./checks";
+import { installAnnouncementRecorder, takeAnnouncements } from "./announcements";
 import { expect, extensionDist, test } from "./fixtures";
 import { startFixtureServer, type FixtureServerHandle } from "./fixture-server";
 import {
@@ -381,9 +382,11 @@ test("status (gate 6): a clear re-pair state once the device is revoked, and onc
     await expect(statusAlert(page)).toHaveText("Your pairing has expired or was revoked. Pair again above.");
     // P07-B revision 3, UI issue 1: the Pairing card says what is true
     // now -- not "Paired." (revision 2 kept the last outcome), and not
-    // "Not paired yet." for a browser that was paired.
+    // "Not paired yet." for a browser that was paired. Revision 4, K1: in
+    // the notice slot, which isn't a live region.
     const pairingSection = page.locator('[data-section="pairing"]');
-    await expect(pairingSection.locator('[role="status"]')).toHaveText("Your pairing expired or was revoked.");
+    await expect(pairingSection.locator("[data-notice]")).toHaveText("Your pairing expired or was revoked.");
+    await expect(pairingSection.locator('[role="status"]')).toHaveText("");
     await expect(pairingSection).toContainText("Not paired.");
     await expect(pairingSection).not.toContainText("Not paired yet.");
 
@@ -419,6 +422,79 @@ test("status (gate 6): a clear re-pair state once the device is revoked, and onc
   });
 
   await page.close();
+});
+
+test("K1 (P07-B revision 4): a refused pairing is announced once, by Status's alert -- after Check again, a window-focus re-check, and on opening Settings", async () => {
+  // What a screen reader would say, recorded in the page from its own DOM
+  // changes (e2e/announcements.ts, the recorder the unit tests use too).
+  // Revision 3 also announced the Pairing line a millisecond after the
+  // alert, in all three cases (the round-4 critic's S6, S7 and S8).
+  const ALERT = "Your pairing has expired or was revoked. Pair again above.";
+  const NOTICE = "Your pairing expired or was revoked.";
+  test.setTimeout(60_000);
+
+  /** A fresh options page paired through the real form, recording what is
+   * announced -- first shown to hear the page's own "Paired.". */
+  async function pairedPage(): Promise<{ page: Page; deviceId: string }> {
+    const page = await openFreshOptionsPage();
+    await page.evaluate(installAnnouncementRecorder);
+    const { code } = await bridge.ctx.pairing.issue();
+    await pairThroughTheRealForm(page, code);
+    expect(await page.evaluate(takeAnnouncements), "the recorder hears the live line").toContain("Paired.");
+    const deviceId = await page.evaluate(async () => {
+      const stored = await chrome.storage.session.get("deviceToken");
+      return (stored.deviceToken as { deviceId: string } | undefined)?.deviceId;
+    });
+    if (deviceId === undefined) throw new Error("expected a deviceId in chrome.storage.session after pairing, got none");
+    return { page, deviceId };
+  }
+
+  const notice = (page: Page): Locator => page.locator('[data-section="pairing"] [data-notice]');
+
+  await test.step("Check again after a revoke", async () => {
+    const { page, deviceId } = await pairedPage();
+    expect(await bridge.ctx.devices.revoke(deviceId)).toBe(true);
+    const checkAgain = page.locator('[data-section="status"] button');
+    await checkAgain.focus();
+    await page.evaluate(takeAnnouncements);
+    await page.keyboard.press("Enter");
+    await expect(statusAlert(page)).toHaveText(ALERT);
+    await expect(notice(page)).toHaveText(NOTICE);
+    await expect(checkAgain).toHaveText("Check again");
+    // Late enough to hear anything said after the alert.
+    await sleep(500);
+    expect(await page.evaluate(takeAnnouncements)).toEqual([ALERT]);
+    await expect(page.locator('[data-section="pairing"] [role="status"]'), "'Paired.' is gone").toHaveText("");
+    await expect(checkAgain).toBeFocused();
+    await page.close();
+  });
+
+  await test.step("the window-focus re-check after a revoke, with focus in the card", async () => {
+    const { page, deviceId } = await pairedPage();
+    expect(await bridge.ctx.devices.revoke(deviceId)).toBe(true);
+    await page.getByRole("button", { name: "Un-pair" }).focus();
+    await page.evaluate(takeAnnouncements);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(statusAlert(page)).toHaveText(ALERT);
+    const codeField = page.locator('[data-section="pairing"] input[type="text"]');
+    await expect(codeField, "the Un-pair button went with the old card").toBeFocused();
+    await expect(codeField, "read when focus lands, not announced").toHaveAccessibleDescription(NOTICE);
+    await sleep(500);
+    expect(await page.evaluate(takeAnnouncements)).toEqual([ALERT]);
+    await page.close();
+  });
+
+  await test.step("opening Settings while the runner refuses the stored token", async () => {
+    const { page, deviceId } = await pairedPage();
+    expect(await bridge.ctx.devices.revoke(deviceId)).toBe(true);
+    await page.addInitScript(installAnnouncementRecorder);
+    await page.reload();
+    await expect(statusAlert(page)).toHaveText(ALERT);
+    await expect(notice(page)).toHaveText(NOTICE);
+    await sleep(500);
+    expect(await page.evaluate(takeAnnouncements)).toEqual([ALERT]);
+    await page.close();
+  });
 });
 
 test("status (gate 9): a clear state when the runner isn't running", async () => {
@@ -817,9 +893,11 @@ test("P07B screenshots: options page, pairing expired or revoked (1280 and 390, 
   await expect(page.locator('[data-section="pairing"] label[for]')).toHaveText("Code from npm run pair");
   // P07-B revision 3, UI issue 1 and polish: the card says what is true
   // now, in amber, and "Not paired." rather than "Not paired yet.".
-  const pairingLine = page.locator('[data-section="pairing"] [role="status"]');
-  await expect(pairingLine).toHaveText("Your pairing expired or was revoked.");
-  await expect(pairingLine).toHaveClass("flash");
+  // Revision 4, K1: in the notice slot, which isn't a live region.
+  const notice = page.locator('[data-section="pairing"] [data-notice]');
+  await expect(notice).toHaveText("Your pairing expired or was revoked.");
+  await expect(notice).toHaveClass("flash");
+  await expect(page.locator('[data-section="pairing"] [role="status"]')).toHaveText("");
   await expect(page.locator('[data-section="pairing"]')).toContainText("Not paired.");
 
   await captureOptionsBothWidths(page, "pairing-expired");
@@ -1244,9 +1322,12 @@ test("P07B screenshots: popup and options page, something other than the runner 
     );
     await expect(statusAlert(page)).toHaveClass("flash");
     await expect(statusAlert(page).locator("code")).toHaveText("npm run runner");
-    await expect(page.locator('[data-section="status"]')).toContainText(
-      "1 saved job waiting to send. Something other than the runner is answering on its port; trying again.",
-    );
+    // Revision 4, K3: the outbox line doesn't repeat the alert's clause.
+    await expect(page.locator('[data-section="status"]')).toContainText("1 saved job waiting to send; trying again.");
+    expect(
+      ((await page.locator('[data-section="status"]').textContent()) ?? "").split("Something other than the runner is answering on its port"),
+      "said once, by the alert",
+    ).toHaveLength(2);
     await expect(page.locator('[data-section="status"]')).not.toContainText(/HTTP|shape/);
     await expect(page.locator('[data-section="pairing"]'), "nothing refused the token").toContainText("8b0c6f0e");
     await captureOptionsBothWidths(page, "foreign-server");

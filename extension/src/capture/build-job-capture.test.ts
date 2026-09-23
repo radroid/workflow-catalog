@@ -1,8 +1,30 @@
 import "../shared/zod-jitless";
-import { jobCaptureSchema, MAX_JOB_CAPTURE_TEXT_BYTES } from "@workflow-catalog/contracts";
-import { describe, expect, it } from "vitest";
-import { buildJobCapture, MIN_CAPTURED_TEXT_LENGTH } from "./build-job-capture";
+import { jobCaptureSchema, MAX_JOB_CAPTURE_TEXT_BYTES, MAX_JOB_CAPTURE_URL_LENGTH } from "@workflow-catalog/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ADDRESS_NOT_ACCEPTED_REASON,
+  buildJobCapture,
+  CAPTURE_NOT_ACCEPTED_REASON,
+  MIN_CAPTURED_TEXT_LENGTH,
+} from "./build-job-capture";
 import { EXTRACTOR_VERSION } from "./extractor";
+
+/** Lets one test hand the builder a digest the schema refuses -- the only
+ * way to reach a refusal that isn't about the address. Unset, the real
+ * SHA-256 runs. */
+const digest = vi.hoisted(() => ({ override: undefined as string | undefined }));
+vi.mock("../shared/crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/crypto")>();
+  return { sha256Hex: async (text: string) => digest.override ?? actual.sha256Hex(text) };
+});
+
+afterEach(() => {
+  digest.override = undefined;
+});
+
+/** What zod's own messages and field names look like; none of it may
+ * reach the popup's fallback (P07-B revision 4, K4). */
+const DEVELOPER_TEXT = /validation|expected|too big|too small|invalid|characters|<=|\burl\b|contentHash|hex|string|regex/i;
 
 describe("buildJobCapture", () => {
   it("builds a JobCapture that validates against the real contracts schema", async () => {
@@ -67,8 +89,29 @@ describe("buildJobCapture", () => {
     expect(jsonBytes).toBeLessThanOrEqual(MAX_JOB_CAPTURE_TEXT_BYTES);
   });
 
-  it("rejects a non-http(s) URL (the schema itself, defense in depth against a caller skipping url.ts)", async () => {
+  it("rejects a non-http(s) URL (the schema itself, defense in depth against a caller skipping url.ts), in a plain sentence (P07-B revision 4, K4)", async () => {
     const result = await buildJobCapture({ url: "javascript:alert(1)", rawText: "some real posting text here" });
     expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe(ADDRESS_NOT_ACCEPTED_REASON);
+  });
+
+  it("P07-B revision 4, K4: an address longer than the contracts' cap gets a plain sentence for the popup's fallback -- revision 3 showed 'This capture didn't pass validation:' and zod's own messages", async () => {
+    const url = `https://jobs.example/postings/1?ref=${"a".repeat(MAX_JOB_CAPTURE_URL_LENGTH)}`;
+    const result = await buildJobCapture({ url, rawText: "Staff Software Engineer — Fernwood. Fernwood is hiring." });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("This page's address is too long or unusual to capture.");
+    expect(result.reason).not.toMatch(DEVELOPER_TEXT);
+    expect(result.reason).not.toMatch(/\d/);
+  });
+
+  it("P07-B revision 4, K4: a refusal that isn't about the address gets a plain sentence too", async () => {
+    digest.override = "not a digest";
+    const result = await buildJobCapture({ url: "https://jobs.example/postings/1", rawText: "Staff Software Engineer — Fernwood. Fernwood is hiring." });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe(CAPTURE_NOT_ACCEPTED_REASON);
+    expect(result.reason).not.toMatch(DEVELOPER_TEXT);
   });
 });

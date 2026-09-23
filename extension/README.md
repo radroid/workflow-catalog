@@ -24,7 +24,7 @@ remaining gates) is still ahead.
   `@workflow-catalog/contracts`.
 - `src/popup/` — action popup: preview (title/company/location/size/
   excerpt) → **Save this job**, which sends the capture to the runner
-  (`POST /events`). The status line then says which of four things
+  (`POST /events`). The status line then says which of five things
   happened:
   - **sent** — the runner has it;
   - **queued for retry** — the runner isn't reachable, had a problem, or
@@ -34,7 +34,9 @@ remaining gates) is still ahead.
     pairing expired, was revoked, or belongs to another install; it's sent
     after the next pairing;
   - **refused** — the runner turned this capture down, so nothing kept it;
-    the line says why, in plain words.
+    the line says why, in plain words;
+  - **not stored** — the browser wouldn't store the capture (for example
+    `chrome.storage.session` is full), so it isn't queued either.
 
   Nothing downloads on its own. **Save as a file** (`job-capture.json`,
   via `Blob` + `<a download>`; there's no `downloads` permission) is the
@@ -48,11 +50,15 @@ remaining gates) is still ahead.
 - `src/options/` — Settings:
   - pairing: a code field that posts to the real `POST /pair`, a short
     device id once paired, **Un-pair** and **Pair again**, and a link to
-    the runner's `/ui/status` page, where actual revocation lives;
+    the runner's `/ui/status` page, where actual revocation lives. Its
+    line announces what happens on the page. A pairing the runner refused
+    shows there too, without being announced, because Status's alert
+    already says it;
   - status: `GET /status` shows connected/version/workspace, or one plain
     sentence per failure (not running, not responding, pairing expired or
     revoked, another install, another program on the port, too many
-    tries), plus how many saved jobs are still waiting and why;
+    tries), plus how many saved jobs are still waiting, and whether they
+    wait on a pairing (any other reason is the one Status gives);
   - the file bridge: **Export last capture** writes `job-capture.json`,
     and importing an `application-session.json` validates it as a
     `SessionManifest` and shows a read-only summary.
@@ -253,7 +259,12 @@ reach at all:
    file takes an `application-session.json` (a session manifest, going the
    other way: runner to extension) → a read-only summary renders; any
    other file, a `job-capture.json` included, is refused with a plain
-   message.
+   message. The runner doesn't write session manifests until part C, so
+   use a hand-written fictional one for now:
+   `extension/fixtures/application-session.example.json`, which follows
+   `sessionManifestSchema` in `packages/contracts/src/session.ts` (a unit
+   test keeps it valid). To write your own, follow the same schema and use
+   fictional data only (`docs/spec/implementation/fixtures-policy.md`).
 8. Toggle the OS between light/dark appearance and reopen the popup and
    options page → both follow it immediately (no stale theme).
 
