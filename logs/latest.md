@@ -1,4 +1,4 @@
-Latest: iter-005 in progress. The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
+Latest: iter-005 in progress (resumed again at 16:04 on 2026-09-23 after a weekly usage limit). The new orchestrator **resumed** it at 14:26 on 2026-09-22, after the owner's pause (handoff: `logs/handoff/2026-09-22-pause.md`). `.loop/state.json` is `in-progress` again; `iter` stays 4 until iter-005 closes.
 
 Running now: P07-B revision 3, and the round-2 pair for P08-A and the round-3 pair for P03, one worktree each. The P03 round-2 reviewer and UI critic have finished; their worktrees and the pre-pause ones were clean and pushed, and were removed.
 - **P03 (#11):** the Opus escalation (D8–D16, eve item 15) reached bbfa00e, with CI green. Round 3 is running: an Opus reviewer and an Opus UI critic, with `logs/handoff/P03-round-2-review.md` as the checklist. A REVISE goes back to the same Opus implementer (its worktree is kept). APPROVE means merge, then start P04.
@@ -7,6 +7,7 @@ Running now: P07-B revision 3, and the round-2 pair for P08-A and the round-3 pa
 - **Then:** P04 after P03; P05 (Opus) after P04; P03.1 after P03 and P04; P08-B after P05. After that, the wave plan continues.
 
 If this session dies: every agent pushes its branch at green steps. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
+**Usage:** a weekly limit stopped every agent at about 17:05 on 9/22, and all resumed at 16:04 on 9/23. Keep review rounds narrow.
 
 Must-carry (see "Rules and lessons learned" in the pause handoff):
 - **Every prompt:**

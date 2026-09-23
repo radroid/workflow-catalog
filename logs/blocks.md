@@ -973,3 +973,26 @@ The P07-B escalation reached d0e2b2c, with CI green on every pushed head. Round 
 - **H2:** refusals are plain sentences with a next step, with no field names or HTTP codes.
 - **H3:** reviewer nits 1 and 3–7 are fixed now; nit 2 is documented as a known limitation.
 - **H4:** retake the affected screenshots.
+
+## 2026-09-22/23 — A weekly usage limit stopped all five agents, and the loop stalled about 23 hours [FAILURE]
+
+**Iter:** 005
+**Source:** smoke-failure (provider usage limit)
+**Severity:** high
+
+**Charter / context:** at about 17:05 on 2026-09-22, all five running agents stopped with HTTP 429 "You've hit your weekly limit · resets 4pm (America/Toronto)":
+- P07-B revision 3;
+- the P08-A round-2 reviewer and UI critic;
+- the P03 round-3 reviewer and UI critic.
+The orchestrator's own fallback wake-up couldn't run either, so the loop stalled until the owner re-kicked at 16:04 on 2026-09-23.
+**Verdict text / failure detail:** nothing was lost.
+- P07-B had unpushed local work (566c64b).
+- Every other branch was pushed, and the reviewers' scratch was in /tmp.
+- No process held a port.
+
+**Action taken:**
+- All five agents resumed with SendMessage, keeping their context. Each message carried that agent's code word.
+- Lesson: this is the second hard stop in one day from running several Opus agents at once. The first was the session limit at about 14:45.
+  - A weekly limit can stall the loop for up to a week, and no wake-up can recover from it.
+  - Total consumption drives it, not parallelism. So confirmation rounds from now on check only the items that changed.
+  - Moving UI critics to Sonnet is the owner's call, because the overnight prompt specifies Opus for every reviewer.
