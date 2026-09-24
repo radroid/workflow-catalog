@@ -1,6 +1,6 @@
 Latest: iter-006 in progress, started 18:57 on 2026-09-23. Iter 005 closed with P08-A, P03 and P07-B merged (360ac69, 9821bee, e01017c); CI on e01017c is green, extension e2e included. In `.loop/state.json`, `iter` stays 5 until iter 006 closes.
 
-Running now: round 1 on **PR #14** (P04, head e8b74de, CI 35940703381 green with the extension e2e): an Opus reviewer (port 4320 if needed) and an Opus UI critic (port 4340). The Sonnet implementer is done; its worktree is kept for a REVISE. Prompts for P05 and P03.2 are drafted in `logs/handoff/` while the review runs.
+Running now: round 1 on **PR #14** (P04, head e8b74de, CI 35940703381 green with the extension e2e). The UI critic returned REVISE — 9 issues (`logs/handoff/P04-round-1-review.md`). The Opus reviewer is still running (port 4320 if needed). Revision 1 goes to the same Sonnet implementer, whose worktree is kept, once both verdicts are in. The P05 and P03.2 prompts are ready in `logs/handoff/`.
 - **Then:**
   - after P04: P05 (Opus) ∥ P03.2 (Sonnet), which needs P04's turn events. P03.1 follows P03.2, because they share files.
   - after P05: P08-B, which carries P08-A's follow-ups, and P06.
