@@ -351,6 +351,12 @@ describe("Applications page: preparing", () => {
     await until(() => page.document.querySelector(".version") !== null, "the version");
     expect(page.byId("detail-stage").textContent).toBe("Ready to send · 1 version");
     expect(page.document.querySelector(".app-meta")?.textContent).toBe("Ready to send · version 1");
+    // Each requirement beside the evidence that meets it, in the claims' own words.
+    expect(all(page, ".coverage li").map((node) => node.textContent)).toEqual([
+      "Requirement 1: “Experience leading platform or infrastructure teams” — met by “Led the payments infrastructure team at Northwind Labs, redesigning the ledger service that powers Northwind Labs' billing.”",
+      "Requirement 2: “Built tooling that other engineering teams depend on” — met by “Shipped the on-call rotation tooling used by three engineering teams.”",
+      "Requirement 3: “Open-source maintainership” — met by “Maintainer of Ledgerkit, an open-source ledger reconciliation library.”",
+    ]);
 
     const links = all(page, ".exports a");
     expect(links.map((link) => link.textContent)).toEqual(["Resume · Markdown", "Resume · Word", "Resume · PDF", "What changed and why · Markdown"]);
@@ -539,7 +545,11 @@ describe("Applications page: a hostile posting", () => {
     await until(() => page.lines.includes("Prepared “Backend Engineer · Quill”: version 1 is ready."), "the result", 10_000);
     await until(() => page.document.querySelector(".version") !== null, "the version");
     expect(all(page, ".exports a").map((link) => link.textContent)).toContain("Cover letter · Word");
-    expect(page.byId(`coverage-${taskId}`).textContent).toContain("Requirement 3 — set aside: this line isn't something the job asks of you.");
+    expect(all(page, `#coverage-${taskId} li`).map((node) => node.textContent)).toEqual([
+      "Requirement 1: “4+ years of experience” — left out, as you asked.",
+      "Requirement 2: “Node.js and TypeScript” — left out, as you asked.",
+      "Requirement 3 — set aside: this line isn't something the job asks of you.",
+    ]);
     const text = visibleText(page).toLowerCase();
     for (const phrase of INJECTION_PHRASES) expect(text).not.toContain(phrase);
     expect(text).not.toContain("system:");

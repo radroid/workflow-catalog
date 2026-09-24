@@ -507,7 +507,8 @@ function renderProblems(detail) {
 
 function coverageLine(detail, entry) {
   const claims = new Map((detail.preparation?.claims ?? []).map((claim) => [claim.label, claim.text]));
-  const head = entry.requirementText === null ? [`Requirement ${entry.requirement}`] : [`${entry.requirement}. ${entry.requirementText}`];
+  // The same words as the questions block: "Requirement N: “…”". A line set aside is never quoted back (a posting can hide an instruction there).
+  const head = entry.requirementText === null ? [`Requirement ${entry.requirement}`] : [`Requirement ${entry.requirement}: `, quote(entry.requirementText)];
   switch (entry.status) {
     case "covered":
       return el("li", {}, ...head, el("span", { className: "muted" }, " — met by ", ...entry.labels.flatMap((label, index) => [index > 0 ? ", " : "", quote(claims.get(label) ?? "a confirmed claim")]).filter(Boolean)));
@@ -526,7 +527,7 @@ function renderCoverage(detail) {
     "details",
     { className: "coverage", attrs: { id, ...(isOpenNow(id) ? { open: "" } : {}) } },
     el("summary", { text: "How each requirement was met" }),
-    el("ol", { className: "coverage-list" }, ...detail.preparation.coverage.map((entry) => coverageLine(detail, entry))),
+    el("ul", { className: "coverage-list" }, ...detail.preparation.coverage.map((entry) => coverageLine(detail, entry))),
   );
 }
 
