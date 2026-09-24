@@ -206,11 +206,11 @@ interface Reconciled {
  * "... proposed as a revision/revisions", which the reviewer measured pushing
  * a combined message to 106 characters (`profile.ts:192-199`, `:347` at the
  * time). "edit(s)" alone matches this module's own `applyMarkdownEdit`
- * messages ("1 edit was applied", "2 edits are now proposed revisions") and
+ * messages ("1 edit was applied", "2 edits proposed") and
  * `discardMarkdownEdits`'s "Discarded your edits" — "file edit" was this
  * function's own inconsistent wording, not an established term elsewhere —
  * and dropping "as a/revision(s)" removes the one clause with no fixed
- * length. See profile.test.ts for the combined-length check.
+ * length. See profile-store-revision2.test.ts for the combined-length check.
  */
 function editsNote(applied: number, proposed: number): string {
   const parts: string[] = [];
@@ -489,10 +489,14 @@ export class ProfileStore {
       const read = readMarkdownEdits(current, markdown);
       if (!read.ok) return { profile: current, write: false, message: "", refusal: new ProfileMarkdownError(read.problem, "request") };
       const next = this.#applyEdits(current, read.edits);
+      // P03.2 (round-4 UI critic polish 2): the proposed-revisions clause used to read "N edit(s) are now
+      // proposed revisions; version V stays in force until you accept it/them" -- measured at 90 characters
+      // for the solo-proposed case (2 edits), overrunning the two-line clamp at 640px and losing "them."
+      // Shortened, with the count stated plainly and no restated "revision(s)" noun.
       const parts = [
         next.applied > 0 ? `${next.applied === 1 ? "1 edit was" : `${next.applied} edits were`} applied` : "",
         next.proposed > 0
-          ? `${next.proposed === 1 ? "1 edit is now a proposed revision" : `${next.proposed} edits are now proposed revisions`}; version ${current.approval?.version ?? 1} stays in force until you accept ${next.proposed === 1 ? "it" : "them"}`
+          ? `${next.proposed === 1 ? "1 edit proposed" : `${next.proposed} edits proposed`}; version ${current.approval?.version ?? 1} stays in force until you decide`
           : "",
       ].filter(Boolean);
       const message = parts.length === 0 ? "Nothing to save: the text is the same as the profile." : `Saved. ${parts.join(", and ")}.`;

@@ -238,10 +238,17 @@ describe("/api/onboarding: body caps (413) and strict-body rejection (400)", () 
     expect((await post(bridge, "/sources/resume", { status: "provided", note: "x".repeat(9 * 1024) })).status).toBe(413);
   });
 
-  it("413s the text box and upload routes over the source-content cap (512 KiB)", async () => {
+  it("413s the text box and upload routes over the source-content cap (512 KiB), with a plain-sentence reason", async () => {
+    // P03.2 (round-4 UI critic, outside the round): the generic "Request body is larger than 524288
+    // bytes." from http.ts's readBoundedJson is replaced here with a sentence written for a person.
     const bridge = await realBridge();
-    expect((await post(bridge, "/sources/resume/content", { text: "x".repeat(513 * 1024) })).status).toBe(413);
-    expect((await post(bridge, "/sources/resume/uploads", { fileName: "resume.md", text: "x".repeat(513 * 1024) })).status).toBe(413);
+    const content = await post(bridge, "/sources/resume/content", { text: "x".repeat(513 * 1024) });
+    expect(content.status).toBe(413);
+    expect(((await content.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "That's over 512 KiB. Paste less text, or upload a smaller file." });
+
+    const uploads = await post(bridge, "/sources/resume/uploads", { fileName: "resume.md", text: "x".repeat(513 * 1024) });
+    expect(uploads.status).toBe(413);
+    expect(((await uploads.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "That's over 512 KiB. Paste less text, or upload a smaller file." });
   });
 
   it("413s /markdown over the markdown cap (512 KiB)", async () => {

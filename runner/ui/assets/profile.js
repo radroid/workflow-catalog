@@ -75,6 +75,17 @@ function formatWhen(iso) {
 const TAGS = { done: "Last action", refused: "Refused", working: "Working" };
 const COMMAND = /npm run runner/g;
 
+/**
+ * P03.2 (round-4 UI critic, outside the round): at 640px and below, `.tag`
+ * and `.text` sit on the same line with only a CSS margin between them --
+ * invisible to assistive tech, which read "LAST ACTIONAn answer is needed."
+ * with nothing separating the two. A colon in the tag's own text content
+ * fixes that at every width, not just the one where it was visible.
+ */
+function tagText(tone) {
+  return `${TAGS[tone]}:`;
+}
+
 function lineParts(message) {
   const parts = [];
   let from = 0;
@@ -103,11 +114,11 @@ function lastAction(message, tone = "done") {
   const apply = () =>
     keepInPlace(() => {
       node.className = `last-action ${tone}`;
-      tag.textContent = TAGS[tone];
+      tag.textContent = tagText(tone);
       text.replaceChildren(...lineParts(message));
       text.title = message;
     });
-  if (text.textContent === message && tag.textContent === TAGS[tone]) {
+  if (text.textContent === message && tag.textContent === tagText(tone)) {
     keepInPlace(() => {
       text.textContent = "";
     });

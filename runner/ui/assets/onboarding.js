@@ -115,6 +115,17 @@ function refLabel(ref) {
 const TAGS = { done: "Last action", refused: "Refused", working: "Working" };
 const COMMAND = /npm run runner/g;
 
+/**
+ * P03.2 (round-4 UI critic, outside the round): at 640px and below, `.tag`
+ * and `.text` sit on the same line with only a CSS margin between them --
+ * invisible to assistive tech, which read "LAST ACTIONAn answer is needed."
+ * with nothing separating the two. A colon in the tag's own text content
+ * fixes that at every width, not just the one where it was visible.
+ */
+function tagText(tone) {
+  return `${TAGS[tone]}:`;
+}
+
 /** The line's text, with a command a person types shown as code (J6.2). */
 function lineParts(message) {
   const parts = [];
@@ -153,11 +164,11 @@ function lastAction(message, tone = "done") {
   const apply = () =>
     keepInPlace(() => {
       node.className = `last-action ${tone}`;
-      tag.textContent = TAGS[tone];
+      tag.textContent = tagText(tone);
       text.replaceChildren(...lineParts(message));
       text.title = message; // J5: the whole sentence for a pointer, where the line is clamped
     });
-  if (text.textContent === message && tag.textContent === TAGS[tone]) {
+  if (text.textContent === message && tag.textContent === tagText(tone)) {
     keepInPlace(() => {
       text.textContent = "";
     });
@@ -337,10 +348,18 @@ function fieldError(controlId) {
   return message ? el("p", { className: "field-error", text: message, attrs: { id: fieldErrorId(controlId) } }) : null;
 }
 
-/** A problem with what was typed or chosen: the detail sits next to the field, focus goes there, and the line says only `outcome` (J4). */
-function refuseAt(controlId, detail, outcome) {
+/**
+ * A problem with what was typed or chosen: `detail` sits next to the field, and focus goes there (J4). When
+ * the refused control already holds focus, though, focus never moves anywhere for a screen reader to read
+ * `detail` from -- the line's own `outcome` ("Not uploaded.") was all that was announced. `focusedReason`,
+ * when given, replaces `outcome` in the line for exactly that case: a short, line-length sentence (not
+ * `detail`'s fuller, field-length one), e.g. "Not uploaded: only .txt or .md files can be uploaded." (P03.2,
+ * round-4 UI critic polish 1).
+ */
+function refuseAt(controlId, detail, outcome, focusedReason) {
   fieldErrors.set(controlId, detail);
-  lastAction(outcome, "refused");
+  const alreadyFocused = focusedReason && document.activeElement?.id === controlId;
+  lastAction(alreadyFocused ? focusedReason : outcome, "refused");
   render(controlId);
 }
 
@@ -766,10 +785,15 @@ async function upload(category, input) {
   if (!file) return;
   input.value = "";
   if (!/\.(txt|md)$/i.test(file.name)) {
-    return refuseAt(fileId, `“${file.name}” is not a .txt or .md file. Only plain text and Markdown files can be uploaded; paste other text into the box instead.`, "Not uploaded.");
+    return refuseAt(
+      fileId,
+      `“${file.name}” is not a .txt or .md file. Only plain text and Markdown files can be uploaded; paste other text into the box instead.`,
+      "Not uploaded.",
+      "Not uploaded: only .txt or .md files can be uploaded.",
+    );
   }
   const text = await file.text();
-  if (!text.trim()) return refuseAt(fileId, `“${file.name}” is empty, so there is nothing to upload.`, "Not uploaded.");
+  if (!text.trim()) return refuseAt(fileId, `“${file.name}” is empty, so there is nothing to upload.`, "Not uploaded.", "Not uploaded: that file is empty.");
   const outcome = await postJson(`/api/onboarding/sources/${category}/uploads`, { fileName: file.name, text });
   await load();
   lastAction(outcome.message, "done");
@@ -990,7 +1014,7 @@ function statementForm(spec) {
 
 async function addStatement(spec, inputId) {
   const text = (drafts.get(inputId) ?? "").trim();
-  if (!text) return refuseAt(inputId, `Type a ${spec.one} first, then add it.`, "Not added.");
+  if (!text) return refuseAt(inputId, `Type a ${spec.one} first, then add it.`, "Not added.", `Not added: type a ${spec.one} first.`);
   const outcome = await postJson(`/api/onboarding/statements/${spec.kind}`, { text });
   if (outcome.ok) {
     drafts.delete(inputId);

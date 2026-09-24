@@ -363,7 +363,7 @@ describe("the Profile page's markdown save", () => {
     const unchanged = await store.applyMarkdownEdit(page, sha256(page));
     expect(unchanged.message).toBe("Nothing to save: the text is the same as the profile.");
     const saved = await store.applyMarkdownEdit(page.replace("Worked on the Harbor", "Rebuilt the Harbor"), sha256(page));
-    expect(saved.message).toBe("Saved. 1 edit is now a proposed revision; version 1 stays in force until you accept it.");
+    expect(saved.message).toBe("Saved. 1 edit proposed; version 1 stays in force until you decide.");
   });
 
   it("refuses an unreadable page edit with the reason, and a page copy older than a hand edit to the file", async () => {

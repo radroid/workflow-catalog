@@ -253,7 +253,9 @@ describe("J3 and J6.3: refusals and field errors", () => {
     const input = page.byId("statement-input-preference");
     input.focus();
     page.submit("statement-form-preference");
-    await until(() => page.line() === "Not added.", "the refusal");
+    // P03.2 (round-4 UI critic polish 1): the input still has focus, so the line carries the short reason
+    // too, not just "Not added." -- see the dedicated describe block below for that behaviour on its own.
+    await until(() => page.line() === "Not added: type a preference first.", "the refusal");
     expect(page.describedBy("statement-input-preference")).toContain("Type a preference first, then add it.");
     expect(page.errors()).toEqual({ fieldErrors: 1, invalid: 1 });
     expect(page.document.activeElement).toBe(input);
@@ -350,5 +352,43 @@ describe("P03.2 (round-4 reviewer nit 2): a stale editor error does not survive 
     await until(() => page.document.querySelectorAll(".revision").length === 0, "the revision to be accepted");
     expect(page.errors()).toEqual({ fieldErrors: 0, invalid: 0 });
     expect(page.byId("markdown-editor-error").hidden).toBe(true);
+  });
+});
+
+describe("P03.2 (round-4 UI critic polish 1): a refused control that still has focus gets a short reason in the line", () => {
+  it("an upload with the wrong extension is not just \"Not uploaded.\" while the file input still has focus", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+    page.byId("source-status-resume-provided").click();
+    await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the source to open its panel");
+
+    const input = page.byId("source-file-resume");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    // A plain object stands in for a picked File: onboarding.js's upload() only reads .name before this
+    // refusal, and happy-dom's own File/FileList support is untested surface this repo doesn't otherwise
+    // need. Direct property assignment, not dispatchEvent: .files is a real input's own read-only property,
+    // and onchange is called the same way a real "change" event would invoke it.
+    Object.defineProperty(input, "files", { value: [{ name: "resume.pdf" }], configurable: true });
+    (input as unknown as { onchange(event: { currentTarget: DomNode }): void }).onchange({ currentTarget: input });
+
+    await until(() => page.line() === "Not uploaded: only .txt or .md files can be uploaded.", "the short reason");
+    expect(page.document.activeElement).toBe(input); // focus never moved, so the line had to carry the reason
+    // The fuller reason (with the file's name) still sits next to the field, for anyone who does move to it.
+    expect(page.describedBy("source-file-resume")).toContain("“resume.pdf” is not a .txt or .md file");
+  });
+
+  it("Enter in an empty statement input is not just \"Not added.\" while the input still has focus", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+
+    const input = page.byId("statement-input-boundary");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    page.submit("statement-form-boundary"); // a form's native Enter-submits-itself behaviour, scripted directly
+
+    await until(() => page.line() === "Not added: type a boundary first.", "the short reason");
+    expect(page.document.activeElement).toBe(input);
+    expect(page.describedBy("statement-input-boundary")).toContain("Type a boundary first, then add it.");
   });
 });

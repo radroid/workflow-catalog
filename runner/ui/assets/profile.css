@@ -28,13 +28,22 @@ html { scroll-padding-top: var(--last-action-offset, 5rem); overflow-anchor: non
 .last-action code { font: 0.95em var(--font-mono); }
 .last-action.done { border-left-color: var(--foreground); }
 .last-action.refused { border-left-color: #b91c1c; }
-/* J5: at most two lines at 640 px and below; the whole sentence stays in the DOM and the text's title. */
+/* J5: at most two lines at 640 px and below; the whole sentence stays in the DOM and the text's title.
+   P03.2 (round-4 UI critic polish 2): the clamp is on .text, not the padded
+   .last-action box -- clamping the box itself, with the tag also inside it,
+   let a sliver of a third line show past the box's own padding. -webkit-inline-box
+   (rather than -webkit-box) keeps .text flowing right after the inline .tag
+   on the same first line, with max-width so it still wraps instead of
+   growing to fit its own unclamped content. */
 @media (max-width: 640px) {
   .last-action {
     padding: 0.375rem 0.625rem; font-size: 0.8125rem; line-height: 1.4;
-    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
   }
   .last-action .tag { display: inline; margin-right: 0.375rem; }
+  .last-action .text {
+    display: -webkit-inline-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+    max-width: 100%; vertical-align: top;
+  }
 }
 
 [tabindex="-1"]:focus { outline: none; }

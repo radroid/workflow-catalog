@@ -10,7 +10,7 @@ import { SOURCE_CATEGORY_LABELS, type OnboardingProfile, type StatementKind } fr
 import { MAX_MARKDOWN_BYTES, ProfileMarkdownError, ProfileStore, StaleMarkdownError, UnsupportedUploadError, type LoadResult } from "../../store/profile.ts";
 import { ProfileBusyError } from "../../store/profile-writes.ts";
 import { runTurn, type TurnResult } from "../run-harness.ts";
-import { errorResponse, readBoundedJson, validationErrorResponse } from "../http.ts";
+import { errorResponse, readBoundedJson, validationErrorResponse, type BodyResult } from "../http.ts";
 import { defineRouteModule } from "../route-modules.ts";
 
 /**
@@ -53,6 +53,21 @@ const MAX_SMALL_BODY_BYTES = 8 * 1024;
 const MAX_SOURCE_CONTENT_BYTES = 512 * 1024;
 // MAX_MARKDOWN_BYTES: imported from store/profile.ts (round-4 reviewer nit 1) — one bound for the incoming
 // POST /markdown body and the outgoing markdownOnDisk view, not two numbers to keep in sync by hand.
+
+/**
+ * P03.2 (round-4 UI critic, outside the round): `readBoundedJson`'s own 413 reads "Request body is larger
+ * than 524288 bytes." — accurate, but not a sentence written for the person pasting text or picking a
+ * file. `server/http.ts` is out of this packet's Owns, so the friendlier reason is substituted here, and
+ * only for the one failure that produced it (a body over the cap); every other `readBoundedJson` failure
+ * — bad JSON, the wrong content type — keeps its own message.
+ */
+const SOURCE_CONTENT_TOO_LARGE_MESSAGE = "That's over 512 KiB. Paste less text, or upload a smaller file.";
+
+async function boundedSourceBody(request: Request): Promise<BodyResult> {
+  const body = await readBoundedJson(request, MAX_SOURCE_CONTENT_BYTES);
+  if (body.ok || body.response.status !== 413) return body;
+  return { ok: false, response: errorResponse(413, "body_too_large", SOURCE_CONTENT_TOO_LARGE_MESSAGE) };
+}
 /** The sum of everything saved for one category: an extraction prompt must never grow without bound. */
 export const MAX_TOTAL_SOURCE_TEXT_BYTES = 2 * 1024 * 1024;
 /** One real model call, single-shot: the same default as `eve-gateway.ts`'s `checkModel`. */
@@ -295,7 +310,7 @@ export default defineRouteModule({
     router.post("/sources/:category/content", async (c) => {
       const category = c.req.param("category");
       if (!isSourceCategory(category)) return errorResponse(404, "not_found", "No such source category.");
-      const body = await readBoundedJson(c.req.raw, MAX_SOURCE_CONTENT_BYTES);
+      const body = await boundedSourceBody(c.req.raw);
       if (!body.ok) return body.response;
       const parsed = pastedTextBodySchema.safeParse(body.value);
       if (!parsed.success) return validationErrorResponse(parsed.error);
@@ -306,7 +321,7 @@ export default defineRouteModule({
     router.post("/sources/:category/uploads", async (c) => {
       const category = c.req.param("category");
       if (!isSourceCategory(category)) return errorResponse(404, "not_found", "No such source category.");
-      const body = await readBoundedJson(c.req.raw, MAX_SOURCE_CONTENT_BYTES);
+      const body = await boundedSourceBody(c.req.raw);
       if (!body.ok) return body.response;
       const parsed = uploadBodySchema.safeParse(body.value);
       if (!parsed.success) return validationErrorResponse(parsed.error);
