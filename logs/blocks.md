@@ -1303,3 +1303,22 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **The ruling on issue 3 (W3):** forget removes only the workspace recorded in `.env.local`. It notes, but never offers, a workspace that comes only from the environment. Deletion is irreversible, so it fails safe.
 - **W1:** setup never takes the workspace from the environment. The environment stays a runtime fallback for commands only.
 - **W4:** `cli/runner.ts` is granted a small exported helper, so the launcher's precedence is tested.
+
+## 2026-09-24 — P02.2: the launcher's entry guard would skip the runner on symlinked paths [DECISION]
+
+**Iter:** 006
+**Source:** orchestrator, before P02.2's round-2 review
+**Severity:** high if merged: `npm run runner` would exit silently, and no test or CI step runs it.
+
+**Charter / context:**
+- W4 granted "a small exported helper in `cli/runner.ts`". To import that helper in tests without starting the runner, revision 1 (3c9dab5) wrapped the script in `main()`, behind a guard: `path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)`.
+- Node resolves the main module's URL to its real path, but leaves `argv[1]` as typed. The orchestrator's probe showed that through `/tmp` (a symlink to `/private/tmp` on macOS) the guard is false. So any symlinked checkout path would make `npm run runner` do nothing.
+- The cause is the shape the W4 grant asked for.
+
+**Decision:**
+- An addendum to revision 1, sent to the same implementer. It is not a new REVISE round, because the review hadn't started.
+  - `buildEveEnv` moves to a new `runner/lib/eve-env.ts`, which is granted.
+  - `cli/runner.ts` returns to its merge-base top-level structure, calling the helper, with no guard.
+  - M4 must still fail a test.
+- Round 2 then reviews the fixed head.
+- **Lesson for later grants:** never make a CLI entry file importable by adding an argv guard. Put the testable logic in a `lib/` module.
