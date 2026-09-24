@@ -3,7 +3,19 @@
 Status: open
 Assignee: none
 Blocked by: P04
-Owns: runner/agent/skills/ (preparation set), runner/agent/tools/prepare_application.ts, runner/validate/, runner/export/, runner/store/applications.ts, runner/ui/application.html, packages/job-assistant/fixtures/preparation/, and `runner/package.json` + `pnpm-lock.yaml` for the DOCX and PDF export dependencies only. Those libraries must be maintained, with no native build step, no install scripts and no network access; pin exact versions, and report the choice and the reason. While P05 runs, no other packet edits these two files (iter 006 decision).
+Owns:
+- The preparation skills in `packages/job-assistant/skills/`: requirements-extraction, claim-matching, resume-drafting, cover-letter-drafting and revision-diff. Also the `resume` and `cover-letter` templates in `packages/job-assistant/templates/`.
+  - The skills live in the workflow package, which the eve adapter mounts as `jobs__<skill>`. There is no `runner/agent/skills/` (iter 006 correction).
+- `runner/agent/tools/prepare_application.ts` and its directive-free `runner/agent/lib/prepare-*.ts` modules. Also its eval-agent re-export, fixture handler, one entry each in the fixture and tool registries, and its eval.
+- `runner/validate/`, `runner/export/` and `runner/store/applications.ts`.
+- `runner/server/routes/applications.ts`, and `runner/ui/application.html` with its assets.
+- New tests in `runner/test/`.
+- New preparation fixtures in `packages/job-assistant/fixtures/`, with additive `index.json` entries.
+- `runner/package.json` and `pnpm-lock.yaml`, for the DOCX and PDF export dependencies only (and a devDependency to read their text back in tests, under the same rules):
+  - The libraries must be maintained, with no native build step, no install scripts and no network access.
+  - Pin exact versions, and report the choice and the reason.
+  - While P05 runs, no other packet edits these two files (iter 006 decision).
+- `runner/README.md`: the P05 lines, and the P05 row of "Extending the runner".
 Spec: F7, hard-problems #2 and #3
 
 ## Goal

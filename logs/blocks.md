@@ -1166,3 +1166,28 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - The happy-dom devDependency, and the direct import in `ui-pages.test.ts`, move to P03.1.
 - P03.1 now also waits for P05, as well as P04 and P03.2.
 - The P05, P03.2, P03.1 and README tables, and GOALS, are updated to match.
+
+## 2026-09-23 — P05's skills live in the workflow package [DECISION]
+
+**Iter:** 006
+**Source:** orchestrator
+**Severity:** low
+
+**Charter / context:**
+- P05's Owns named `runner/agent/skills/ (preparation set)`, but that folder doesn't exist.
+- The five preparation skills (requirements-extraction, claim-matching, resume-drafting, cover-letter-drafting, revision-diff) live in `packages/job-assistant/skills/`. The eve adapter mounts them as `jobs__<skill>`, and P03 edited its skill there.
+- P05 also needs files that P04's pattern implies but its list left out: a route module, page assets, the eval-agent re-export and registry entries, and the README row.
+
+**Decision:**
+- P05's Owns now names:
+  - the five package skills and the resume and cover-letter templates;
+  - `runner/agent/lib/prepare-*.ts`;
+  - the eval-agent entries;
+  - `runner/server/routes/applications.ts` and the application page's assets;
+  - new preparation fixtures, with additive `index.json` entries;
+  - its README lines;
+  - and, under the export-dependency rules, a devDependency to read DOCX and PDF text back in tests.
+- P04's report also flagged eval workspaces. eve runs every eval file concurrently, in one process with one environment. So the P05 and P03.2 prompts say:
+  - never assign `RUNNER_WORKSPACE` at the top level of an eval file;
+  - never assert in an eval on shared workspace state, such as the career profile. That check goes in a Vitest test with a private workspace.
+- The prompts are in `logs/handoff/P05-prompt.md` and `logs/handoff/P03.2-prompt.md`. Both run once P04 merges.
