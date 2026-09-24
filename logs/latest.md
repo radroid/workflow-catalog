@@ -1,8 +1,8 @@
-Latest: iter-007 in progress since 2026-09-24 about 08:10. Both PRs are open and linked, and round 1 is running (since about 11:05) with an Opus reviewer and an Opus UI critic on each:
-- **P05** (#16): head 3130763, CI green. Reviewer on 4320 if needed; critic on 4340.
-- **P03.2** (#17): head 1ed5a91, CI 35989603016 was running at dispatch. Reviewer on 4330 if needed; critic on 4350. Last closed: iter-006 (log: logs/iter-006.md).
+Latest: iter-007 in progress since 2026-09-24 about 08:10. Round 1 for both PRs returned REVISE, and both are in revision 1 with their own implementers:
+- **P05** (#16): REVISE 9 + UI REVISE 9. V1–V20 in `logs/handoff/P05-round-1-review.md`; sent about 11:59. Port 4320.
+- **P03.2** (#17): REVISE 7 + UI REVISE 5. Q1–Q12 in `logs/handoff/P03.2-round-1-review.md`; sent about 11:36. Port 4330. Last closed: iter-006.
 
-Next, in iter 007: act on the round-1 verdicts. A REVISE goes to the same implementer, whose worktree is kept. When P05 merges: the rulebook's P06 row says P06 extends `routes/applications.ts`, and the nav position of the Applications page is carried to P06 (P05's open questions 1 and 2).
+Next, in iter 007: when a revision reports, round 2 is narrow and reuses the same reviewer and UI critic (SendMessage with their code words). A second REVISE goes to a fresh Opus escalation. When P05 merges, the rulebook's P06 row says P06 extends `routes/applications.ts`.
 - **Then:**
   - after P05: P08-B (it carries P08-A's follow-ups and the extraction-budget question) and P06 (it carries P04's follow-ups);
   - after P03.2 and P05: P03.1;
