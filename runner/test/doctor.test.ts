@@ -1,11 +1,14 @@
+import { symlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ManualClock } from "../lib/clock.ts";
 import { formatDoctorReport, runDoctor, type DoctorDeps, type DoctorItem } from "../lib/doctor.ts";
+import { serializeEnv } from "../lib/env-file.ts";
 import { MemorySecretStore, RUNNER_SECRET_SERVICE } from "../lib/secret-store.ts";
-import { settingsFromValues } from "../lib/settings.ts";
+import { loadSettings, settingsFromValues } from "../lib/settings.ts";
 import { DeviceRegistry } from "../store/devices.ts";
 import { writeModelCheck } from "../store/model-check.ts";
-import { EXTENSION_ORIGIN, newWorkspace } from "./helpers.ts";
+import { EXTENSION_ORIGIN, newWorkspace, tempDir } from "./helpers.ts";
 
 const SECRET_A = "A".repeat(43);
 const SECRET_B = "B".repeat(43);
@@ -56,6 +59,21 @@ function item(items: readonly DoctorItem[], id: DoctorItem["id"]): DoctorItem {
   const found = items.find((entry) => entry.id === id);
   if (!found) throw new Error(`no ${id} item`);
   return found;
+}
+
+/** A real runner/.env.local, an install's values loaded through loadSettings (not settingsFromValues), so the workspace precedence and mismatch fields are the real ones. */
+async function loadedSettings(values: Record<string, string>, env: Record<string, string | undefined>) {
+  const dir = await tempDir("wc-p022-doctor-");
+  const envFile = path.join(dir, ".env.local");
+  await writeFile(envFile, serializeEnv(values));
+  return loadSettings({ envFile, env });
+}
+
+/** values.RUNNER_WORKSPACE, non-null: install() always sets it. */
+function workspaceOf(values: Record<string, string>): string {
+  const value = values.RUNNER_WORKSPACE;
+  if (!value) throw new Error("install() did not set RUNNER_WORKSPACE");
+  return value;
 }
 
 describe("doctor", () => {
@@ -155,5 +173,83 @@ describe("doctor", () => {
     expect(text).toContain("[ok]   Node 24 present");
     expect(text).toContain("[warn] Provider connected");
     expect(text).toContain("All required checks pass.");
+  });
+});
+
+describe("doctor: RUNNER_WORKSPACE mismatch (P02.2)", () => {
+  it("warns, without failing, when the environment's RUNNER_WORKSPACE differs from .env.local's, naming both", async () => {
+    const { clock, values } = await install({ verified: true });
+    const ambient = "/home/runner/work/workflow-catalog/workflow-catalog"; // not a workspace, as GitHub Actions sets
+    const settings = await loadedSettings(values, { RUNNER_WORKSPACE: ambient });
+    expect(settings.workspace).toBe(values.RUNNER_WORKSPACE);
+    const report = await runDoctor(deps(settings.values, clock, { settings }));
+    const workspace = item(report.items, "workspace");
+    expect(workspace.status).toBe("warn");
+    expect(workspace.detail).toContain(values.RUNNER_WORKSPACE);
+    expect(workspace.detail).toContain(ambient);
+    expect(workspace.detail.toLowerCase()).toContain("ignored");
+    expect(workspace.fix).toBeTruthy();
+    expect(report.ok).toBe(true);
+  });
+
+  it("stays ok, with no mention of a mismatch, when the environment agrees or sets nothing", async () => {
+    const { clock, values } = await install({ verified: true });
+    for (const env of [{ RUNNER_WORKSPACE: values.RUNNER_WORKSPACE }, {}]) {
+      const settings = await loadedSettings(values, env);
+      const report = await runDoctor(deps(settings.values, clock, { settings }));
+      expect(item(report.items, "workspace").status, JSON.stringify(env)).toBe("ok");
+      expect(item(report.items, "workspace").detail, JSON.stringify(env)).toBe(values.RUNNER_WORKSPACE);
+    }
+  });
+
+  it("mentions the ignored ambient value when .env.local's own workspace fails to open (N5)", async () => {
+    const { clock, values } = await install({ verified: true });
+    const broken = { ...values, RUNNER_WORKSPACE: path.join(workspaceOf(values), "does-not-exist") };
+    const ambient = "/home/runner/work/workflow-catalog/workflow-catalog";
+    const settings = await loadedSettings(broken, { RUNNER_WORKSPACE: ambient });
+    const report = await runDoctor(deps(settings.values, clock, { settings }));
+    const workspace = item(report.items, "workspace");
+    expect(workspace.status).toBe("fail");
+    expect(workspace.detail).toContain(ambient);
+  });
+});
+
+describe("doctor: workspace comparison by real folder, not string (P02.2 revision 1, W2)", () => {
+  it("does not warn when the environment spells .env.local's workspace differently: a trailing slash, a symlink, or .. segments", async () => {
+    const { clock, values } = await install({ verified: true });
+    const A = workspaceOf(values);
+    const scratch = await tempDir("wc-p022-w2-");
+    const linkToA = path.join(scratch, "link-to-A");
+    await symlink(A, linkToA);
+    const spellings: Record<string, string> = {
+      "a trailing slash": `${A}/`,
+      "a symlink": linkToA,
+      "\"..\" segments": path.join(A, "..", path.basename(A)),
+    };
+    for (const [label, spelling] of Object.entries(spellings)) {
+      const settings = await loadedSettings(values, { RUNNER_WORKSPACE: spelling });
+      const report = await runDoctor(deps(settings.values, clock, { settings }));
+      expect(item(report.items, "workspace").status, label).toBe("ok");
+      expect(item(report.items, "workspace").detail, label).toBe(A);
+    }
+  });
+
+  it("still warns when the environment names a genuinely different, real workspace (W5: B exists on disk)", async () => {
+    const { clock, values } = await install({ verified: true });
+    const B = await newWorkspace(clock);
+    const settings = await loadedSettings(values, { RUNNER_WORKSPACE: B.root });
+    const report = await runDoctor(deps(settings.values, clock, { settings }));
+    const workspace = item(report.items, "workspace");
+    expect(workspace.status).toBe("warn");
+    expect(workspace.detail).toContain(values.RUNNER_WORKSPACE);
+    expect(workspace.detail).toContain(B.root);
+  });
+
+  it("the fix line names the flag that would adopt the ambient value into .env.local (W6/N3)", async () => {
+    const { clock, values } = await install({ verified: true });
+    const B = await newWorkspace(clock);
+    const settings = await loadedSettings(values, { RUNNER_WORKSPACE: B.root });
+    const report = await runDoctor(deps(settings.values, clock, { settings }));
+    expect(item(report.items, "workspace").fix).toContain("npm run setup -- --workspace <path>");
   });
 });

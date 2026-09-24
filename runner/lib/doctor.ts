@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import type { ModelSettings } from "../agent/lib/model.ts";
@@ -16,7 +17,8 @@ import type { RunnerSettings } from "./settings.ts";
  * first five items are the catalog install page's checklist, same ids and
  * labels (apps/catalog/lib/install-status.ts); the last two are the runner's
  * own conditions (mvp-spec §8). Every item is required: doctor exits 1 while
- * any is "fail". A "warn" is not a failure (an unverified model).
+ * any is "fail". A "warn" is not a failure (an unverified model, or an
+ * ambient RUNNER_WORKSPACE that .env.local's workspace overrides, P02.2).
  */
 export type DoctorStatus = "ok" | "warn" | "fail";
 
@@ -176,16 +178,48 @@ async function providerItem(deps: DoctorDeps, workspace: Workspace | undefined):
   };
 }
 
+/** The real folder at `p`, or `path.resolve(p)` when it does not exist (a bogus ambient value still compares, just not canonically). */
+function realFolder(p: string): string {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 async function workspaceItem(settings: RunnerSettings): Promise<{ item: DoctorItem; workspace?: Workspace }> {
   const label = "Workspace chosen";
   if (!settings.workspace) {
     return { item: { id: "workspace", label, status: "fail", detail: "No workspace folder is configured.", required: true, fix: "Run `npm run setup` in runner/." } };
   }
+  // P02.2's one warning: an ambient RUNNER_WORKSPACE that really names a
+  // different folder from .env.local's. Not a failure — the runner already
+  // resolved and uses .env.local's value (lib/settings.ts), so this only
+  // ever flags a stale or leftover environment variable. Compared by real
+  // folder, not by string (revision 1, W2): a trailing slash, `/tmp` vs
+  // `/private/tmp`, a symlink, `..` segments or different letter case on a
+  // case-insensitive volume all name the same folder and must not warn.
+  const override = settings.workspaceEnvOverride;
+  const isDifferentFolder = override !== undefined && realFolder(override) !== realFolder(settings.workspace);
   try {
     const workspace = await Workspace.open(settings.workspace);
+    if (isDifferentFolder) {
+      return {
+        item: {
+          id: "workspace",
+          label,
+          status: "warn",
+          detail: `${workspace.root}. The environment also sets RUNNER_WORKSPACE=${override}, which is ignored: the runner uses runner/.env.local's ${workspace.root}.`,
+          required: true,
+          fix: "Unset RUNNER_WORKSPACE in the environment, or run `npm run setup -- --workspace <path>` to change runner/.env.local's workspace to it.",
+        },
+        workspace,
+      };
+    }
     return { item: { id: "workspace", label, status: "ok", detail: workspace.root, required: true }, workspace };
   } catch (error) {
-    return { item: { id: "workspace", label, status: "fail", detail: (error as Error).message, required: true, fix: "Run `npm run setup` in runner/." } };
+    const mention = isDifferentFolder ? ` The environment also sets RUNNER_WORKSPACE=${override}, which is ignored.` : "";
+    return { item: { id: "workspace", label, status: "fail", detail: `${(error as Error).message}${mention}`, required: true, fix: "Run `npm run setup` in runner/." } };
   }
 }
 

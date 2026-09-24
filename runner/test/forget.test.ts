@@ -7,7 +7,7 @@ import { noPrompter } from "../lib/prompt.ts";
 import { EVE_SECRET_NAMES, EVE_SECRET_SERVICE, MemorySecretStore, RUNNER_SECRET_SERVICE } from "../lib/secret-store.ts";
 import { loadSettings } from "../lib/settings.ts";
 import { runSetup } from "../lib/setup.ts";
-import { tempDir } from "./helpers.ts";
+import { newWorkspace, tempDir } from "./helpers.ts";
 
 /** Every file under `dir`, relative, sorted. */
 async function tree(dir: string): Promise<string[]> {
@@ -114,5 +114,68 @@ describe("uninstall footprint", () => {
     });
     expect(other.items.some((entry) => entry.path === stranger)).toBe(false);
     expect(other.notes.join("\n")).toContain("no valid workspace.json");
+  });
+
+  it("targets .env.local's workspace, never one the environment names, as GitHub Actions might (P02.2; W5: B exists on disk)", async () => {
+    const install = await fakeInstall();
+    const B = await newWorkspace();
+    const settings = await loadSettings({ envFile: install.envFile, env: { RUNNER_WORKSPACE: B.root } });
+    expect(settings.workspace).toBe(install.workspace.root);
+    expect(settings.workspaceSource).toBe("file");
+    const plan = await planForget({ runnerDir: install.runnerDir, envFile: install.envFile, settings, secrets: install.secrets, homeDir: install.home });
+    expect(plan.items.some((entry) => entry.path === install.workspace.root)).toBe(true);
+    expect(plan.items.some((entry) => entry.path === B.root)).toBe(false);
+  });
+});
+
+describe("forget: an environment-only workspace is never offered (P02.2 revision 1, W3)", () => {
+  /** A bare runner folder (no code, no install): just enough for planForget's paths. */
+  async function bareRunner() {
+    const root = await tempDir("wc-forget-w3-");
+    const runnerDir = path.join(root, "runner");
+    await mkdir(runnerDir, { recursive: true });
+    const home = path.join(root, "home");
+    await mkdir(home);
+    return { root, runnerDir, home, envFile: path.join(runnerDir, ".env.local") };
+  }
+
+  it("with no .env.local at all, notes the environment's workspace instead of offering it (W5: B exists on disk)", async () => {
+    const { runnerDir, home, envFile } = await bareRunner();
+    const B = await newWorkspace();
+    const settings = await loadSettings({ envFile, env: { RUNNER_WORKSPACE: B.root } });
+    expect(settings.workspace).toBe(B.root);
+    expect(settings.workspaceSource).toBe("env");
+    const plan = await planForget({ runnerDir, envFile, settings, secrets: new MemorySecretStore(), homeDir: home });
+    expect(plan.items.some((entry) => entry.path === B.root)).toBe(false);
+    expect(plan.notes.join("\n")).toContain(`The environment points at ${B.root}, which forget leaves alone because setup didn't record it.`);
+  });
+
+  it("with .env.local present but without a workspace key, notes the environment's workspace instead of offering it (W5: B exists on disk)", async () => {
+    const { runnerDir, home, envFile } = await bareRunner();
+    await writeFile(envFile, "RUNNER_MODEL_PROVIDER=chatgpt\nRUNNER_MODEL=gpt-5.6-luna\n");
+    const B = await newWorkspace();
+    const settings = await loadSettings({ envFile, env: { RUNNER_WORKSPACE: B.root } });
+    expect(settings.workspaceSource).toBe("env");
+    const plan = await planForget({ runnerDir, envFile, settings, secrets: new MemorySecretStore(), homeDir: home });
+    expect(plan.items.some((entry) => entry.path === B.root)).toBe(false);
+    expect(plan.notes.join("\n")).toContain(`The environment points at ${B.root}, which forget leaves alone because setup didn't record it.`);
+  });
+
+  it("--yes never actually deletes it: B survives executing the plan, even while .env.local (recorded, so offered) is really removed (W5: B exists on disk)", async () => {
+    const { runnerDir, home, envFile } = await bareRunner();
+    await writeFile(envFile, "RUNNER_MODEL_PROVIDER=chatgpt\nRUNNER_MODEL=gpt-5.6-luna\n"); // present, but no workspace key
+    const B = await newWorkspace();
+    const secrets = new MemorySecretStore();
+    const settings = await loadSettings({ envFile, env: { RUNNER_WORKSPACE: B.root } });
+    const plan = await planForget({ runnerDir, envFile, settings, secrets, homeDir: home });
+    const runnerItems = plan.items.filter((entry) => entry.owner === "runner");
+    expect(runnerItems.map((entry) => entry.label)).toEqual(["runner/.env.local (settings, route password, local-UI token)"]);
+    expect(runnerItems.some((entry) => entry.path === B.root)).toBe(false);
+    // cli/setup.ts's forget(), with --yes, runs executeForget on exactly the "runner" items above, unconditionally.
+    const outcome = await executeForget(plan, secrets);
+    expect(outcome.failed).toEqual([]);
+    expect(outcome.removed).toEqual(["runner/.env.local (settings, route password, local-UI token)"]);
+    expect(await readdir(runnerDir)).toEqual([]);
+    expect((await readdir(B.root)).length).toBeGreaterThan(0);
   });
 });

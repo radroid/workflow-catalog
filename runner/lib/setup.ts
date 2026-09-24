@@ -11,7 +11,7 @@ import { MIN_NODE_MAJOR } from "./doctor.ts";
 import { readEnvFile, updateEnvFile } from "./env-file.ts";
 import type { Prompter } from "./prompt.ts";
 import { API_KEY_ENV, API_KEY_SECRET_NAME, RUNNER_SECRET_SERVICE, type SecretStore } from "./secret-store.ts";
-import { ENV, ENV_HEADER, ENV_ORDER, PRIVACY_ENV, SECRET_PATTERN } from "./settings.ts";
+import { ENV, ENV_HEADER, ENV_ORDER, PRIVACY_ENV, SECRET_PATTERN, trimmedText } from "./settings.ts";
 
 /**
  * `npm run setup`: checks Node, chooses the workspace, connects the model
@@ -202,9 +202,14 @@ export async function runSetup(options: SetupOptions, deps: SetupDeps): Promise<
   const existing = await readEnvFile(deps.envFile);
   const homeDir = deps.homeDir ?? os.homedir();
 
-  // Workspace.
-  const suggested = existing[ENV.workspace] ?? path.join(homeDir, DEFAULT_WORKSPACE_NAME);
-  const answer = options.workspace ?? (options.yes ? existing[ENV.workspace] : await deps.prompter.ask("Workspace folder (your data lives here)?", suggested));
+  // Workspace: setup never takes it from the environment (P02.2 revision 1,
+  // W1). Once .env.local names one, that's the suggestion and --yes's
+  // answer; on a first run there is no suggestion but ~/JobAssistant, and
+  // --yes without --workspace fails asking for one explicitly. Unlike every
+  // other command, the environment is never a choice setup makes for the
+  // person — only a runtime fallback loadSettings applies afterwards.
+  const suggested = trimmedText(existing[ENV.workspace]) ?? path.join(homeDir, DEFAULT_WORKSPACE_NAME);
+  const answer = options.workspace ?? (options.yes ? trimmedText(existing[ENV.workspace]) : await deps.prompter.ask("Workspace folder (your data lives here)?", suggested));
   if (!answer) throw new SetupError("Pass --workspace <folder>: where the runner keeps your data.");
   const dir = await checkWorkspacePath(answer, { homeDir, repoRoot: deps.repoRoot });
   const { workspace, created } = await Workspace.openOrCreate(dir, { packageVersion: deps.packageVersion, clock: deps.clock });

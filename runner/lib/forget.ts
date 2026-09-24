@@ -76,7 +76,12 @@ export async function planForget(deps: ForgetDeps): Promise<ForgetPlan> {
 
   const workspaceDir = deps.settings.workspace;
   if (workspaceDir && (await exists(workspaceDir))) {
-    if (deps.keepWorkspace) {
+    if (deps.settings.workspaceSource !== "file") {
+      // W3 (revision 1): only .env.local's own workspace is ever offered.
+      // One that only the environment names was never recorded by setup, so
+      // deleting it here — irreversibly — would be a guess, not a fact.
+      notes.push(`The environment points at ${workspaceDir}, which forget leaves alone because setup didn't record it.`);
+    } else if (deps.keepWorkspace) {
       notes.push(`Kept the workspace ${workspaceDir} (--keep-workspace).`);
     } else {
       try {

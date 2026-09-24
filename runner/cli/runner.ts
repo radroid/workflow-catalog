@@ -3,13 +3,13 @@ import { connect } from "node:net";
 import { createInterface } from "node:readline";
 import { buildAdapter, buildRunner, computeBuildStamp, eveCli, needsBuild, recordBuildStamp } from "../lib/build.ts";
 import { systemClock } from "../lib/clock.ts";
-import { evePathEnv } from "../lib/codex.ts";
 import { runDoctor } from "../lib/doctor.ts";
+import { buildEveEnv } from "../lib/eve-env.ts";
 import { launchRunner } from "../lib/launcher.ts";
 import { readPackageVersion } from "../lib/package-info.ts";
 import { ROUTES_DIR, RUNNER_DIR } from "../lib/paths.ts";
 import { API_KEY_ENV, API_KEY_SECRET_NAME, createOsSecretStore, RUNNER_SECRET_SERVICE } from "../lib/secret-store.ts";
-import { loadSettings, PRIVACY_ENV } from "../lib/settings.ts";
+import { loadSettings } from "../lib/settings.ts";
 import { Workspace } from "../store/workspace.ts";
 import { BRIDGE_HOST, BRIDGE_ORIGIN, BRIDGE_PORT, listen } from "../server/app.ts";
 import { consoleLogger, createRunnerContext } from "../server/context.ts";
@@ -72,9 +72,7 @@ for (const [host, port, what] of [
 // The eve process's environment: our settings, the privacy switches, codex on
 // PATH, and the provider's API key from the keychain (in memory only).
 const secrets = createOsSecretStore();
-const childEnv: NodeJS.ProcessEnv = { ...process.env, ...settings.values, ...PRIVACY_ENV, PATH: evePathEnv(settings.codexDir) };
-delete childEnv.PORT;
-delete childEnv.HOST;
+const childEnv = buildEveEnv({ processEnv: process.env, settingsValues: settings.values, codexDir: settings.codexDir });
 if (model.provider !== "chatgpt") {
   const envName = API_KEY_ENV[model.provider];
   const key = childEnv[envName] ?? (await secrets.get(RUNNER_SECRET_SERVICE, API_KEY_SECRET_NAME[model.provider]).catch(() => null)) ?? undefined;

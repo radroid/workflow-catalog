@@ -4,10 +4,11 @@ import { parseEnv } from "node:util";
 import { describe, expect, it } from "vitest";
 import { ModelSettingsError, readModelSettings } from "../agent/lib/model.ts";
 import { parseFlags } from "../cli/args.ts";
+import { ManualClock } from "../lib/clock.ts";
 import { parseCodexLoginStatus, evePathEnv } from "../lib/codex.ts";
 import { EnvFileError, serializeEnv, updateEnvFile } from "../lib/env-file.ts";
 import { loadSettings, settingsFromValues } from "../lib/settings.ts";
-import { tempDir } from "./helpers.ts";
+import { newWorkspace, tempDir } from "./helpers.ts";
 
 describe(".env.local", () => {
   it("writes values that eve's parser (node:util.parseEnv) reads back unchanged", () => {
@@ -76,6 +77,79 @@ describe("settings", () => {
       expect(() => readModelSettings(env), JSON.stringify(env)).toThrow(ModelSettingsError);
     }
     expect(settingsFromValues({}, false).model).toBeUndefined();
+  });
+});
+
+describe("workspace precedence", () => {
+  it("keeps .env.local's workspace once setup has written it, even when the environment names another valid workspace (W5: B exists on disk)", async () => {
+    const clock = new ManualClock();
+    const A = await newWorkspace(clock);
+    const B = await newWorkspace(clock);
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, `RUNNER_WORKSPACE=${A.root}\n`);
+    const settings = await loadSettings({ envFile: file, env: { RUNNER_WORKSPACE: B.root } });
+    expect(settings.workspace).toBe(A.root);
+    expect(settings.values.RUNNER_WORKSPACE).toBe(A.root);
+    expect(settings.workspaceEnvOverride).toBe(B.root);
+  });
+
+  it("keeps .env.local's workspace even when the environment names a folder that isn't a workspace at all, as GitHub Actions sets one", async () => {
+    const clock = new ManualClock();
+    const A = await newWorkspace(clock);
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, `RUNNER_WORKSPACE=${A.root}\n`);
+    const notAWorkspace = "/home/runner/work/workflow-catalog/workflow-catalog";
+    const settings = await loadSettings({ envFile: file, env: { RUNNER_WORKSPACE: notAWorkspace } });
+    expect(settings.workspace).toBe(A.root);
+    expect(settings.values.RUNNER_WORKSPACE).toBe(A.root);
+    expect(settings.workspaceEnvOverride).toBe(notAWorkspace);
+  });
+
+  it("lets the environment supply the workspace when .env.local has none, as for tests and a first run (W5: B exists on disk)", async () => {
+    const clock = new ManualClock();
+    const B = await newWorkspace(clock);
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, "RUNNER_MODEL=gpt-5.6-luna\n");
+    const settings = await loadSettings({ envFile: file, env: { RUNNER_WORKSPACE: B.root } });
+    expect(settings.workspace).toBe(B.root);
+    expect(settings.values.RUNNER_WORKSPACE).toBe(B.root);
+    expect(settings.workspaceEnvOverride).toBeUndefined();
+  });
+
+  it("does not flag a mismatch when the environment agrees, is blank, or is unset", async () => {
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, "RUNNER_WORKSPACE=/Users/ada/WorkspaceA\n");
+    for (const env of [{ RUNNER_WORKSPACE: "/Users/ada/WorkspaceA" }, { RUNNER_WORKSPACE: "  " }, {}]) {
+      const settings = await loadSettings({ envFile: file, env });
+      expect(settings.workspace, JSON.stringify(env)).toBe("/Users/ada/WorkspaceA");
+      expect(settings.workspaceEnvOverride, JSON.stringify(env)).toBeUndefined();
+    }
+  });
+
+  it("keeps every other key's precedence (the environment wins) alongside the workspace exception", async () => {
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, "RUNNER_WORKSPACE=/Users/ada/WorkspaceA\nRUNNER_MODEL=gpt-5.6-luna\n");
+    const settings = await loadSettings({ envFile: file, env: { RUNNER_WORKSPACE: "/Users/ada/WorkspaceB", RUNNER_MODEL: "gpt-5.6-terra" } });
+    expect(settings.workspace).toBe("/Users/ada/WorkspaceA");
+    expect(settings.values.RUNNER_MODEL).toBe("gpt-5.6-terra");
+  });
+
+  it("records the workspace source (W3): \"file\" once .env.local has one, \"env\" only before that, undefined with neither", async () => {
+    const clock = new ManualClock();
+    const A = await newWorkspace(clock);
+    const B = await newWorkspace(clock);
+    const withFile = path.join(await tempDir(), ".env.local");
+    await writeFile(withFile, `RUNNER_WORKSPACE=${A.root}\n`);
+    expect((await loadSettings({ envFile: withFile, env: { RUNNER_WORKSPACE: B.root } })).workspaceSource).toBe("file");
+    expect((await loadSettings({ envFile: withFile, env: {} })).workspaceSource).toBe("file");
+
+    const withoutKey = path.join(await tempDir(), ".env.local");
+    await writeFile(withoutKey, "RUNNER_MODEL=gpt-5.6-luna\n");
+    expect((await loadSettings({ envFile: withoutKey, env: { RUNNER_WORKSPACE: B.root } })).workspaceSource).toBe("env");
+
+    const missing = path.join(await tempDir(), "missing.envfile");
+    expect((await loadSettings({ envFile: missing, env: { RUNNER_WORKSPACE: B.root } })).workspaceSource).toBe("env");
+    expect((await loadSettings({ envFile: missing, env: {} })).workspaceSource).toBeUndefined();
   });
 });
 
