@@ -1,13 +1,13 @@
-Latest: iter-006 closed 2026-09-24 about 08:05, with P04 (08262a1, #14) and P02.2 (2b93cf0, #15) merged. The smoke test is green; CI on 08262a1 is checked at the next wake-up. Log: logs/iter-006.md.
+Latest: iter-007 in progress since 2026-09-24 about 08:10. **P05** (Opus, port 4320) ∥ **P03.2** (Sonnet, port 4330) are implementing, spawned from `logs/handoff/P05-prompt.md` and `logs/handoff/P03.2-prompt.md` on 08262a1 or later. Last closed: iter-006 (P04 08262a1 #14, P02.2 2b93cf0 #15). CI on 08262a1 is green (35972854108, 35972858634). Log: logs/iter-006.md.
 
-Next, iter 007: spawn **P05** (Opus, port 4320) ∥ **P03.2** (Sonnet, port 4330). Fill in the P04 merge sha 08262a1 and fresh code words in `logs/handoff/P05-prompt.md` and `logs/handoff/P03.2-prompt.md`. P03.2 now includes deliverable 5 (claims saved only after an ok turn).
+Next, in iter 007: link each PR as it opens, then run round 1 with one Opus reviewer and one Opus UI critic per PR. P05's critic covers the application page, and P03.2's covers the changed Onboarding and Profile messages. The critics use 4340 and 4350; a reviewer uses its packet's port only if needed.
 - **Then:**
   - after P05: P08-B (it carries P08-A's follow-ups and the extraction-budget question) and P06 (it carries P04's follow-ups);
   - after P03.2 and P05: P03.1;
   - after P06: P07-C (it carries P07-B's follow-ups and the real-handler e2e). Then P10 (part B carries P02.2's nits).
 - **Reviews:** one Opus reviewer and one Opus UI critic per PR. After round 1, rounds are narrow and reuse the same reviewers. A REVISE goes back to the same implementer once; a second REVISE goes to a fresh Opus escalation.
 
-If this session dies: every agent pushes its branch at green steps. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
+If this session dies: every agent pushes its branch at green steps, starting with its claim on `packet/P05` or `packet/P03.2`. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
 
 Must-carry (see "Rules and lessons learned" in the pause handoff):
 - **Every prompt:**
@@ -25,5 +25,4 @@ Must-carry (see "Rules and lessons learned" in the pause handoff):
 - **CLI entry files** stay top-level scripts. Testable logic lives in `lib/`.
 
 Open blocks: owner-gated catalog deploy, first release tag, tag-push deny rule, `RUNNER_` prefix (GOALS Open dependencies, PR #2).
-Last closed iteration: 006 (merged P04 and P02.2). Log: logs/iter-006.md.
 <!-- Tier 1: read every iter. Hard cap 30 lines. Overwrite each iter; this file IS the handoff. -->
