@@ -83,6 +83,9 @@ career-profile.md                 rendered view; edits round-trip
 jobs/<jobId>/snapshot-<rev>.json  { url, capturedAt, extractorVersion, contentHash, text, structured }
 applications/<taskId>.json        { jobId, stage, revision, documents[], notes, deadlines }
 applications/<taskId>/docs/       resume-v<n>.md/.docx/.pdf, cover-v<n>.*, diff-v<n>.md
+applications/<taskId>/preparation.json    its latest preparation attempt (P05): running, parked on gap questions with the answers so far, failed (and why), or done
+applications/<taskId>/versions/v<n>.json  one prepared version (P05): the validated draft, the claims it cites, the per-sentence diff and the changes since the version it replaces
+applications/details.json         the name and contact line on every document (P05); never sent to the model
 sessions/<sessionId>.json         session manifest (below)
 runs/<date>/<runId>.json          run log records
 runs/budget.json                  daily run limit, per-run item cap, and the pause with its reason; survives restart (P08)

@@ -363,30 +363,51 @@ deterministic validator (`validate/`, no model) refuses a sentence with no
 citation, a citation of anything but a confirmed claim, an id, a number,
 date, job title or credential its cited claims don't state, a heading the
 runner doesn't use, or the posting's own wording, and the model revises.
-After the turn the route re-reads the profile, validates the draft again,
-and only then exports (`export/`): Markdown, DOCX (`docx`) and PDF
-(`pdfkit`), with the citation markers stripped at this step and no earlier,
-plus `diff-v<n>.md`, which puts every sentence beside the claims it cites
-and names the presentation change. A gap question parks the preparation:
-eve withdraws its own approval parking when a run ends, so the runner keeps
-the questions (`preparation.json`). The run ends, the page shows the
-questions in amber, and once each is answered (leave it out, or add
-evidence to the profile) preparing again continues from the answers. A turn
-that is not ok, a draft still refused, a tool call other than the
-preparation tools, or a profile that changed during the turn saves nothing
-and says why in plain words; a failed or parked preparation never moves the
-job's stage. Each version records its profile version, job revision and
-idempotency key (the job, its revision, the profile version, whether a
-cover letter was asked for, and a digest of everything the model read), so
-preparing again with the same inputs writes nothing, and a changed profile
-gives a new version that names the one it replaces. Documents download as
-attachments with a sandboxing CSP, and only files the application's record
-lists. The page follows the Jobs page's rules: one live region, each
-outcome announced once; a refresh (every 2 s while a preparation runs, 5 s
-otherwise, only while visible) that keeps focus and open sections; a busy
-button `aria-disabled`; no field name, status code or id in visible text.
-Claim labels appear only in "What changed and why", which shows citations
-on purpose.
+After the turn the route re-reads the profile, validates the draft again
+(whatever the tool's answer said), and only then exports (`export/`):
+Markdown, DOCX (`docx`, its author the person's name) and PDF (`pdfkit`,
+set in Noto Sans embedded from `@expo-google-fonts/noto-sans`: Latin with
+its extensions, Greek, Cyrillic and Vietnamese print as typed; anything the
+font can't draw prints as � and the page says so at the name field and
+beside that PDF, and that the Markdown and Word files keep it), with the
+citation markers stripped at this step and no earlier, plus
+`diff-v<n>.md`, which puts every sentence beside the claims it cites and
+names the presentation change. The model is told only that a label or
+wording isn't among the confirmed claims it was given; which of them was
+excluded is the person's to see, never the model's. A gap question parks
+the preparation: eve withdraws a run's pending `ctx.ask` requests when the
+run ends, so the runner keeps the questions (`preparation.json`). The run
+ends, the page shows the questions in amber while any is open, the row
+says how many are left (then "Ready to continue", or "Waiting for the
+evidence you're adding"), and once each is answered (leave it out, or add
+evidence on the Onboarding page) preparing again continues from the
+answers. A turn that is not ok, a draft still refused, a tool call other
+than the preparation tools, or a profile that changed during the turn saves
+nothing and says why in plain words; a failed or parked preparation never
+moves the job's stage. While an application record that may be the job's
+can't be read, Prepare refuses and names the file, rather than start a
+second application. Each version records its profile version, job revision
+and idempotency key (the job, its revision, the profile version, whether a
+cover letter was asked for, a digest of everything the model read, and a
+digest of the name and contact line the documents carry), so preparing
+again with the same inputs writes nothing, and a changed profile gives a
+new version that names the one it replaces. A changed name or contact line
+alone re-exports the latest validated draft under it, as a new version
+naming the old one, with no model turn and no run. At start, a version
+whose files and record were all written before the runner stopped is
+attached, and any other preparation left running is marked interrupted.
+Documents download as attachments with a sandboxing CSP, under a
+descriptive name ("Ada Quill - Resume - Fernwood Platform Lead.pdf", with
+RFC 6266's `filename*` when it isn't ASCII), and only files the
+application's record lists; the workspace keeps its own file names. The
+page follows the Jobs page's rules: one live region, each outcome announced
+once, including a preparation that was already running when the page
+loaded; a refresh (every 2 s while a preparation runs, 5 s otherwise, only
+while visible) that keeps focus and open sections, and that says once,
+while a watched preparation can't be refreshed, "Can't reach the runner. Is
+it still running?"; a busy button `aria-disabled`; no field name, status
+code or id in visible text. Claim labels appear only in "What changed and
+why", which shows citations on purpose.
 
 The **Runs page** (`ui/runs.html`, P08-A) lists every run this instance has
 made (`GET /api/runs`), newest first, bounded to 200 records / 14 days. Each
@@ -503,7 +524,9 @@ applications/<taskId>.json               one application (P05): the contract's A
 applications/<taskId>/preparation.json   its latest preparation attempt (P05): running, parked on gap questions
                                          with the answers so far, failed (and why), or done
 applications/<taskId>/versions/v<n>.json one prepared version (P05): the validated draft, the claims it cites,
-                                         the per-sentence diff and the changes since the version it replaces
+                                         the per-sentence diff and the changes since the version it replaces,
+                                         the name and contact line its documents carry, and what its PDFs
+                                         couldn't draw
 applications/<taskId>/docs/              resume-v<n> and cover-v<n> (.md, .docx, .pdf), diff-v<n>.md (P05)
 applications/details.json                the name and contact line on every document (P05); never sent to the model
 runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
@@ -587,7 +610,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 |---|---|
 | P03 | `server/routes/onboarding.ts`, `store/profile.ts`, `ui/onboarding.html`, `ui/profile.html`, `agent/tools/extract_claims.ts`, `agent/tools/ask_follow_up.ts`, onboarding skills |
 | P04 | `server/routes/captures.ts` (the `job_capture` handler, plus the paste/url-fetch/list/detail/re-extract routes), `store/jobs.ts`, `lib/safe-fetch.ts`, `lib/readable-text.ts`, `agent/tools/extract_job.ts` (IDs only: jobId, revision, structured fields — never a URL or raw text; it checks and returns the fields, and the route saves them after an ok turn), `ui/jobs.html` |
-| P05 | `server/routes/applications.ts` (list, detail, prepare, answer a gap question, the documents' header, downloads; queues the preparation turn through `runTurn` inside `withRun`), `store/applications.ts`, `agent/tools/prepare_application.ts` with `agent/lib/prepare-*.ts` (IDs, requirement accounts and the cited draft only — never a claim's id or text; it checks and returns, and the route saves after an ok turn and a second check), `validate/` (the deterministic validator), `export/` (Markdown, DOCX, PDF, the diff), `ui/application.html`, the five preparation skills and the resume and cover-letter templates |
+| P05 | `server/routes/applications.ts` (list, detail, prepare, answer a gap question, the documents' header, downloads; queues the preparation turn through `runTurn` inside `withRun`), `store/applications.ts`, `agent/tools/prepare_application.ts` with `agent/lib/prepare-*.ts` (IDs, requirement accounts and the cited draft only — never a claim's id or text; it checks and returns, and the route saves after an ok turn and a second check), `validate/` (the deterministic validator), `export/` (Markdown, DOCX, PDF with its embedded Noto Sans, the diff, the download names), `ui/application.html`, the five preparation skills and the resume and cover-letter templates |
 | P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
 | P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn` — free functions over `ctx`, not yet called from a real route), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
