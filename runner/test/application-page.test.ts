@@ -134,9 +134,23 @@ interface Page {
 async function until(check: () => boolean, what: string, timeoutMs = 8_000): Promise<void> {
   const started = Date.now();
   while (!check()) {
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${what}`);
+    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${what}${whatThePageShows()}`);
     await sleep(10);
   }
+}
+
+/** What the open page showed when a wait timed out: enough to tell a race on another machine from a wrong result. */
+function whatThePageShows(): string {
+  const page = pages.at(-1);
+  if (!page) return "";
+  const texts = (selector: string) => Array.from(page.document.querySelectorAll(selector)).map((node) => node.textContent ?? "");
+  const shown = {
+    lines: page.lines,
+    rows: texts(".app-row"),
+    detail: page.document.getElementById("detail-section")?.hidden === false ? texts("#detail-status, #detail-questions, #detail-problems, #detail-actions") : "hidden",
+    requests: page.requests.slice(-12),
+  };
+  return `. The page showed: ${JSON.stringify(shown)}`;
 }
 
 async function openPage(bridge: TestBridge, options: { intercept?: Intercept } = {}): Promise<Page> {
