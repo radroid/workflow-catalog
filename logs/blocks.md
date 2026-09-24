@@ -1239,3 +1239,42 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **Carried to other packets:**
   - P07-C: the e2e bridge loads no route modules, so it never reaches P04's handler.
   - P08-B: extraction turns run outside `withRun`, so the daily run limit doesn't see them.
+
+## 2026-09-24 — P04 peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 006
+**Source:** peer-review (Opus reviewer) and UI critic (Opus), PR #14 at f3cdec8 (revision 1)
+**Severity:** medium. Round 1's security fixes hold, but the background-extraction design has gaps.
+
+**Verdicts:**
+- Reviewer: REVISE — 6 issues:
+  1. a failed turn overwrites the previous fields, because the tool writes during the turn;
+  2. a stale `waiting` state never clears;
+  3. a budget pause doesn't stop queued turns;
+  4. a slow or reset body is reported as too large;
+  5. the paste path doesn't normalize whitespace like the other paths;
+  6. damaged data vanishes or returns 500.
+- UI critic: REVISE — 9 issues: three from round 1 are partly fixed (busy and refresh for background extraction, the no-model wording, the JSON byte measure), and six are new:
+  1. field errors break J4 and J6.3;
+  2. field borders are 1.27:1;
+  3. a refresh closes open disclosures;
+  4. axe flags `scrollable-region-focusable`;
+  5. long messages are cut at 390;
+  6. 9 of the 29 screenshots are wrong.
+
+**What holds:**
+- The production transport works over TLS, and no IPv6 or IPv4-mapped form gets through.
+- `readable-text` is linear.
+- The event path answers in about 50 ms.
+- `.DS_Store` is ignored.
+- M3a, M6b, M7 and M8 all fail tests.
+- The eval workspace is sound, solo and together, with an ambient `RUNNER_WORKSPACE` present.
+- Chain, merge and CI are green; Playwright 37/37.
+
+**Decision:**
+- Revision 2 goes to a fresh Opus escalation implementer (the second-REVISE rule), with T1–T21 in `logs/handoff/P04-round-2-review.md`. The Sonnet implementer's worktree is released first. Any later REVISE goes back to that same escalation implementer.
+- The orchestrator's L12 wording, "set up a model in Settings", was wrong: Settings has only Budget. T12 uses the runner's existing wording.
+- **New packet P02.2, runner workspace precedence.** The reviewer showed that every runner command takes the workspace from the environment ahead of `.env.local`. An ambient `RUNNER_WORKSPACE` (GitHub Actions sets one) therefore makes the runner fail closed with a misleading message, or silently serve another workspace, and `--forget` would target it.
+  - Of the reviewer's two options, the smaller one: for the workspace key only, `.env.local` wins once setup wrote it, and doctor warns when the environment disagrees.
+  - It runs now, with a Sonnet implementer alongside P04's escalation; their Owns are disjoint.
+  - Renaming the `RUNNER_` prefix, which GitHub reserves, is an owner question to settle before the first release. It is listed in PR #2.

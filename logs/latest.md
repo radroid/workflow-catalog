@@ -1,6 +1,11 @@
 Latest: iter-006 in progress, started 18:57 on 2026-09-23. Iter 005 closed with P08-A, P03 and P07-B merged (360ac69, 9821bee, e01017c); CI on e01017c is green, extension e2e included. In `.loop/state.json`, `iter` stays 5 until iter 006 closes.
 
-Running now: **P04 revision 1** (PR #14), by the same Sonnet implementer on harness port 4330. Round 1 was REVISE 9 from the reviewer (the URL fetch is broken on Node 24, IPv6 slips the SSRF checks, quadratic HTML, the event held open through the model turn, and more) and UI REVISE 9. Decisions L1–L14 are in `logs/handoff/P04-round-1-review.md`; L5 makes extraction run after the capture responds. Round 2 is narrow. A further REVISE goes to a fresh Opus escalation. The P05 and P03.2 prompts are ready in `logs/handoff/`, with the eval-workspace rule amended.
+Running now:
+- **P04 revision 2** (PR #14): a fresh Opus escalation on `packet/P04` from f3cdec8, harness port 4330. Its prompt is `logs/handoff/P04-escalation-prompt.md`.
+  - Round 2 was REVISE 6 and UI REVISE 9. The work list is T1–T21 in `logs/handoff/P04-round-2-review.md`.
+  - Later REVISEs go back to this escalation. Round 3 is narrow, by the same reviewer (its worktree is kept) and the same UI critic.
+- **P02.2** (new, runner workspace precedence): a Sonnet implementer on `packet/P02.2`, needing no port. Its prompt is `logs/handoff/P02.2-prompt.md`. Review: one Opus reviewer, no UI critic (the change is CLI only).
+- After P04 merges: P05 (Opus) ∥ P03.2 (Sonnet), from their prompts in `logs/handoff/`.
 - **Then:**
   - after P04: P05 (Opus) ∥ P03.2 (Sonnet), which needs P04's turn events. P03.1 follows P03.2, because they share files.
   - after P05: P08-B, which carries P08-A's follow-ups, and P06.
