@@ -446,7 +446,14 @@ async function run(id, work, field) {
 async function refused(error, id, field) {
   const message = messageOf(error);
   await load().catch(() => undefined);
-  if (field && !view?.markdownError) return refuseAt(field.id, message, field.outcome);
+  // Q7 (revision 1, reviewer 6 and critic 2): unlike a client-side refusal (refuseAt's other call sites,
+  // each hand-authoring its own short focusedReason distinct from the fuller detail next to the field), the
+  // server gives only one message -- already short, plain and code-free (J5, Q3) -- so there is no separate
+  // longer text to shorten it from. Reusing it verbatim, after the same "<Outcome>: " prefix those hand-
+  // authored ones use, keeps the line's own shape (what happened, then why) for a server refusal too: the
+  // upload's 413, or a statement's Enter refused by the server, while the field never loses focus for a
+  // screen reader to re-read the field error from.
+  if (field && !view?.markdownError) return refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${message}`);
   lastAction(message, "refused");
   // Focus stays where the person acted (the button, or the field they pressed Enter in); only a lost focus goes to the button.
   render(document.activeElement && document.activeElement !== document.body ? undefined : id);

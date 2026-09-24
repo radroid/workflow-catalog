@@ -437,3 +437,42 @@ describe("P03.2 (round-4 UI critic polish 1): a refused control that still has f
     expect(page.describedBy("statement-input-boundary")).toContain("Type a boundary first, then add it.");
   });
 });
+
+describe("Q7 (revision 1, reviewer 6 and critic 2): a server refusal also carries its reason while the field still has focus", () => {
+  it("an upload the server 413s for size is not just \"Not uploaded.\" while the file input still has focus", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+    page.byId("source-status-resume-provided").click();
+    await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the source to open its panel");
+
+    const input = page.byId("source-file-resume");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    // Over the real 512 KB source-content cap (server/routes/onboarding.ts's boundedSourceBody), so the
+    // server -- not upload()'s own client-side checks above it -- is what refuses this one, with a real 413.
+    Object.defineProperty(input, "files", { value: [{ name: "resume.txt", text: async () => "x".repeat(513 * 1024) }], configurable: true });
+    (input as unknown as { onchange(event: { currentTarget: DomNode }): void }).onchange({ currentTarget: input });
+
+    await until(() => page.line() === "Not uploaded: That's over 512 KB. Paste less text, or upload a smaller file.", "the short reason");
+    expect(page.document.activeElement).toBe(input); // focus never moved, so the line had to carry the reason
+    expect(page.describedBy("source-file-resume")).toContain("That's over 512 KB. Paste less text, or upload a smaller file.");
+  });
+
+  it("a statement the server 413s for size is not just \"Not added.\" while the input still has focus", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+
+    const input = page.byId("statement-input-preference");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    // Over the real 8 KiB small-body cap (MAX_SMALL_BODY_BYTES); /statements/:kind never goes through
+    // boundedSourceBody (Q12, revision 1), so this is http.ts's own generic body_too_large message -- the
+    // server's one message, reused as both the field's detail and the line's focused reason (refused()).
+    page.type("statement-input-preference", "x".repeat(9 * 1024));
+    page.submit("statement-form-preference");
+
+    await until(() => page.line() === "Not added: Request body is larger than 8192 bytes.", "the short reason");
+    expect(page.document.activeElement).toBe(input);
+    expect(page.describedBy("statement-input-preference")).toContain("Request body is larger than 8192 bytes.");
+  });
+});
