@@ -202,14 +202,14 @@ export async function runSetup(options: SetupOptions, deps: SetupDeps): Promise<
   const existing = await readEnvFile(deps.envFile);
   const homeDir = deps.homeDir ?? os.homedir();
 
-  // Workspace: the same precedence as loadSettings (P02.2), so every
-  // command resolves it the same way. Once .env.local names one, it is the
-  // suggestion, and --yes's answer, full stop — an ambient RUNNER_WORKSPACE
-  // no longer matters. Before that (a first run), the ambient value supplies
-  // both, same as loadSettings falls back to it. --workspace overrides either.
-  const currentWorkspace = trimmedText(existing[ENV.workspace]) ?? trimmedText((deps.env ?? process.env)[ENV.workspace]);
-  const suggested = currentWorkspace ?? path.join(homeDir, DEFAULT_WORKSPACE_NAME);
-  const answer = options.workspace ?? (options.yes ? currentWorkspace : await deps.prompter.ask("Workspace folder (your data lives here)?", suggested));
+  // Workspace: setup never takes it from the environment (P02.2 revision 1,
+  // W1). Once .env.local names one, that's the suggestion and --yes's
+  // answer; on a first run there is no suggestion but ~/JobAssistant, and
+  // --yes without --workspace fails asking for one explicitly. Unlike every
+  // other command, the environment is never a choice setup makes for the
+  // person — only a runtime fallback loadSettings applies afterwards.
+  const suggested = trimmedText(existing[ENV.workspace]) ?? path.join(homeDir, DEFAULT_WORKSPACE_NAME);
+  const answer = options.workspace ?? (options.yes ? trimmedText(existing[ENV.workspace]) : await deps.prompter.ask("Workspace folder (your data lives here)?", suggested));
   if (!answer) throw new SetupError("Pass --workspace <folder>: where the runner keeps your data.");
   const dir = await checkWorkspacePath(answer, { homeDir, repoRoot: deps.repoRoot });
   const { workspace, created } = await Workspace.openOrCreate(dir, { packageVersion: deps.packageVersion, clock: deps.clock });

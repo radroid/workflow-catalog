@@ -128,7 +128,7 @@ npm run setup -- --provider openai --model <slug> --api-key-env MY_KEY_VAR --yes
   - `RUNNER_MODEL_PROVIDER` and `RUNNER_MODEL`
   - `RUNNER_CODEX_DIR`
   - `RUNNER_WORKSPACE`: once setup has written this one, it wins over the
-    environment, unlike every other key below (see the note that follows)
+    environment, unlike every other key in this list (see the note that follows)
   - `ROUTE_AUTH_BASIC_PASSWORD`: the per-install secret for eve's
     `httpBasic` route auth
   - `RUNNER_UI_TOKEN`: the local-UI cookie value
@@ -138,9 +138,17 @@ npm run setup -- --provider openai --model <slug> --api-key-env MY_KEY_VAR --yes
   leftover shell export could set another, so once `npm run setup` has
   written a workspace to `.env.local`, the file always wins for that key:
   an ambient value can never redirect a set-up runner (P02.2). Before setup
-  has written one, the environment still supplies it, as for a first run.
-  `runner`, `pair`, `ui`, `doctor`, `setup` and `setup -- --forget` all
-  resolve it this same way.
+  has written one, `runner`, `pair`, `ui`, `doctor` and `setup -- --forget`
+  fall back to the environment, as for a first run or a test — the same
+  runtime fallback every other key gets. Plain `setup` is the one exception
+  to that fallback too (revision 1): it never takes the workspace from the
+  environment, even on a first run — its own default is always
+  `~/JobAssistant`, and `--yes` without `--workspace` always fails, asking
+  for one explicitly. The environment is a runtime fallback for commands that read
+  an existing install, never a choice setup makes for the person.
+  `setup -- --forget` only ever offers to remove a workspace `.env.local`
+  itself recorded; one only the environment names is left alone, noted, not
+  offered.
 - **Re-running** keeps the workspace, the stored key and both secrets. It
   updates only what you change.
 
@@ -156,8 +164,11 @@ It has seven items, all required:
 Each item is `ok`, `warn` or `fail`. A `warn` is not a failure: a provider
 that is connected but not yet verified is a warn until `doctor -- --live`,
 or "Check the model" on the status page, gets an answer. `workspace` is a
-warn when the environment's `RUNNER_WORKSPACE` differs from `.env.local`'s:
-the detail names both paths and says which one the runner uses (P02.2). The
+warn when the environment's `RUNNER_WORKSPACE` really names a different
+folder from `.env.local`'s — compared by real folder, not by string, so a
+trailing slash, a symlink or `..` segments naming the same folder never
+warn (P02.2 revision 1). The detail names both paths and says which one the
+runner uses; the fix line reads `npm run setup -- --workspace <path>`. The
 JSON form is
 `{ ok, checkedAt, items: [{ id, label, status, detail, required, fix? }] }`.
 

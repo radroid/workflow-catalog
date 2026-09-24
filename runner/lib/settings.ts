@@ -73,9 +73,19 @@ export interface RunnerSettings {
    * Undefined when they agree, when there is no ambient value, or when
    * .env.local has no workspace yet (then the environment supplies
    * `workspace` rather than being overridden — not a mismatch). `doctor`'s
-   * one warning (lib/doctor.ts) reads this.
+   * one warning (lib/doctor.ts) reads this; the exact comparison there is by
+   * real folder, not by this field's raw string (revision 1, W2).
    */
   readonly workspaceEnvOverride?: string;
+  /**
+   * Where `workspace` came from: `"file"` once .env.local has one (even if
+   * it also disagrees with an ambient value), `"env"` only when .env.local
+   * has none and the environment supplied it, undefined when there is no
+   * workspace at all. `forget` reads this (revision 1, W3): deleting the
+   * wrong folder is irreversible, so it only ever offers a `"file"`
+   * workspace, and just notes an `"env"` one.
+   */
+  readonly workspaceSource?: "file" | "env";
 }
 
 export interface LoadSettingsOptions {
@@ -135,16 +145,19 @@ export async function loadSettings(options: LoadSettingsOptions = {}): Promise<R
   const fileWorkspace = trimmedText(file[ENV.workspace]);
   const envWorkspace = trimmedText(env[ENV.workspace]);
   let workspaceEnvOverride: string | undefined;
+  let workspaceSource: "file" | "env" | undefined;
   if (fileWorkspace !== undefined) {
     // Setup has already written a workspace: it wins, always. Only note the
     // ambient value for doctor's warning; never let it through.
     merged[ENV.workspace] = fileWorkspace;
+    workspaceSource = "file";
     if (envWorkspace !== undefined && envWorkspace !== fileWorkspace) workspaceEnvOverride = envWorkspace;
   } else if (envWorkspace !== undefined) {
     // No workspace on file yet (a first run, or a test): the environment
     // supplies it, same as every other key.
     merged[ENV.workspace] = envWorkspace;
+    workspaceSource = "env";
   }
 
-  return { ...settingsFromValues(merged, envFileFound), workspaceEnvOverride };
+  return { ...settingsFromValues(merged, envFileFound), workspaceEnvOverride, workspaceSource };
 }
