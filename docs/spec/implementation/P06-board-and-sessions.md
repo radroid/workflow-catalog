@@ -34,4 +34,5 @@ Findings are in `logs/handoff/P04-round-3-review.md`. On top of P06's Owns, thes
 - **The reviewer's nits:**
   - A Re-extract whose waiting-state write fails (for example, `extraction-1.json` is a directory) returns a generic 500. Refuse plainly instead.
   - A job directory that can't be read (for example, chmod 000) drops out of the list, and its detail says "No such job". List it as unreadable and name the folder, as T6 does for files.
+- **The Jobs page's pinned line** (from P03.2's round-1 critic, iter 007): at 640 px and below, the tag runs into the message for assistive tech ("LAST ACTIONExtracting…"). Use the separator P03.2 settles (Q9 in `logs/handoff/P03.2-round-1-review.md`): the visible tag keeps its words, and a visually hidden ": " separates it. The grant covers `runner/ui/jobs.html`'s `#last-action` markup.
 - **The shared secondary button's border** (`#detail-retry` and every `.secondary` button) is 1.27:1, from `runner.css`. Where the border is the button's only visible boundary, it needs 3:1 (WCAG 1.4.11). Use `--muted-foreground`, as G7 does for form controls, and check every runner page.

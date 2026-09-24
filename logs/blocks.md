@@ -1358,3 +1358,41 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **P03.2 gains deliverable 5.** P03's `extract_claims` saves during its own step, the same flaw as P04's round-2 issue 1. P03.2 applies P04's T1 rule: the tool verifies and returns, and the route saves after an ok turn.
   - Any onboarding-eval gate that moves keeps the same check, and is reported.
   - The packet's Owns list and its prompt were updated.
+
+## 2026-09-24 — P03.2 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #17 at 1ed5a91
+**Severity:** medium. The classifier move and deliverable 5 hold. But the extraction route's contract changed without the stop-and-report the prompt required, two guards were lost, and the pinned line now takes three rows on a phone.
+
+**Verdict:** REVISE — 7 issues; UI REVISE — 5 issues.
+- **Reviewer:**
+  1. The HTTP codes, `status` and wording changed, and existing expectations were edited to match.
+  2. A thrown stream is no longer cancelled.
+  3. The 90 s pin was deleted.
+  4. The budget record contradicts the code, and the option is untested.
+  5. The route saves without re-checking quotes, and its category filter is untested.
+  6. Server refusals are announced without their reason.
+  7. The eval has no gate-by-gate mapping.
+- **UI critic:**
+  1. Three rows at 390.
+  2. The 413 upload is announced without its reason.
+  3. Codes show in failure messages.
+  4. "LAST ACTIONNothing yet." on load.
+  5. 10 of 16 screenshots are mislabelled.
+
+**What holds:**
+- The chain, three identical test runs, and CI (Playwright 37/37) are green.
+- Merging onto integration, and with #16 on top, is clean and green: runner 986, evals 161 gates.
+- One classifier, and real-`Client` tests for both callers.
+- A failed turn saves no claims.
+- Every outcome is announced once, focus is never lost, and axe is clean in 102 captures.
+
+**Decision:**
+- Revision 1 goes to the same Sonnet implementer, with Q1–Q12 in `logs/handoff/P03.2-round-1-review.md`.
+- **Ratified (Q1):** every non-ok extraction answers `200 {ok:false, status, message}`. `status` is never "ok" when `ok` is false, and every edited assertion is listed.
+- **Ratified (Q5):** the split into `classifyTurn` and `runTurn`. Neither the model check nor the interactive extraction pauses the budget; P08-B revisits this.
+- **Granted:**
+  - Q2: cancel through the session when the stream throws or ends without a boundary.
+  - Q9: the `#last-action` markup in `onboarding.html` and `profile.html`, for P04's two-row pattern and a visually hidden separator.
+- **Carried to P06:** the Jobs page's tag runs into its message at 640 px and below.
