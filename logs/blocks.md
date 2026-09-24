@@ -1396,3 +1396,49 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
   - Q2: cancel through the session when the stream throws or ends without a boundary.
   - Q9: the `#last-action` markup in `onboarding.html` and `profile.html`, for P04's two-row pattern and a visually hidden separator.
 - **Carried to P06:** the Jobs page's tag runs into its message at 640 px and below.
+
+## 2026-09-24 — P05 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #16 at 3130763
+**Severity:** medium to high. The pipeline, the boundary and the security hold. But the validator (the packet's core promise, "every sentence cites a confirmed claim") lets unstated numbers, inflated titles, open-ended dates and uncited sentences through, and two acceptance tests prove nothing for DOCX.
+
+**Verdict:** REVISE — 9 issues; UI REVISE — 9 issues.
+- **Reviewer:**
+  1. Unstated numbers pass.
+  2. Inflated titles pass.
+  3. Open-ended dates pass.
+  4. Uncited sentences ride along with cited ones.
+  5. The server's re-validation is untested.
+  6. The DOCX acceptance checks are vacuous.
+  7. A damaged record forks the job.
+  8. A corrected name never reaches the documents.
+  9. §5 lacks the new workspace files.
+- **UI critic:**
+  1. The name change (the reviewer's issue 8).
+  2. A stale row and amber after answers.
+  3. Links point to Profile rather than Onboarding.
+  4. No announcement after a reload.
+  5. Silence while the runner is down.
+  6. Anonymous download names.
+  7. A stale note on version 1.
+  8. "???" in the PDF.
+  9. A path not in `<code>`.
+
+**What holds:**
+- Excluded claims never reach the model, and the per-call boundary holds.
+- The turn runs through `runTurn` inside `withRun`, and the server re-reads and re-validates after it.
+- Idempotency holds, including two concurrent Prepares, and so do restarts, the CI race fix and F8.
+- Route security, and the dependencies: exact pins and no install scripts.
+- The chain, three identical test runs and CI (37/37) are green. Merging onto integration, and with #17 on top, is clean and green.
+- axe finds no violations in 127 audits, and all 20 screenshots are right.
+
+**Decision:**
+- Revision 1 goes to the same Opus implementer, with V1–V20 in `logs/handoff/P05-round-1-review.md`. Every validator change is stricter, with a draft-level test.
+- **Rulings:**
+  - V8: a name change re-exports the stored draft as a new version, with no model turn. The key gains `details@<digest>`.
+  - V9: §5 and the ARCHITECTURE index are granted, so the spec changes in the same PR.
+  - V10: the model can't tell an excluded label from an unknown one.
+  - V16: the PDF never drops characters silently; a Unicode font is preferred.
+- **Carried to P06:** a waiting value for a parked preparation in `application.ts`, the nav order, the Jobs page's silent runner-down, and version labels.
+- **Carried to P08-B:** `authorization.required` without a webhook is waiting on the person, and a parked run is not a failure.
