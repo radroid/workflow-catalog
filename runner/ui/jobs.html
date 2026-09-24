@@ -15,8 +15,8 @@
       <h1 id="page-title" tabindex="-1">Jobs</h1>
       <p class="lede">Save a posting from the extension, paste its text, or fetch it from an <code>https://</code> link. Every save that changes the text keeps the version before it — nothing is overwritten.</p>
 
-      <!-- The page's one persistent live region: every success and refusal is announced here. Empty and visually silent until there is something to say. -->
-      <p id="status-message" role="status" aria-live="polite" class="status-message"></p>
+      <!-- The page's one persistent live region (round-1 review L12 item 1, P03's pinned "Last action" line): sticky, so an outcome always shows where the person is working, not just at the top of a long page. -->
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div>
 
       <section class="card" aria-labelledby="paste-title">
         <h2 id="paste-title">Paste a posting</h2>
@@ -24,11 +24,13 @@
         <form id="paste-form" novalidate>
           <div class="field">
             <label for="paste-url">Posting address</label>
-            <input id="paste-url" name="url" type="url" autocomplete="off" placeholder="https://jobs.example/…" required />
+            <input id="paste-url" name="url" type="url" autocomplete="off" placeholder="https://jobs.example/…" aria-describedby="paste-url-error" required />
+            <p id="paste-url-error" class="field-error" hidden></p>
           </div>
           <div class="field">
             <label for="paste-text">Posting text</label>
-            <textarea id="paste-text" name="text" rows="8" required></textarea>
+            <textarea id="paste-text" name="text" rows="8" aria-describedby="paste-text-error" required></textarea>
+            <p id="paste-text-error" class="field-error" hidden></p>
           </div>
           <button class="button" type="submit" id="paste-submit">Save posting</button>
         </form>
@@ -36,11 +38,12 @@
 
       <section class="card" aria-labelledby="url-title">
         <h2 id="url-title">Fetch from a link</h2>
-        <p class="muted small">The runner fetches only <code>https://</code> links, and only public addresses — never a private network or a loopback address.</p>
+        <p class="muted small">The runner fetches only <code>https://</code> links, and only public addresses — never a private or local network address.</p>
         <form id="url-form" novalidate>
           <div class="field">
             <label for="url-input">Posting address</label>
-            <input id="url-input" name="url" type="url" autocomplete="off" placeholder="https://jobs.example/…" required />
+            <input id="url-input" name="url" type="url" autocomplete="off" placeholder="https://jobs.example/…" aria-describedby="url-input-error" required />
+            <p id="url-input-error" class="field-error" hidden></p>
           </div>
           <button class="button" type="submit" id="url-submit">Fetch and save</button>
         </form>
