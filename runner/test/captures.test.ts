@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JobStructured } from "@workflow-catalog/contracts";
+import { MAX_JOB_CAPTURE_URL_LENGTH, type JobStructured } from "@workflow-catalog/contracts";
 import type { Client, ClientSession, MessageResponse, MessageStreamEvent } from "eve/client";
 import { describe, expect, it } from "vitest";
 import { HOSTILE_JOB_STRUCTURED } from "../eval-agent/agent/lib/fixtures/jobs.ts";
@@ -496,5 +496,70 @@ describe("buildJobExtractionPrompt", () => {
     expect(textIndex + text.length).toBeLessThanOrEqual(endOfBlock);
     expect(prompt.slice(0, startOfBlock)).not.toContain(text);
     expect(prompt.slice(endOfBlock)).not.toContain(text);
+  });
+});
+
+describe("captures.ts: stored URLs drop userinfo and fragment (round-1 review L10)", () => {
+  it("the extension event path strips userinfo and fragment before storing", async () => {
+    const bridge = await bridgeWith();
+    const { token } = await pairDevice(bridge);
+    const response = await postEvent(bridge, token, jobCapture({ url: "https://user:pass@jobs.example/posting#section-2", text: "Some posting text." }));
+    const body = (await response.json()) as { result: { jobId: string; revision: number } };
+    const store = new JobsStore(bridge.workspace);
+    const snapshot = await store.getSnapshot(body.result.jobId, body.result.revision);
+    expect(snapshot?.url).toBe("https://jobs.example/posting");
+  });
+
+  it("the paste path strips userinfo and fragment before storing", async () => {
+    const bridge = await bridgeWith();
+    const response = await postCaptures(bridge, "/paste", { url: "https://user:pass@jobs.example/pasted#frag", text: "Pasted posting text." });
+    const body = (await response.json()) as { job: { url: string } };
+    expect(body.job.url).toBe("https://jobs.example/pasted");
+  });
+
+  it("the URL-fetch path strips userinfo and fragment from the *final* URL after a redirect, not just the requested one", async () => {
+    const fakeFetchUrl = async (): Promise<SafeFetchResult> => ({
+      ok: true,
+      status: 200,
+      contentType: "text/plain",
+      text: "Fetched posting text.",
+      finalUrl: "https://user:pass@jobs.example/final-page#section",
+    });
+    const modules: readonly LoadedRouteModule[] = [{ name: "captures", module: createCapturesRouteModule(fakeFetchUrl) }];
+    const bridge = await makeBridge({ modules });
+    const response = await postCaptures(bridge, "/url", { url: "https://jobs.example/start-page" });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { job: { url: string } };
+    expect(body.job.url).toBe("https://jobs.example/final-page");
+  });
+
+  it("refuses a final URL that is still too long even after stripping userinfo and fragment", async () => {
+    // The host alone is over the cap, so stripping the (short) fragment below could never have rescued it — this
+    // is genuinely a too-long address, not a false positive from counting characters this rule already drops.
+    const hugeHost = `${"a".repeat(MAX_JOB_CAPTURE_URL_LENGTH)}.example`;
+    const fakeFetchUrl = async (): Promise<SafeFetchResult> => ({
+      ok: true,
+      status: 200,
+      contentType: "text/plain",
+      text: "Fetched posting text.",
+      finalUrl: `https://${hugeHost}/#frag`,
+    });
+    const modules: readonly LoadedRouteModule[] = [{ name: "captures", module: createCapturesRouteModule(fakeFetchUrl) }];
+    const bridge = await makeBridge({ modules });
+    const response = await postCaptures(bridge, "/url", { url: "https://jobs.example/start-page" });
+    expect(response.status).toBe(413);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("url_too_large");
+  });
+
+  it("two captures of the same page differing only by fragment are the same job, with no new revision (a fragment carries no identity)", async () => {
+    const bridge = await bridgeWith();
+    const { token } = await pairDevice(bridge);
+    const first = await postEvent(bridge, token, jobCapture({ url: "https://jobs.example/same-page#a", text: "Same text." }));
+    const firstBody = (await first.json()) as { result: { jobId: string } };
+    const second = await postEvent(bridge, token, jobCapture({ url: "https://jobs.example/same-page#b", text: "Same text.", eventId: randomUUID() }));
+    const secondBody = (await second.json()) as { result: { jobId: string; contentChanged: boolean } };
+    expect(secondBody.result.jobId).toBe(firstBody.result.jobId);
+    expect(secondBody.result.contentChanged).toBe(false);
   });
 });

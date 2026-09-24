@@ -299,11 +299,32 @@ function normalizeCapturedText(text: string): string {
   return text.trim();
 }
 
+/**
+ * The one URL-normalization rule every capture path applies before storing
+ * (round-1 review L10): drops userinfo (`user:pass@`) and the fragment — a
+ * job posting's identity and content never depend on either, and userinfo
+ * especially should never be written to disk. No other rewriting: scheme,
+ * host, port, path and query pass through untouched. Applied to the URL
+ * every path was already going to store — the extension event's and paste's
+ * own `url`, and, for the fetch path, `fetched.finalUrl` (the address after
+ * following any redirect, which the fetch path's own pre-flight validation
+ * below additionally re-bounds — nothing else validates *that* URL's length
+ * at all before this).
+ */
+function stripUrlForStorage(url: string): string {
+  const parsed = new URL(url);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
 /** The one path every capture (extension event, paste, URL fetch) goes through, so the three produce identical snapshot records for the same text (F6 acceptance). Responds once the snapshot is saved; extraction (when the content changed) is queued, not awaited. */
 export async function captureAndExtract(ctx: RunnerContext, input: CaptureAndExtractInput): Promise<CaptureAndExtractResult> {
   const store = new JobsStore(ctx.workspace);
   const text = normalizeCapturedText(input.text);
-  const capture = await store.captureJob({ ...input, text });
+  const url = stripUrlForStorage(input.url);
+  const capture = await store.captureJob({ ...input, url, text });
   if (!capture.contentChanged) return { capture };
   const extraction = await queueExtraction(ctx, capture.jobId, capture.revision, text);
   return { capture, extraction };
@@ -419,8 +440,16 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
         if (!utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES).safeParse(text).success) {
           return errorResponse(413, "text_too_large", "This posting is over 200 KB. Paste a shorter excerpt instead.");
         }
+        // L10: unlike the paste and extension-event paths (whose url already passed boundedHttpUrlSchema in their
+        // own body schema before this route ever ran), nothing bounds the *final* URL after a redirect — strip
+        // userinfo/fragment first (a long fragment or embedded credentials should not by itself refuse an
+        // otherwise-fine address), then re-check it against the same bounded contract schema the other paths get.
+        const finalUrl = stripUrlForStorage(fetched.finalUrl);
+        if (!boundedHttpUrlSchema(MAX_JOB_CAPTURE_URL_LENGTH).safeParse(finalUrl).success) {
+          return errorResponse(413, "url_too_large", "That page's final address is too long to save. Paste the posting instead.");
+        }
         const result = await captureAndExtract(ctx, {
-          url: fetched.finalUrl,
+          url: finalUrl,
           text,
           extractorVersion: URL_FETCH_EXTRACTOR_VERSION,
           capturedAt: ctx.clock.now().toISOString(),

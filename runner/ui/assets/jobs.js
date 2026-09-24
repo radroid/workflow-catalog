@@ -36,6 +36,7 @@ const FRIENDLY_ERRORS = {
   fetch_request_failed: "The page couldn't be fetched.",
   no_text_extracted: "Couldn't find readable text on that page. Try pasting the posting instead.",
   text_too_large: "This posting is over 200 KB. Paste a shorter excerpt instead.",
+  url_too_large: "That page's final address is too long to save. Paste the posting instead.",
   not_found: "That job couldn't be found.",
 };
 const DEFAULT_ERROR = "That didn't work. Try again.";
