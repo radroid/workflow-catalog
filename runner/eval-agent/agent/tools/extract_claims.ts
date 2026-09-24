@@ -1,5 +1,5 @@
 import { defineWorkflowTool } from "eve/tools";
-import { verifyAndPersistExtractedClaims } from "../../../agent/lib/extract-claims-logic.ts";
+import { verifyExtractedClaims } from "../../../agent/lib/extract-claims-logic.ts";
 import { type ExtractClaimsInput, extractClaimsInputSchema, extractClaimsOutputSchema, type ExtractClaimsOutput, extractClaimsToolDescription } from "../../../agent/lib/extract-claims-schema.ts";
 import { openStore } from "../../../agent/lib/onboarding-store.ts";
 
@@ -12,10 +12,13 @@ import { openStore } from "../../../agent/lib/onboarding-store.ts";
 // step wrapper that calls the directive-free
 // runner/agent/lib/extract-claims-logic.ts, exactly as
 // runner/agent/tools/extract_claims.ts does. The logic is never copied here.
+//
+// P03.2 (deliverable 5): verify-only, like the production tool — it returns
+// the verified claims and never writes them.
 
-async function persistExtractedClaims(input: ExtractClaimsInput): Promise<ExtractClaimsOutput> {
+async function verifyExtraction(input: ExtractClaimsInput): Promise<ExtractClaimsOutput> {
   "use step";
-  return verifyAndPersistExtractedClaims(input, await openStore());
+  return verifyExtractedClaims(input, await openStore());
 }
 
 export default defineWorkflowTool({
@@ -24,6 +27,6 @@ export default defineWorkflowTool({
   outputSchema: extractClaimsOutputSchema,
   async execute(input) {
     "use workflow";
-    return persistExtractedClaims(input);
+    return verifyExtraction(input);
   },
 });

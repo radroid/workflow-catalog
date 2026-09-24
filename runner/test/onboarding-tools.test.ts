@@ -15,6 +15,11 @@ import { newWorkspace } from "./helpers.ts";
  * wrappers against a real workspace (`RUNNER_WORKSPACE`, as in production).
  * The eval exercises the eval agent's root; this file is what makes a change
  * to the production wrappers ("always confirm", "no open-claim check") fail.
+ *
+ * P03.2 (deliverable 5): `extract_claims` is verify-only now (it returns the
+ * verified claims and writes nothing); `extractMetric` below persists them
+ * itself, the way `onboarding.ts`'s route does after an ok turn, since the
+ * `ask_follow_up` tests need a real persisted claim id to exercise against.
  */
 
 interface AskContext {
@@ -22,7 +27,8 @@ interface AskContext {
 }
 
 type AskTool = { execute(input: { claimId: string; question: string }, ctx: AskContext): Promise<{ claimId: string; status: string; message: string }> };
-type ExtractTool = { execute(input: unknown, ctx: unknown): Promise<{ persisted: boolean; added: number; rejected: string[]; sourceCategory: string }> };
+type ExtractedClaim = { text: string; kind: string; evidenceRef: string; evidenceQuote: string };
+type ExtractTool = { execute(input: unknown, ctx: unknown): Promise<{ claims: ExtractedClaim[]; rejected: string[]; sourceCategory: string }> };
 
 const ROOTS = [
   { root: "agent (production)", ask: productionAskFollowUp as unknown as AskTool, extract: productionExtractClaims as unknown as ExtractTool },
@@ -57,7 +63,14 @@ async function extractMetric(tool: ExtractTool): Promise<string> {
     },
     {},
   );
-  expect(output).toMatchObject({ sourceCategory: "resume", persisted: true, added: 1, rejected: ["Rewrote the whole pipeline alone"] });
+  expect(output).toMatchObject({
+    sourceCategory: "resume",
+    claims: [{ text: "Cut the Harbor release time from a day to under an hour.", kind: "metric" }],
+    rejected: ["Rewrote the whole pipeline alone"],
+  });
+  // The route's own next step, after an ok turn (deliverable 5): persist what verified.
+  const saved = await store.extractClaims("resume", output.claims as never);
+  expect(saved.ok).toBe(true);
   return (await store.read()).claims[0]!.id;
 }
 
@@ -73,18 +86,44 @@ function answering(answer: { optionId?: string; text?: string }, asked: string[]
 
 for (const { root, ask, extract } of ROOTS) {
   describe(`${root}: extract_claims`, () => {
-    it("persists only claims whose quote is really in the source, and says it persisted (D14)", async () => {
-      await extractMetric(extract);
+    it("verifies only claims whose quote is really in the source, writing nothing itself (deliverable 5)", async () => {
+      // Q12 (revision 1): the test's own name promises "writing nothing itself" — inlined from
+      // extractMetric (rather than calling it) so the profile can be checked *between* the tool call and
+      // the route's own simulated persist step, proving the claim below, not just its end state.
+      const output = await extract.execute(
+        {
+          sourceCategory: "resume",
+          claims: [
+            { text: "Cut the Harbor release time from a day to under an hour.", kind: "metric", evidenceRef: "pasted.txt#1", evidenceQuote: "from a day to under an hour" },
+            { text: "Rewrote the whole pipeline alone.", kind: "fact", evidenceRef: "pasted.txt#2", evidenceQuote: "Rewrote the whole pipeline alone" },
+          ],
+        },
+        {},
+      );
+      expect(output).toMatchObject({
+        sourceCategory: "resume",
+        claims: [{ text: "Cut the Harbor release time from a day to under an hour.", kind: "metric" }],
+        rejected: ["Rewrote the whole pipeline alone"],
+      });
+      expect((await store.read()).claims).toEqual([]); // the tool alone wrote nothing
+      const saved = await store.extractClaims("resume", output.claims as never); // the route's own next step
+      expect(saved.ok).toBe(true);
+      // S8 (revision 2): round 1's `toBe(claimId)`, restored (revision 1 had weakened it to `toBeDefined()`).
+      // claimId is the id the persist step reports it created, so the claim read back from disk must be that
+      // very claim, not merely some claim with an id.
+      const claimId = saved.profile.claims[0]!.id;
       const claims = (await store.read()).claims;
       expect(claims.map((claim) => claim.status)).toEqual(["candidate"]);
+      expect(claims[0]!.id).toBe(claimId);
     });
 
-    it("reports persisted: false when every quote is fabricated", async () => {
+    it("verifies nothing (an empty claims array) when every quote is fabricated, and persists nothing", async () => {
       const output = await extract.execute(
         { sourceCategory: "resume", claims: [{ text: "Founded Quill.", kind: "fact", evidenceRef: "pasted.txt#x", evidenceQuote: "Founded Quill" }] },
         {},
       );
-      expect(output).toMatchObject({ persisted: false, added: 0, rejected: ["Founded Quill"] });
+      expect(output).toMatchObject({ claims: [], rejected: ["Founded Quill"] });
+      expect((await store.read()).claims).toEqual([]);
     });
   });
 

@@ -66,6 +66,16 @@ import type { Workspace } from "./workspace.ts";
 const DRAFT_FILE = "career-profile.draft.json";
 const FINAL_FILE = "career-profile.json";
 const MARKDOWN_FILE = "career-profile.md";
+/**
+ * P03.2 (round-4 reviewer nit 1, `store/profile.ts:364`): the bound on a
+ * markdown POST body (`routes/onboarding.ts`'s `markdownBodySchema` and
+ * `readBoundedJson` call, which import this) and on `LoadResult.markdownOnDisk`
+ * — the file as it is on disk, shown while it can't be read (J3). A legitimate
+ * write can never exceed this; a hand-edited file that does (someone pastes a
+ * huge blob straight into career-profile.md) is sent back as `null` rather
+ * than echoing an unbounded payload into the page's response.
+ */
+export const MAX_MARKDOWN_BYTES = 512 * 1024;
 const ONBOARDING_STATE = [".runner", "onboarding"] as const;
 /** The SHA-256 of the last career-profile.md this module wrote. A file with that hash is ours, not a hand edit, even if the JSON has moved on since. */
 const MARKDOWN_FINGERPRINT = [...ONBOARDING_STATE, "markdown.json"] as const;
@@ -188,11 +198,30 @@ interface Reconciled {
   readonly rerender: boolean;
 }
 
-/** Put before an action's message when the write also saved hand edits to career-profile.md: short, since the whole message is one pinned line (J5). */
+/**
+ * Put before an action's message when the write also saved hand edits to
+ * career-profile.md: short, since the whole message is one pinned line (J5).
+ *
+ * P03.2 (round-4 reviewer nit 5): this used to say "file edit(s) ... saved" /
+ * "... proposed as a revision/revisions", which the reviewer measured pushing
+ * a combined message to 106 characters (`profile.ts:192-199`, `:347` at the
+ * time). "edit(s)" alone matches this module's own `applyMarkdownEdit`
+ * messages ("1 edit was applied", "2 edits proposed") and
+ * `discardMarkdownEdits`'s "Discarded your edits" — "file edit" was this
+ * function's own inconsistent wording, not an established term elsewhere —
+ * and dropping "as a/revision(s)" removes the one clause with no fixed
+ * length. See profile-store-revision2.test.ts for the combined-length check.
+ *
+ * Q10 (revision 1, critic polish): callers now put this note *after* the
+ * action's own message, not before — the action just taken is the sentence's
+ * own consequence, and a person reads that first ("Accepted. Approval
+ * withdrawn: … needs your answer. 1 edit saved."), not a fact about a file
+ * they didn't just touch.
+ */
 function editsNote(applied: number, proposed: number): string {
   const parts: string[] = [];
-  if (applied > 0) parts.push(`${applied === 1 ? "file edit" : `${applied} file edits`} saved`);
-  if (proposed > 0) parts.push(`${proposed === 1 ? "file edit" : `${proposed} file edits`} proposed as ${proposed === 1 ? "a revision" : "revisions"}`);
+  if (applied > 0) parts.push(`${applied === 1 ? "1 edit" : `${applied} edits`} saved`);
+  if (proposed > 0) parts.push(`${proposed === 1 ? "1 edit" : `${proposed} edits`} proposed`);
   if (parts.length === 0) return "";
   const sentence = parts.join(", ");
   return `${sentence[0]!.toUpperCase()}${sentence.slice(1)}.`;
@@ -344,7 +373,8 @@ export class ProfileStore {
     const { result } = await this.#transaction((profile, reconciled) => {
       const reduced = reduce(profile, action);
       const note = editsNote(reconciled.applied, reconciled.proposed);
-      return { profile: reduced.profile, write: reduced.ok, result: note ? { ...reduced, message: `${note} ${reduced.message}` } : reduced };
+      // Q10 (revision 1): the action's own consequence comes first, the edits note after (see editsNote's doc comment).
+      return { profile: reduced.profile, write: reduced.ok, result: note ? { ...reduced, message: `${reduced.message} ${note}` } : reduced };
     });
     return result;
   }
@@ -361,7 +391,10 @@ export class ProfileStore {
       return { profile, markdownError: null, markdownOnDisk: null };
     } catch (error) {
       if (!(error instanceof ProfileMarkdownError)) throw error;
-      return { profile: await this.read(), markdownError: error.problem, markdownOnDisk: (await this.#readMarkdownFile()) ?? null };
+      const onDisk = await this.#readMarkdownFile();
+      // Nit 1: null past MAX_MARKDOWN_BYTES, not an unbounded echo of whatever is on disk.
+      const markdownOnDisk = onDisk !== undefined && Buffer.byteLength(onDisk, "utf8") <= MAX_MARKDOWN_BYTES ? onDisk : null;
+      return { profile: await this.read(), markdownError: error.problem, markdownOnDisk };
     }
   }
 
@@ -379,7 +412,8 @@ export class ProfileStore {
       const reduced = reduce(profile, { type: "extractClaims", category, extracted, now: this.#now(), newId });
       const note = editsNote(reconciled.applied, reconciled.proposed);
       const added = reduced.ok ? reduced.profile.claims.length - profile.claims.length : 0;
-      return { profile: reduced.profile, write: reduced.ok, result: { ...reduced, message: note ? `${note} ${reduced.message}` : reduced.message, added } };
+      // Q10 (revision 1): the action's own consequence comes first, the edits note after.
+      return { profile: reduced.profile, write: reduced.ok, result: { ...reduced, message: note ? `${reduced.message} ${note}` : reduced.message, added } };
     });
     return result;
   }
@@ -463,10 +497,14 @@ export class ProfileStore {
       const read = readMarkdownEdits(current, markdown);
       if (!read.ok) return { profile: current, write: false, message: "", refusal: new ProfileMarkdownError(read.problem, "request") };
       const next = this.#applyEdits(current, read.edits);
+      // P03.2 (round-4 UI critic polish 2): the proposed-revisions clause used to read "N edit(s) are now
+      // proposed revisions; version V stays in force until you accept it/them" -- measured at 90 characters
+      // for the solo-proposed case (2 edits), overrunning the two-line clamp at 640px and losing "them."
+      // Shortened, with the count stated plainly and no restated "revision(s)" noun.
       const parts = [
         next.applied > 0 ? `${next.applied === 1 ? "1 edit was" : `${next.applied} edits were`} applied` : "",
         next.proposed > 0
-          ? `${next.proposed === 1 ? "1 edit is now a proposed revision" : `${next.proposed} edits are now proposed revisions`}; version ${current.approval?.version ?? 1} stays in force until you accept ${next.proposed === 1 ? "it" : "them"}`
+          ? `${next.proposed === 1 ? "1 edit proposed" : `${next.proposed} edits proposed`}; version ${current.approval?.version ?? 1} stays in force until you decide`
           : "",
       ].filter(Boolean);
       const message = parts.length === 0 ? "Nothing to save: the text is the same as the profile." : `Saved. ${parts.join(", and ")}.`;

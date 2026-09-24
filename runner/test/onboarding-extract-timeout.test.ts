@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { verifyAndPersistExtractedClaims } from "../agent/lib/extract-claims-logic.ts";
+import { verifyExtractedClaims } from "../agent/lib/extract-claims-logic.ts";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { createEveGateway } from "../server/eve-gateway.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
@@ -13,13 +13,23 @@ import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
  * per docs/spec/research/eve-runtime.md §8 item 15. `createEveGateway` builds
  * the same `Client` the runner uses; global `fetch` is stubbed with a
  * scripted eve server, so no port is bound and nothing live is contacted.
+ * `run-harness.ts`'s `classifyTurn` is what the route now runs every turn
+ * through (P03.2 deliverable 1), so this file also doubles as its one
+ * real-`Client` acceptance test for the extraction caller: the spike's
+ * normal sequence (ok), `turn.cancelled` (not ok), an abort (timeout, with a
+ * cancel through the session, below in three variants), and a non-empty
+ * `input.requested` (parked).
  *
  * eve's client ends a turn quietly, as "completed", when the deadline fires
- * while it is opening or reopening the event stream. The route must still
- * report a timeout (504), cancel the session through `ClientSession.cancel()`
+ * while it is opening or reopening the event stream. `classifyTurn` still
+ * reports a timeout, cancels the session through `ClientSession.cancel()`
  * (`MessageResponse.cancel()` sends nothing before the client has seen the
- * turn start, or once the turn is parked), and record no content hash, so
- * the same text is extracted again next time.
+ * turn start, or once the turn is parked), and the route records no content
+ * hash for it, so the same text is extracted again next time. `runTurn`
+ * never rejects (P03.2): every outcome below, including a timeout, comes
+ * back as a normal `ok: false` JSON response, not a distinct HTTP code —
+ * mvp-spec.md specifies none, and the page never reads the route's own HTTP
+ * status for this call, only `ok`/`message` (see the report).
  *
  * J1 (P03 revision 3): a turn eve cancelled ends `turn.cancelled`, then
  * `session.waiting`; it is not ok either. The control is the P02 spike's
@@ -27,6 +37,14 @@ import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
  * result in the middle: `session.started → turn.started → message.received →
  * step.started → action.result → message.appended → message.completed →
  * step.completed → turn.completed → session.waiting`.
+ *
+ * P03.2 (deliverable 5, P04's T1 rule): `extract_claims` only verifies and
+ * returns now; the route persists what it verified through
+ * `ProfileStore.extractClaims`, and only once `classifyTurn` reports the
+ * whole turn "ok". The J1 (cancelled) and lease-end-then-hang-reopen
+ * (timeout) cases below are this packet's mutation-proof regression tests
+ * for the bug that fixes: a claim the tool step verified mid-turn must not
+ * survive a turn that did not finish ok.
  */
 
 const COOKIE = `${UI_COOKIE}=${UI_TOKEN}`;
@@ -34,7 +52,8 @@ const SAME_ORIGIN = { cookie: COOKIE, origin: BRIDGE, "content-type": "applicati
 const SESSION = "s-extract";
 const CANCEL_PATH = `/eve/v1/session/${SESSION}/cancel`;
 const SHORT_DEADLINE_MS = 300;
-const TIMED_OUT = { code: "extraction_timed_out", message: "No answer from the model within 300 ms, so the extraction was stopped. Try again." };
+// S6 (revision 2, UI critic issue 2): the consequence first.
+const TIMED_OUT = { ok: false, status: "timeout", message: "The extraction stopped: no answer from the model within 300 ms. Try again.", claims: [] };
 const RESUME_TEXT = "Led the payments team at Northwind Labs. Cut the Harbor release time from a day to under an hour.";
 const LED_CLAIM = { text: "Led the payments team at Northwind Labs.", kind: "fact" as const, evidenceRef: "pasted.txt#1", evidenceQuote: "Led the payments team at Northwind Labs." };
 
@@ -90,7 +109,7 @@ function stubEve(plan: Plan, bridge: () => TestBridge): FakeEve {
 
   const extractClaimsResult = async (sequence: number): Promise<Record<string, unknown>> => {
     const { workspace, clock } = bridge();
-    const output = await verifyAndPersistExtractedClaims({ sourceCategory: "resume", claims: [LED_CLAIM] }, new ProfileStore(workspace, clock));
+    const output = await verifyExtractedClaims({ sourceCategory: "resume", claims: [LED_CLAIM] }, new ProfileStore(workspace, clock));
     return streamEvent("action.result", {
       callId: "call-1",
       result: { kind: "tool-result", callId: "call-1", toolName: "extract_claims", output },
@@ -216,7 +235,8 @@ describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §
     const response = await post(bridge, "/sources/resume/extract");
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string }> };
-    expect(body).toMatchObject({ ok: true, status: "waiting", message: "1 candidate claim extracted from Resume." });
+    // P03.2 (deliverable 1): TurnResult's own vocabulary ("ok"), not eve's raw "waiting" boundary.
+    expect(body).toMatchObject({ ok: true, status: "ok", message: "1 candidate claim extracted from Resume." });
     expect(body.claims.map((claim) => claim.text)).toEqual([LED_CLAIM.text]);
     expect(eve.cancels()).toBe(0);
     expect(await hashRecorded(bridge)).toBe(true);
@@ -225,15 +245,19 @@ describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §
     expect(eve.sessionsCreated()).toBe(1);
   });
 
-  it("J1: a cancelled turn (extract_claims persisted → turn.cancelled → session.waiting) is not ok, records no hash, keeps the saved claim, and the same text runs again", async () => {
+  it("J1, deliverable 5: a cancelled turn (extract_claims verified → turn.cancelled → session.waiting) is not ok, records no hash, and saves nothing — the claim the tool step verified before the cancel is never persisted", async () => {
     const { bridge, eve } = await bridgeWithRealClient("cancelled");
     await provideResume(bridge);
     const response = await post(bridge, "/sources/resume/extract");
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string; status: string }> };
-    expect(body).toMatchObject({ ok: false, status: "waiting", message: "The extraction was stopped before it finished. Try again." });
-    // As on the timeout path: the claim the tool step saved before the cancel stays a candidate.
-    expect(body.claims.map((claim) => [claim.text, claim.status])).toEqual([[LED_CLAIM.text, "candidate"]]);
+    // TurnResult's own vocabulary ("cancelled"), not eve's raw "waiting" boundary (deliverable 1).
+    expect(body).toMatchObject({ ok: false, status: "cancelled", message: "The extraction was stopped before it finished. Try again." });
+    // P04's T1 rule (deliverable 5): extract_claims only verifies now; the route persists only after an ok
+    // turn, so a claim the tool step verified before the cancel is never saved — this is the regression test
+    // for the bug the packet describes: "a turn that fails after the tool ran leaves claims behind".
+    expect(body.claims).toEqual([]);
+    expect((await new ProfileStore(bridge.workspace, bridge.clock).read()).claims).toEqual([]);
     expect(await hashRecorded(bridge)).toBe(false);
     // The turn already ended (session.waiting follows the cancel), so there is nothing to cancel.
     expect(eve.cancels()).toBe(0);
@@ -242,41 +266,44 @@ describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §
     expect(eve.sessionsCreated()).toBe(2);
   });
 
-  it("the deadline fires while the stream is opening: result() resolves quietly, and the route still reports a timeout and cancels the session", async () => {
+  it("the deadline fires while the stream is opening: the stream resolves quietly, and the route still reports a timeout and cancels the session", async () => {
     extractionTiming.timeoutMs = SHORT_DEADLINE_MS;
     const { bridge, eve } = await bridgeWithRealClient("hang-open");
     await provideResume(bridge);
     const response = await post(bridge, "/sources/resume/extract");
-    expect(response.status).toBe(504);
-    expect(((await response.json()) as { error: unknown }).error).toEqual(TIMED_OUT);
+    // P03.2 (deliverable 1): runTurn never rejects — a timeout is a normal ok:false TurnResult, the same as
+    // every other non-ok status, not a distinct HTTP code (mvp-spec.md specifies none; mirrors eve-gateway.ts).
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(TIMED_OUT);
     expect(eve.cancels()).toBe(1);
     expect(eve.requests.at(-1)).toBe(`POST ${CANCEL_PATH}`);
-    expect(bridge.logs).toContain("onboarding: extraction turn for resume timed out after 300 ms");
+    expect(bridge.logs).toContain("onboarding: extraction turn for resume ended timeout (No answer within 0.3 s.)");
     expect(await hashRecorded(bridge)).toBe(false);
   });
 
-  it("the deadline fires while the stream reopens after a lease ends: claims the tool saved stay, but the turn is a timeout, cancelled, with no hash", async () => {
+  it("the deadline fires while the stream reopens after a lease ends: the turn is a timeout, cancelled, with no hash, and deliverable 5 saves nothing the tool verified before the deadline", async () => {
     extractionTiming.timeoutMs = SHORT_DEADLINE_MS;
     const { bridge, eve } = await bridgeWithRealClient("lease-end-then-hang-reopen");
     await provideResume(bridge);
     const response = await post(bridge, "/sources/resume/extract");
-    expect(response.status).toBe(504);
-    expect(((await response.json()) as { error: unknown }).error).toEqual(TIMED_OUT);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(TIMED_OUT);
     expect(eve.cancels()).toBe(1);
     expect(eve.requests.filter((request) => request.endsWith("/stream"))).toHaveLength(2);
     expect(await hashRecorded(bridge)).toBe(false);
-    // The claim the tool step saved before the deadline is a candidate on the page.
+    // Deliverable 5: the claim the tool step verified before the deadline is never persisted — the turn never
+    // reached "ok", so the route never calls ProfileStore.extractClaims.
     const claims = (await new ProfileStore(bridge.workspace, bridge.clock).read()).claims;
-    expect(claims.map((claim) => [claim.text, claim.status])).toEqual([[LED_CLAIM.text, "candidate"]]);
+    expect(claims).toEqual([]);
   });
 
-  it("control: the deadline fires while an open stream is read: result() throws, and the route reports a timeout and cancels the session", async () => {
+  it("control: the deadline fires while an open stream is read: the route reports a timeout and cancels the session", async () => {
     extractionTiming.timeoutMs = SHORT_DEADLINE_MS;
     const { bridge, eve } = await bridgeWithRealClient("events-then-hang-read");
     await provideResume(bridge);
     const response = await post(bridge, "/sources/resume/extract");
-    expect(response.status).toBe(504);
-    expect(((await response.json()) as { error: unknown }).error).toEqual(TIMED_OUT);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(TIMED_OUT);
     expect(eve.cancels()).toBe(1);
     expect(await hashRecorded(bridge)).toBe(false);
   });
@@ -288,8 +315,8 @@ describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       ok: false,
-      status: "waiting",
-      message: "The model asked a question this page can't show, so the extraction stopped. Try again.",
+      status: "parked", // TurnResult's own vocabulary, not eve's raw "waiting" boundary (deliverable 1)
+      message: "The extraction stopped: the model asked a question this page can't show. Try again.", // S6: the consequence first
     });
     expect(eve.cancels()).toBe(1);
     expect(eve.requests.at(-1)).toBe(`POST ${CANCEL_PATH}`);
@@ -300,8 +327,8 @@ describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §
     extractionTiming.timeoutMs = SHORT_DEADLINE_MS;
     const { bridge, eve } = await bridgeWithRealClient("hang-open");
     await provideResume(bridge);
-    expect((await post(bridge, "/sources/resume/extract")).status).toBe(504);
-    expect((await post(bridge, "/sources/resume/extract")).status).toBe(504);
+    expect((await (await post(bridge, "/sources/resume/extract")).json()) as { status: string }).toMatchObject({ status: "timeout" });
+    expect((await (await post(bridge, "/sources/resume/extract")).json()) as { status: string }).toMatchObject({ status: "timeout" });
     expect(eve.sessionsCreated()).toBe(2);
     expect(eve.cancels()).toBe(2);
   });

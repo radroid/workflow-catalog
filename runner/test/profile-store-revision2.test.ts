@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ManualClock } from "../lib/clock.ts";
 import { renderProfileMarkdown } from "../store/profile-markdown.ts";
 import { pendingRevisions } from "../store/profile-reducer.ts";
-import { ProfileMarkdownError, ProfileStore, UnsupportedUploadError, uploadFileName } from "../store/profile.ts";
+import { MAX_MARKDOWN_BYTES, ProfileMarkdownError, ProfileStore, UnsupportedUploadError, uploadFileName } from "../store/profile.ts";
 import { PROFILE_BUSY_MESSAGE, ProfileBusyError } from "../store/profile-writes.ts";
 import type { Workspace } from "../store/workspace.ts";
 import { newWorkspace, tempDir } from "./helpers.ts";
@@ -62,11 +62,29 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
 
     const result = await store.addStatement("preference", "Remote-first roles.");
     expect(result.ok).toBe(true);
-    expect(result.message).toBe("File edit saved. Your preference is recorded.");
+    // Q10 (revision 1, critic polish): the edits note now comes after the action's own consequence.
+    expect(result.message).toBe("Your preference is recorded. 1 edit saved.");
     const profile = await store.read();
     expect(profile.claims.find((c) => c.id === claimId)?.text).toBe("Rebuilt the Harbor deployment pipeline.");
     expect(profile.preferences.map((p) => p.text)).toEqual(["Remote-first roles."]);
     expect(await readFile(md, "utf8")).toBe(renderProfileMarkdown(profile));
+  });
+
+  it("P03.2 (round-4 reviewer nit 5): two hand edits at once still keep the prefixed message short", async () => {
+    // The reviewer measured the old wording ("file edit(s) ... saved/proposed as a revision/revisions")
+    // pushing a combined message to 106 characters (profile.ts:192-199, :347 at the time). Two edits at
+    // once (both of the profile's default boundaries) exercises editsNote's plural branch; the fix is the
+    // shorter "edit(s) saved"/"edit(s) proposed" wording, not a cap on how many edits can land at once.
+    const { store, md } = await setup();
+    const [first, second] = (await store.load()).profile.boundaries;
+    await handEdit(md, `- ${first!.text}`, "- Never invent a metric, a credential or a responsibility.");
+    await handEdit(md, `- ${second!.text}`, "- Never change a date or a title.");
+
+    const result = await store.addStatement("preference", "Remote-first roles.");
+    // Q10 (revision 1, critic polish): the edits note now comes after the action's own consequence.
+    expect(result.message).toBe("Your preference is recorded. 2 edits saved.");
+    expect(result.message.length).toBeLessThanOrEqual(90);
+    expect((await store.read()).boundaries.map((b) => b.text)).toEqual(["Never invent a metric, a credential or a responsibility.", "Never change a date or a title."]);
   });
 
   it("keeps a hand-edited boundary when the next write is a different kind of change (the round-2 probe B)", async () => {
@@ -134,6 +152,37 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     expect((await store.load()).markdownError).toBeNull();
   });
 
+  it("P03.2 (round-4 reviewer nit 1): markdownOnDisk is null once the unreadable file exceeds MAX_MARKDOWN_BYTES, not echoed unbounded", async () => {
+    const { store, md } = await setup();
+    const claimId = await withConfirmedClaim(store);
+    await handEdit(md, ` \`[${claimId}]\``, ""); // the same missing-marker refusal as the test above
+    const stillUnreadable = `${await readFile(md, "utf8")}\n<!-- ${"x".repeat(MAX_MARKDOWN_BYTES)} -->`;
+    expect(Buffer.byteLength(stillUnreadable, "utf8")).toBeGreaterThan(MAX_MARKDOWN_BYTES);
+    await writeFile(md, stillUnreadable);
+
+    const loaded = await store.load();
+    expect(loaded.markdownError).not.toBeNull(); // still the same unreadable file, just larger
+    expect(loaded.markdownOnDisk).toBeNull();
+  });
+
+  it("Q12 (revision 1): the size cap measures bytes, not UTF-16 code units — a multibyte file over MAX_MARKDOWN_BYTES in bytes but under it in .length is still nulled", async () => {
+    // Nit 1's own test above only ever used ASCII ("x"), where .length and Buffer.byteLength agree, so
+    // mutating the real byte measure to onDisk.length passed every existing test unnoticed. "€" (U+20AC) is
+    // one UTF-16 code unit but three UTF-8 bytes: repeated, .length undercounts the real byte size by 3x.
+    const { store, md } = await setup();
+    const claimId = await withConfirmedClaim(store);
+    await handEdit(md, ` \`[${claimId}]\``, "");
+    const padding = "€".repeat(200_000);
+    const stillUnreadable = `${await readFile(md, "utf8")}\n<!-- ${padding} -->`;
+    expect(stillUnreadable.length).toBeLessThanOrEqual(MAX_MARKDOWN_BYTES); // a .length-based check would wrongly pass this
+    expect(Buffer.byteLength(stillUnreadable, "utf8")).toBeGreaterThan(MAX_MARKDOWN_BYTES); // genuinely over, in bytes
+    await writeFile(md, stillUnreadable);
+
+    const loaded = await store.load();
+    expect(loaded.markdownError).not.toBeNull();
+    expect(loaded.markdownOnDisk).toBeNull();
+  });
+
   it("N6 (revision 3): claim text shaped like markers never makes the runner's own file unreadable", async () => {
     const { store, md } = await setup();
     await accountAll(store);
@@ -150,7 +199,8 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     // A hand edit elsewhere in the file still saves; nothing is locked.
     await handEdit(md, "- Do not change employment dates or official titles.", "- Never change a date or a title.");
     const result = await store.addStatement("preference", "Remote-first roles.");
-    expect(result.message).toBe("File edit saved. Your preference is recorded.");
+    // Q10 (revision 1, critic polish): the edits note now comes after the action's own consequence.
+    expect(result.message).toBe("Your preference is recorded. 1 edit saved.");
     const profile = await store.read();
     expect(profile.claims[0]!.text).toBe(hostile);
     expect(profile.boundaries.map((b) => b.text)).toEqual([boundary.text, "Never change a date or a title."]);
@@ -334,7 +384,7 @@ describe("the Profile page's markdown save", () => {
     const unchanged = await store.applyMarkdownEdit(page, sha256(page));
     expect(unchanged.message).toBe("Nothing to save: the text is the same as the profile.");
     const saved = await store.applyMarkdownEdit(page.replace("Worked on the Harbor", "Rebuilt the Harbor"), sha256(page));
-    expect(saved.message).toBe("Saved. 1 edit is now a proposed revision; version 1 stays in force until you accept it.");
+    expect(saved.message).toBe("Saved. 1 edit proposed; version 1 stays in force until you decide.");
   });
 
   it("refuses an unreadable page edit with the reason, and a page copy older than a hand edit to the file", async () => {

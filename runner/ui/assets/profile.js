@@ -96,6 +96,12 @@ function keepInPlace(change) {
   if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
 }
 
+/**
+ * Q9 (revision 1, critic 1 and 4): the visible tag carries no colon (the
+ * walkthrough's own words) -- a *visually hidden* ": " between `.tag` and
+ * `.text` in the static markup (profile.html's `#last-action`) separates
+ * them for assistive tech instead, on load and after every action.
+ */
 function lastAction(message, tone = "done") {
   const node = $("last-action");
   const tag = node.querySelector(".tag");
@@ -255,6 +261,14 @@ async function run(id, work) {
   if (busy.has(id)) return;
   busy.add(id);
   setBusy(id, true);
+  // Q12 (revision 1): tightened -- "save-markdown" is excluded because its own onclick handler sets
+  // editorError on both its outcomes (the error on a refused save, null on a successful one; see below), so
+  // it must not be cleared here first. Every other action is unrelated to the editor: a reason left over from
+  // an earlier failed save must not keep showing a red box after it (e.g. Accept on a pending revision, which
+  // re-renders the whole page, including the editor, on success). Clearing the variable here is enough --
+  // run()'s own render (below, on success or in its catch branch) always follows this line, so the next
+  // renderEditor() call picks the cleared value up.
+  if (id !== "save-markdown") editorError = null;
   try {
     await work();
   } catch (error) {
