@@ -24,3 +24,14 @@ The board tracks intent; a session turns Ready applications into a manifest the 
 
 ## Out of scope
 The extension (P07), schedules (P08).
+
+## Carried in from P04's round-3 reviews (iter 006)
+Findings are in `logs/handoff/P04-round-3-review.md`. On top of P06's Owns, these small edits are granted: `runner/ui/assets/jobs.js` and `jobs.css`, `runner/server/routes/captures.ts` and `runner/store/jobs.ts` for the two server items, the secondary-button rule in `runner/ui/assets/runner.css`, and new tests. The UI critic checks them with the board.
+- **P1.** If a job's only file becomes unreadable while focus is on its Re-extract button, the old "What the runner found" section stays under the new message, even after focus leaves. Move focus to the heading, then drop the section.
+- **P2.** When two extractions the page started finish in the same refresh, the first message is replaced before it's shown. Combine them into one line.
+- **P3.** The 80-character name cap cuts mid-word ("Staff Platform Engin…"). Cut at a word.
+- **P4.** A job whose latest file is damaged is listed by its URL path, but its detail heading uses the title. The "(latest revision)" toggle label then shows revision 1. Use one name, and label the toggle with the revision actually shown.
+- **The reviewer's nits:**
+  - A Re-extract whose waiting-state write fails (for example, `extraction-1.json` is a directory) returns a generic 500. Refuse plainly instead.
+  - A job directory that can't be read (for example, chmod 000) drops out of the list, and its detail says "No such job". List it as unreadable and name the folder, as T6 does for files.
+- **The shared secondary button's border** (`#detail-retry` and every `.secondary` button) is 1.27:1, from `runner.css`. Where the border is the button's only visible boundary, it needs 3:1 (WCAG 1.4.11). Use `--muted-foreground`, as G7 does for form controls, and check every runner page.

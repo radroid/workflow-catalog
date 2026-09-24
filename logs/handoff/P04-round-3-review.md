@@ -2,7 +2,50 @@
 
 Revision 2 was done by the Opus escalation implementer, with T1–T21 from `logs/handoff/P04-round-2-review.md`. CI run 35968469459 is green, with Playwright 37/37.
 
-## Reviewer (Opus): pending
+## Reviewer (Opus): APPROVE
+
+Scratch:
+- `/tmp/wc-rev-p04-r3-probes/`: the queue, hostile and permissions probes, and the real-transport probe;
+- `/tmp/wc-rev-p04-r3-mutations/`: `mutate.mjs`, the backups, the per-mutation logs, and the `node:dns` stub with its call log;
+- `/tmp/wc-rev-p04-r3-work/`: the chain, flake, both-variables and merge logs, and the CI log.
+
+**Fixed, all six round-2 issues:**
+- **T1: fields.** A turn that calls `extract_job` and then fails keeps the old fields. Fields are saved only after the turn ends ok. The check never writes.
+- **T2: stale state.** A stale `waiting` or `running` state, owned by another process or by no one, reads interrupted, and a retry completes.
+- **T3: budget.** A provider limit on the first turn stops the second and third, which read "not run, budget paused".
+- **T4: body errors.** Over the real TLS transport:
+  - a slow drip, a stall or DNS that never answers gives `timeout`;
+  - a reset or a short body gives `request_failed`;
+  - an endless body gives `too_large`.
+- **T5: one text rule.** Four Northwind whitespace variants on three paths give one hash.
+- **T6: damaged data** is listed and named. A damaged extraction state reads interrupted, and a recapture lands in the same job.
+
+**Fixed, all of the nits:**
+- M6b for DNS names fails 5 of 92 tests.
+- Timing tests have at least 4× headroom.
+- T8's both-variables case passes 105/105 gates.
+- Whitespace-only text gets 400 on paste and 422 `rejected` on the event path.
+- Concurrent Re-extracts queue one turn.
+- 20 addresses are blocked, and 14 neighbours allowed.
+
+**Mutations:**
+- M3a, M6b, M6b-ii and M8 all fail tests.
+- Seven of the implementer's T21 proofs were spot-checked, and all fail tests.
+- **M7 is proven without real DNS:** a vitest setup stubs `node:dns`, and with the pin removed, 5 of 92 tests fail.
+
+**Regressions: none.**
+- Queue concurrency, write failures, snapshots damaged mid-turn, shutdown and restart, and the hostile posting all hold.
+- **Flakiness: none.** Six runs all passed 830 runner tests and 105/105 gates. The implementer's silent gate exit didn't reproduce.
+
+**Scope, chain, merge and CI:**
+- Scope is clean.
+- The chain at the head is green.
+- The merge onto 4beaf42 is green: 852 tests and 105/105 gates.
+- CI 35968469459: Playwright 37/37.
+
+**Nits** (beyond T6's file-level wording):
+- A Re-extract whose waiting-state write fails, for example when `extraction-1.json` is a directory, gives a generic 500.
+- A job directory that can't be read (chmod 000) drops out of the list, and its detail says 404.
 
 ## UI critic (Opus): APPROVE
 

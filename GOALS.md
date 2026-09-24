@@ -14,7 +14,7 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 ## Phase 2 — Own the workflow
 
 - [x] P2.A — P03 Onboarding and career profile — sources accounting, claims, readiness lock, profile file; spec P03; blocked by P1.D. Done iter 005, PR #11 (squash 9821bee).
-- [ ] P2.B — P04 Job capture — extension/paste/URL paths, snapshots, hostile fixture, shared safe-fetch; spec P04; blocked by P2.A (rulebook: P04 after P03).
+- [x] P2.B — P04 Job capture — extension/paste/URL paths, snapshots, hostile fixture, shared safe-fetch; spec P04; blocked by P2.A (rulebook: P04 after P03). Done iter 006, PR #14 (squash 08262a1).
 - [x] P2.C — P07.A Extension: manifest, pairing page, capture extractor, file export — no bridge calls yet; spec P07; blocked by P1.A. Done iter 003, PR #7 (squash bc55bb3).
 - [x] P2.D — P09.B Catalog: template page from workflow.json, release workflow — spec P09; blocked by P1.B, P1.E. Done iter 003, PR #6 (squash a9032b3); first release owner-gated.
 - [x] P2.E — P07.B Extension: pairing and job_capture against the bridge — spec P07 and P04; blocked by P1.D, P2.C. Done iter 005, PR #12 (squash e01017c).

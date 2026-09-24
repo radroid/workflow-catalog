@@ -1341,3 +1341,20 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - Merged: squash 2b93cf0. The remote branch is deleted, the worktrees removed, and GOALS P3.G ticked.
 - Nits R2-N1 (README wording), R2-N2 (a case-only doctor test) and R2-N5 (`eve-env.ts`'s `PATH` source) are carried into P10 part B, with those lines granted.
 - R2-N3, R2-N4 and R2-N6 are dropped as trivial.
+
+## 2026-09-24 — P04 peer review, round 3 [APPROVED]
+
+**Iter:** 006
+**Source:** peer-review (the same Opus reviewer) and UI critic (the same Opus critic), PR #14 at ffc4a0a (revision 2, Opus escalation)
+**Severity:** —
+
+**Verdicts:** both APPROVE.
+- The reviewer confirmed every round-2 issue and nit fixed with probes (T1–T10). M7 is now proven without real DNS, using a vitest `node:dns` stub. No regressions, and no flakes in six runs.
+- The UI critic confirmed every round-2 issue and polish item fixed, and the 41 screenshots right.
+
+**Decision:**
+- Merged: squash 08262a1. The remote branch is deleted, the worktrees removed, and GOALS P2.B ticked.
+- **Carried into P06**, with grants: the UI polish P1–P4, the reviewer's two nits (an unwritable waiting state gives a 500; an unreadable job directory drops out of the list), and the shared `.secondary` button border in `runner.css`, at 1.27:1.
+- **P03.2 gains deliverable 5.** P03's `extract_claims` saves during its own step, the same flaw as P04's round-2 issue 1. P03.2 applies P04's T1 rule: the tool verifies and returns, and the route saves after an ok turn.
+  - Any onboarding-eval gate that moves keeps the same check, and is reported.
+  - The packet's Owns list and its prompt were updated.

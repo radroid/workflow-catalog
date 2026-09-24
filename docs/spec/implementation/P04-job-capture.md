@@ -1,6 +1,6 @@
 # P04 · Job capture
 
-Status: claimed (iter 006)
+Status: done (iter 006, PR #14, squash 08262a1)
 Assignee: iter-006 escalation implementer (Opus), revision 2 (T1–T21); round 0 and revision 1 by the iter-006 implementer (Sonnet)
 Blocked by: P03
 Owns: runner/server/routes/captures.ts, runner/store/jobs.ts, runner/lib/safe-fetch.ts, runner/lib/readable-text.ts, runner/agent/tools/ (the job-extraction tool only), the eval-agent re-export, fixture and tool-registry entries and eval for it, runner/ui/jobs.html and its script, runner/test/ (new tests for these files), packages/job-assistant/fixtures/jobs/
