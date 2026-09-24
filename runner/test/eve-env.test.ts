@@ -1,12 +1,12 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildEveEnv } from "../cli/runner.ts";
+import { buildEveEnv } from "../lib/eve-env.ts";
 
 /**
- * eve's child environment (P02.2 deliverable 4; revision 1, W4).
- * `buildEveEnv` is a pure function: importing it does not run `main()` (the
- * module guards its script body behind an entry-point check), so these tests
- * never load the real settings, probe a real port, or spawn eve.
+ * eve's child environment (P02.2 deliverable 4; revision 1, W4). `buildEveEnv`
+ * is a pure function in its own module (lib/eve-env.ts), never cli/runner.ts's
+ * top-level script, so importing it here never loads the real settings,
+ * probes a real port, or spawns eve.
  */
 describe("buildEveEnv", () => {
   it("the resolved workspace (settings.values) overrides an ambient one already in the process environment", () => {

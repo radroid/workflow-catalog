@@ -1,17 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { connect } from "node:net";
-import path from "node:path";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
 import { buildAdapter, buildRunner, computeBuildStamp, eveCli, needsBuild, recordBuildStamp } from "../lib/build.ts";
 import { systemClock } from "../lib/clock.ts";
-import { evePathEnv } from "../lib/codex.ts";
 import { runDoctor } from "../lib/doctor.ts";
+import { buildEveEnv } from "../lib/eve-env.ts";
 import { launchRunner } from "../lib/launcher.ts";
 import { readPackageVersion } from "../lib/package-info.ts";
 import { ROUTES_DIR, RUNNER_DIR } from "../lib/paths.ts";
 import { API_KEY_ENV, API_KEY_SECRET_NAME, createOsSecretStore, RUNNER_SECRET_SERVICE } from "../lib/secret-store.ts";
-import { loadSettings, PRIVACY_ENV } from "../lib/settings.ts";
+import { loadSettings } from "../lib/settings.ts";
 import { Workspace } from "../store/workspace.ts";
 import { BRIDGE_HOST, BRIDGE_ORIGIN, BRIDGE_PORT, listen } from "../server/app.ts";
 import { consoleLogger, createRunnerContext } from "../server/context.ts";
@@ -49,124 +47,93 @@ function pipeWithPrefix(child: ChildProcess, prefix: string): void {
   if (child.stderr) createInterface({ input: child.stderr }).on("line", (line) => process.stderr.write(`${prefix}${line}\n`));
 }
 
-export interface BuildEveEnvOptions {
-  readonly processEnv: NodeJS.ProcessEnv;
-  /** settings.values (lib/settings.ts): the resolved workspace, per loadSettings's precedence, is in here. */
-  readonly settingsValues: Readonly<Record<string, string>>;
-  readonly codexDir?: string;
+// Closing the terminal sends SIGHUP, and lib/launcher.ts then stops eve.
+// From then on, writing to the terminal fails (EPIPE, or EIO on a TTY), and
+// with no listener that error would crash this process before eve is
+// stopped. The output is lost either way, so the errors are ignored.
+process.stdout.on("error", () => undefined);
+process.stderr.on("error", () => undefined);
+
+const settings = await loadSettings();
+const model = settings.model;
+if (!model) fail(settings.modelError ?? "No model is configured. Run `npm run setup`.");
+if (!settings.routePassword || !settings.uiToken || !settings.workspace) fail("Setup has not finished. Run `npm run setup` first.");
+const routePassword = settings.routePassword;
+const uiToken = settings.uiToken;
+const workspace = await Workspace.open(settings.workspace).catch((error: Error) => fail(error.message));
+
+for (const [host, port, what] of [
+  [EVE_HOST, EVE_PORT, "eve"],
+  [BRIDGE_HOST, BRIDGE_PORT, "the bridge"],
+] as const) {
+  if (await portInUse(host, port)) fail(`Port ${port} on ${host} is already in use, and ${what} needs it. Is another runner running? Stop it first.`);
 }
 
-/**
- * eve's child environment (revision 1, W4): `processEnv` first,
- * `settingsValues` on top, so the resolved workspace — and every other
- * setting — wins even though an ambient `RUNNER_WORKSPACE` may still be in
- * `processEnv`. eve's tools and the bridge always agree, on the resolved
- * folder, never an ambient one. The privacy switches go on top of that, and
- * `PATH` puts codex first. `PORT`/`HOST` are stripped: eve is given its own
- * port on the command line below, and would otherwise inherit a stray one
- * from the shell that started `npm run runner`.
- */
-export function buildEveEnv(options: BuildEveEnvOptions): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...options.processEnv, ...options.settingsValues, ...PRIVACY_ENV, PATH: evePathEnv(options.codexDir) };
-  delete env.PORT;
-  delete env.HOST;
-  return env;
+// The eve process's environment: our settings, the privacy switches, codex on
+// PATH, and the provider's API key from the keychain (in memory only).
+const secrets = createOsSecretStore();
+const childEnv = buildEveEnv({ processEnv: process.env, settingsValues: settings.values, codexDir: settings.codexDir });
+if (model.provider !== "chatgpt") {
+  const envName = API_KEY_ENV[model.provider];
+  const key = childEnv[envName] ?? (await secrets.get(RUNNER_SECRET_SERVICE, API_KEY_SECRET_NAME[model.provider]).catch(() => null)) ?? undefined;
+  if (!key) fail(`No ${model.provider} API key: none in the keychain and ${envName} is not set. Run \`npm run setup\`.`);
+  childEnv[envName] = key;
 }
 
-async function main(): Promise<void> {
-  // Closing the terminal sends SIGHUP, and lib/launcher.ts then stops eve.
-  // From then on, writing to the terminal fails (EPIPE, or EIO on a TTY), and
-  // with no listener that error would crash this process before eve is
-  // stopped. The output is lost either way, so the errors are ignored.
-  process.stdout.on("error", () => undefined);
-  process.stderr.on("error", () => undefined);
-
-  const settings = await loadSettings();
-  const model = settings.model;
-  if (!model) fail(settings.modelError ?? "No model is configured. Run `npm run setup`.");
-  if (!settings.routePassword || !settings.uiToken || !settings.workspace) fail("Setup has not finished. Run `npm run setup` first.");
-  const routePassword = settings.routePassword;
-  const uiToken = settings.uiToken;
-  const workspace = await Workspace.open(settings.workspace).catch((error: Error) => fail(error.message));
-
-  for (const [host, port, what] of [
-    [EVE_HOST, EVE_PORT, "eve"],
-    [BRIDGE_HOST, BRIDGE_PORT, "the bridge"],
-  ] as const) {
-    if (await portInUse(host, port)) fail(`Port ${port} on ${host} is already in use, and ${what} needs it. Is another runner running? Stop it first.`);
-  }
-
-  // The eve process's environment: our settings, the privacy switches, codex on
-  // PATH, and the provider's API key from the keychain (in memory only).
-  const secrets = createOsSecretStore();
-  const childEnv = buildEveEnv({ processEnv: process.env, settingsValues: settings.values, codexDir: settings.codexDir });
-  if (model.provider !== "chatgpt") {
-    const envName = API_KEY_ENV[model.provider];
-    const key = childEnv[envName] ?? (await secrets.get(RUNNER_SECRET_SERVICE, API_KEY_SECRET_NAME[model.provider]).catch(() => null)) ?? undefined;
-    if (!key) fail(`No ${model.provider} API key: none in the keychain and ${envName} is not set. Run \`npm run setup\`.`);
-    childEnv[envName] = key;
-  }
-
-  const stamp = await computeBuildStamp(model);
-  if (await needsBuild(stamp)) {
-    console.log("[runner] Building (first start, or a build input or the model changed)...");
-    await buildAdapter(childEnv).catch((error: Error) => fail(`[runner] The adapter build failed: ${error.message}`));
-    await buildRunner(childEnv).catch((error: Error) => fail(`[runner] eve build failed: ${error.message}`));
-    await recordBuildStamp(stamp);
-  }
-
-  const gateway = createEveGateway({ password: routePassword });
-  const ctx = createRunnerContext({
-    workspace,
-    clock: systemClock,
-    packageVersion: await readPackageVersion(),
-    eve: gateway,
-    model,
-    checklist: async () => runDoctor({ settings: await loadSettings(), clock: systemClock, secrets }),
-    log: consoleLogger,
-  });
-
-  const launched = await launchRunner({
-    ctx,
-    routesDir: ROUTES_DIR,
-    uiToken,
-    spawnEve: () => {
-      console.log(`[runner] Starting eve on http://${EVE_HOST}:${EVE_PORT} (${model.provider} ${model.model})...`);
-      const eve = spawn(process.execPath, [eveCli(RUNNER_DIR), "start", "--host", EVE_HOST, "--port", String(EVE_PORT)], {
-        cwd: RUNNER_DIR,
-        env: childEnv,
-        stdio: ["ignore", "pipe", "pipe"],
-        // Its own process group, so Ctrl-C and the terminal's SIGHUP reach only
-        // this launcher, which then stops eve in order (lib/launcher.ts).
-        detached: true,
-      });
-      eve.once("error", (error) => console.error(`[runner] Could not start eve: ${error.message}`));
-      pipeWithPrefix(eve, "[eve] ");
-      return eve;
-    },
-    eveReady: async () => (await gateway.health()).ok,
-    listen: (app) => listen(app),
-    signals: process,
-    exit: (code) => process.exit(code),
-    log: { info: (line) => console.log(`[runner] ${line}`), error: (line) => console.error(`[runner] ${line}`) },
-    killGroup: (pid) => process.kill(-pid, "SIGKILL"),
-  }).catch((error: Error) => fail(`[runner] ${error.message}`));
-  if (launched.state === "stopped") {
-    console.log("[runner] Stopped before it was ready.");
-    process.exit(0);
-  }
-  const bridge = launched.bridge;
-
-  const { url, expiresAt } = await ctx.uiLogin.issue(BRIDGE_ORIGIN);
-  const paired = (await ctx.devices.active()).length;
-  console.log(`[runner] Ready. Bridge on ${bridge.url} (loopback only), eve on http://${EVE_HOST}:${EVE_PORT}.`);
-  console.log(`[runner] Local UI sign-in link (works once, until ${expiresAt.toLocaleTimeString()}; \`npm run ui\` prints a new one):`);
-  console.log(`[runner]   ${url}`);
-  if (paired === 0) console.log("[runner] No browser is paired yet: run `npm run pair` and enter the code on the extension's options page.");
-  console.log("[runner] Press Ctrl-C to stop.");
+const stamp = await computeBuildStamp(model);
+if (await needsBuild(stamp)) {
+  console.log("[runner] Building (first start, or a build input or the model changed)...");
+  await buildAdapter(childEnv).catch((error: Error) => fail(`[runner] The adapter build failed: ${error.message}`));
+  await buildRunner(childEnv).catch((error: Error) => fail(`[runner] eve build failed: ${error.message}`));
+  await recordBuildStamp(stamp);
 }
 
-// Only the entry point runs the script (`npm run runner`) — never a test
-// that imports `buildEveEnv` alone, which would otherwise load the real
-// settings, probe real ports, and try to spawn eve for real.
-if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+const gateway = createEveGateway({ password: routePassword });
+const ctx = createRunnerContext({
+  workspace,
+  clock: systemClock,
+  packageVersion: await readPackageVersion(),
+  eve: gateway,
+  model,
+  checklist: async () => runDoctor({ settings: await loadSettings(), clock: systemClock, secrets }),
+  log: consoleLogger,
+});
+
+const launched = await launchRunner({
+  ctx,
+  routesDir: ROUTES_DIR,
+  uiToken,
+  spawnEve: () => {
+    console.log(`[runner] Starting eve on http://${EVE_HOST}:${EVE_PORT} (${model.provider} ${model.model})...`);
+    const eve = spawn(process.execPath, [eveCli(RUNNER_DIR), "start", "--host", EVE_HOST, "--port", String(EVE_PORT)], {
+      cwd: RUNNER_DIR,
+      env: childEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+      // Its own process group, so Ctrl-C and the terminal's SIGHUP reach only
+      // this launcher, which then stops eve in order (lib/launcher.ts).
+      detached: true,
+    });
+    eve.once("error", (error) => console.error(`[runner] Could not start eve: ${error.message}`));
+    pipeWithPrefix(eve, "[eve] ");
+    return eve;
+  },
+  eveReady: async () => (await gateway.health()).ok,
+  listen: (app) => listen(app),
+  signals: process,
+  exit: (code) => process.exit(code),
+  log: { info: (line) => console.log(`[runner] ${line}`), error: (line) => console.error(`[runner] ${line}`) },
+  killGroup: (pid) => process.kill(-pid, "SIGKILL"),
+}).catch((error: Error) => fail(`[runner] ${error.message}`));
+if (launched.state === "stopped") {
+  console.log("[runner] Stopped before it was ready.");
+  process.exit(0);
+}
+const bridge = launched.bridge;
+
+const { url, expiresAt } = await ctx.uiLogin.issue(BRIDGE_ORIGIN);
+const paired = (await ctx.devices.active()).length;
+console.log(`[runner] Ready. Bridge on ${bridge.url} (loopback only), eve on http://${EVE_HOST}:${EVE_PORT}.`);
+console.log(`[runner] Local UI sign-in link (works once, until ${expiresAt.toLocaleTimeString()}; \`npm run ui\` prints a new one):`);
+console.log(`[runner]   ${url}`);
+if (paired === 0) console.log("[runner] No browser is paired yet: run `npm run pair` and enter the code on the extension's options page.");
+console.log("[runner] Press Ctrl-C to stop.");
