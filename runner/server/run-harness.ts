@@ -184,7 +184,9 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
     // Event by event (G1): a quietly-ending abort during an open or reconnect never throws here, so the partial
     // usage and model survive it and the signal.aborted check below is what actually catches it.
     for await (const event of created.response) {
-      events.push(event);
+      // Round-1 review L11 (nit): only accumulate when the caller actually asked for the events back — otherwise
+      // this array grows for the whole turn's duration for nothing, since withEvents never surfaces it either way.
+      if (collectEvents) events.push(event);
       switch (event.type) {
         case "step.started":
           model = event.data.modelId;

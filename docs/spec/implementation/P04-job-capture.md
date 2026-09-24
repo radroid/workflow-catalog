@@ -57,12 +57,12 @@ Preparation, sessions, the extension itself (P07 sends the envelope; this packet
 
 | Acceptance item | Proved by |
 |---|---|
-| Three paths produce identical snapshot records for the same fixture text | `captures.test.ts`, `jobs-store.test.ts` |
+| Three paths produce identical snapshot records for the same fixture text | `captures.test.ts` (corrected in round-1 revision: `jobs-store.test.ts` was also cited here, but it exercises `JobsStore.captureJob` directly, never the three HTTP paths — round-1 review L7 found the property this row claims was actually unproven, and false, at the time of this entry: only the URL-fetch path trimmed its text, so the same posting hashed differently depending on which path captured it) |
 | Same URL, changed text → revision 2, revision 1 retained | `jobs-store.test.ts` ("a second capture of the same URL with different text creates revision 2 and keeps revision 1") |
 | Hostile posting: extraction returns fields only, no action tool called, profile unchanged (hash before/after) | `extract-job-logic.test.ts` ("never touches the career profile — hostile posting fixture (hard-problems.md #3, assert store hash before/after)"); `job-extraction.eval.ts`'s `notCalledTool`/no-leaked-phrase assertions |
-| Rejected: `javascript:`/`file:` on every path, `http:` on the URL-fetch path | `captures.test.ts`, `job-tools.test.ts` |
+| Rejected: `javascript:`/`file:` on every path, `http:` on the URL-fetch path | `captures.test.ts` (corrected in round-1 revision: this row previously also cited `job-tools.test.ts`, which tests the `extract_job` tool wrappers' persist behaviour and has no URL-scheme assertions at all — a wrong citation, not merely an imprecise one) |
 | Rejected: loopback/RFC1918/link-local/`169.254.169.254`, including after a redirect or a DNS answer | `safe-fetch.test.ts` (injected resolver + local fake server, never the real network) |
-| Rejected: bodies over the cap, text over 200 KB | `safe-fetch.test.ts`, `captures.test.ts` |
+| Rejected: bodies over the cap, text over 200 KB | `safe-fetch.test.ts`; `captures.test.ts` (at the time of this entry, only the paste path's 200 KB cap actually had a test — the URL-fetch path's identical check was untested despite the citation implying otherwise; both paths are covered as of round-1 revision L11) |
 | `job_capture` gets a real handler (was `no_handler`); `route-modules.test.ts` needs no edit (D2) | `captures.test.ts`; confirmed by running the existing `route-modules.test.ts` unedited |
 
 **Mutation proofs — 5 of 5, each applied → red → reverted → `git diff` clean → green.**

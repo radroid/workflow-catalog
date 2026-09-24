@@ -159,10 +159,10 @@ describe("captures.ts: job_capture event (extension path)", () => {
     expect((await store.getSnapshot(firstResult.result.jobId, 2))?.text).toBe("Updated text.");
   });
 
-  it("rejects a javascript: URL before it ever reaches the handler (contract validation)", async () => {
+  it.each(["javascript:alert(1)", "file:///etc/passwd"])("rejects a %s URL before it ever reaches the handler (contract validation, round-1 review L11)", async (url) => {
     const bridge = await bridgeWith();
     const { token } = await pairDevice(bridge);
-    const response = await postEvent(bridge, token, { ...jobCapture(), url: "javascript:alert(1)" });
+    const response = await postEvent(bridge, token, { ...jobCapture(), url });
     expect(response.status).toBe(400);
   });
 });
@@ -379,9 +379,9 @@ describe("captures.ts: POST /api/captures/paste", () => {
     expect(body.job.revision).toBe(1);
   });
 
-  it("rejects a javascript: URL", async () => {
+  it.each(["javascript:alert(1)", "file:///etc/passwd"])("rejects a %s URL (round-1 review L11)", async (url) => {
     const bridge = await bridgeWith();
-    const response = await postCaptures(bridge, "/paste", { url: "javascript:alert(1)", text: "Text" });
+    const response = await postCaptures(bridge, "/paste", { url, text: "Text" });
     expect(response.status).toBe(400);
   });
 
@@ -438,6 +438,16 @@ describe("captures.ts: POST /api/captures/url (mutation target: 'accept http on 
     const bridge = await bridgeWith();
     const response = await postCaptures(bridge, "/url", { url: "https://10.0.0.5/internal" });
     expect(response.status).toBe(400);
+  });
+
+  it("refuses a fetched page over the 200 KB text cap, the same way the paste path does (round-1 review L11)", async () => {
+    const fakeFetchUrl = async (url: string): Promise<SafeFetchResult> => ({ ok: true, status: 200, contentType: "text/plain", text: "x".repeat(200_001), finalUrl: url });
+    const modules: readonly LoadedRouteModule[] = [{ name: "captures", module: createCapturesRouteModule(fakeFetchUrl) }];
+    const bridge = await makeBridge({ modules });
+    const response = await postCaptures(bridge, "/url", { url: "https://jobs.example/huge-page" });
+    expect(response.status).toBe(413);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("text_too_large");
   });
 });
 
