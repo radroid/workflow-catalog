@@ -263,6 +263,37 @@ The **status page** (`ui/status.html`) shows:
 Revocation (mvp-spec §7.5) lives here until a pairing section joins
 Settings. Fonts are Geist, self-hosted (`ui/assets/fonts`, SIL OFL).
 
+The **Jobs page** (`ui/jobs.html`, P04) captures a job posting three ways:
+the extension's own capture action (the `job_capture` bridge event), pasting
+the posting's text and address, or fetching an `https://` link
+(`lib/safe-fetch.ts`, every SSRF check — a pasted or captured URL may be
+`http://` or `https://` as provenance only, since nothing on those two paths
+fetches it, but the fetch path itself refuses anything but `https://`). All
+three converge on one handler (`captureAndExtract` in
+`server/routes/captures.ts`), so the same text produces the same snapshot
+record regardless of source (F6). A job that already has this exact URL and
+unchanged text (by content hash) gets no new revision; changed text creates
+the next revision and keeps every one before it, forever. A content-changing
+capture runs extraction inline through `runTurn` right afterward, never for
+an unchanged one: the posting's text is delivered to the model only as
+user-turn data inside a random per-call boundary, never a system prompt, and
+the model reports back only IDs and the fields it drafted (`extract_job`),
+never a URL or raw text. Opening a job lists every revision, newest first,
+each with a line-based diff against the one before it ("What changed from
+the previous revision", collapsed to a few lines of context around each
+change — no dependency, since a posting is plain text and this is a diff to
+look at, not a merge tool) and, for the latest revision, the structured
+fields found so far (title, company, location, requirements, nice-to-have,
+deadline, apply link) with a button to run extraction again for a revision
+saved before eve was running, whose turn did not finish, or that a person
+just wants re-checked. As with the Runs and Settings pages below, one
+persistent live region announces every outcome once, `aria-disabled` marks a
+request in flight without dropping focus, and — since `server/http.ts`'s own
+validation messages name the offending field for API consumers, not a person
+reading the page — every message this page shows is its own hand-written
+sentence: no field name, HTTP status code or id ever appears in its visible
+text.
+
 The **Runs page** (`ui/runs.html`, P08-A) lists every run this instance has
 made (`GET /api/runs`), newest first, bounded to 200 records / 14 days. Each
 entry shows the date and time, the kind as a readable label, an outcome pill
@@ -369,6 +400,9 @@ The spec §5 layout, plus `.runner/` for the bridge's own state:
 ```text
 workspace.json    { workspaceId, workflowInstanceId, packageVersion, createdAt }   (WorkspaceManifest)
 sources/ jobs/ applications/ sessions/ outbox/ inbox/
+jobs/<jobId>/snapshot-<rev>.json         one job posting's revision (P04): url, capturedAt, extractorVersion,
+                                         contentHash, text, structured — revision 1 is never overwritten by a
+                                         later one; the same URL with the same content hash gets no new revision
 runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
 runs/budget.json                        daily run limit, per-run item cap, and the pause (P08-A); survives restart
 .runner/devices/<deviceId>.json         paired devices (token hash, origin, expiry)
@@ -449,7 +483,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 | Packet | Adds |
 |---|---|
 | P03 | `server/routes/onboarding.ts`, `store/profile.ts`, `ui/onboarding.html`, `ui/profile.html`, `agent/tools/extract_claims.ts`, `agent/tools/ask_follow_up.ts`, onboarding skills |
-| P04 | `server/routes/captures.ts` (the `job_capture` handler), `store/jobs.ts`, `agent/tools/import_job_url.ts`, `ui/jobs.html` |
+| P04 | `server/routes/captures.ts` (the `job_capture` handler, plus the paste/url-fetch/list/detail/re-extract routes), `store/jobs.ts`, `lib/safe-fetch.ts`, `lib/readable-text.ts`, `agent/tools/extract_job.ts` (IDs only: jobId, revision, structured fields — never a URL or raw text), `ui/jobs.html` |
 | P05 | `agent/tools/prepare_application.ts`, `store/applications.ts`, `validate/`, `export/`, `ui/application.html`, preparation skills |
 | P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
