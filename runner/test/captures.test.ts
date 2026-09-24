@@ -195,13 +195,27 @@ describe("captures.ts: extraction runs inline through runTurn when content chang
     expect(calls).toHaveLength(1); // extraction ran only for the first (content-changing) capture
   });
 
-  it("a turn that isn't ok records no fields and says so plainly (mutation target: 'count a non-ok turn as extracted')", async () => {
+  it("a turn that isn't ok records no fields, even when a tool call inside it looked successful (mutation target: 'count a non-ok turn as extracted')", async () => {
     // The fake eve must actually be wired into the bridge: bridgeWith() with no eve makes runTurn report
     // "failed" on its own (eve not running) before ever reading an event, which would let this test pass
-    // for the wrong reason and never exercise the turn.failed classification the mutation targets.
-    const { eve } = fakeEve(async () => [started(), turnFailed(), sessionWaiting()]);
+    // for the wrong reason and never exercise the turn.failed classification the mutation targets. The
+    // scripted extract_job call below reports persisted: true for the exact jobId/revision asked about —
+    // a script with no tool call at all (as an earlier version of this test used) can't tell "checks
+    // result.status" apart from "doesn't": with nothing for persistedJobExtraction to find either way,
+    // dropping the status check wouldn't have changed the outcome (confirmed: it didn't fail the mutated
+    // code). A turn that still fails *after* a tool ran (a cancel, a later step's failure) is the real
+    // case the status gate exists for.
+    const jobId = randomUUID();
+    const revision = 1;
+    const { eve } = fakeEve(async () => [
+      started(),
+      actionResult("extract_job", { jobId, revision, persisted: true, message: "Saved the extracted fields." }),
+      completedUsage(),
+      turnFailed(),
+      sessionWaiting(),
+    ]);
     const bridge = await bridgeWith(eve);
-    const outcome = await runExtraction(bridge.ctx, randomUUID(), 1, "some text");
+    const outcome = await runExtraction(bridge.ctx, jobId, revision, "some text");
     expect(outcome.status).toBe("not_extracted");
   });
 
