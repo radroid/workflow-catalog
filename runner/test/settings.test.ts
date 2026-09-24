@@ -79,6 +79,46 @@ describe("settings", () => {
   });
 });
 
+describe("workspace precedence", () => {
+  it("keeps .env.local's workspace once setup has written it, even when the environment names another folder, valid workspace or not (as GitHub Actions sets one)", async () => {
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, "RUNNER_WORKSPACE=/Users/ada/WorkspaceA\n");
+    for (const ambient of ["/Users/ada/WorkspaceB", "/home/runner/work/workflow-catalog/workflow-catalog"]) {
+      const settings = await loadSettings({ envFile: file, env: { RUNNER_WORKSPACE: ambient } });
+      expect(settings.workspace, ambient).toBe("/Users/ada/WorkspaceA");
+      expect(settings.values.RUNNER_WORKSPACE, ambient).toBe("/Users/ada/WorkspaceA");
+      expect(settings.workspaceEnvOverride, ambient).toBe(ambient);
+    }
+  });
+
+  it("lets the environment supply the workspace when .env.local has none, as for tests and a first run", async () => {
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, "RUNNER_MODEL=gpt-5.6-luna\n");
+    const settings = await loadSettings({ envFile: file, env: { RUNNER_WORKSPACE: "/Users/ada/WorkspaceB" } });
+    expect(settings.workspace).toBe("/Users/ada/WorkspaceB");
+    expect(settings.values.RUNNER_WORKSPACE).toBe("/Users/ada/WorkspaceB");
+    expect(settings.workspaceEnvOverride).toBeUndefined();
+  });
+
+  it("does not flag a mismatch when the environment agrees, is blank, or is unset", async () => {
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, "RUNNER_WORKSPACE=/Users/ada/WorkspaceA\n");
+    for (const env of [{ RUNNER_WORKSPACE: "/Users/ada/WorkspaceA" }, { RUNNER_WORKSPACE: "  " }, {}]) {
+      const settings = await loadSettings({ envFile: file, env });
+      expect(settings.workspace, JSON.stringify(env)).toBe("/Users/ada/WorkspaceA");
+      expect(settings.workspaceEnvOverride, JSON.stringify(env)).toBeUndefined();
+    }
+  });
+
+  it("keeps every other key's precedence (the environment wins) alongside the workspace exception", async () => {
+    const file = path.join(await tempDir(), ".env.local");
+    await writeFile(file, "RUNNER_WORKSPACE=/Users/ada/WorkspaceA\nRUNNER_MODEL=gpt-5.6-luna\n");
+    const settings = await loadSettings({ envFile: file, env: { RUNNER_WORKSPACE: "/Users/ada/WorkspaceB", RUNNER_MODEL: "gpt-5.6-terra" } });
+    expect(settings.workspace).toBe("/Users/ada/WorkspaceA");
+    expect(settings.values.RUNNER_MODEL).toBe("gpt-5.6-terra");
+  });
+});
+
 describe("script flags", () => {
   it("reads flags after --, and npm's own spelling of boolean flags (npm run doctor --json)", () => {
     const options = { json: { type: "boolean" as const }, workspace: { type: "string" as const } };

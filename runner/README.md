@@ -127,12 +127,20 @@ npm run setup -- --provider openai --model <slug> --api-key-env MY_KEY_VAR --yes
   - `EVE_TELEMETRY_DISABLED=1` and `EVE_TRACES_CONTENT=off`
   - `RUNNER_MODEL_PROVIDER` and `RUNNER_MODEL`
   - `RUNNER_CODEX_DIR`
-  - `RUNNER_WORKSPACE`
+  - `RUNNER_WORKSPACE`: once setup has written this one, it wins over the
+    environment, unlike every other key below (see the note that follows)
   - `ROUTE_AUTH_BASIC_PASSWORD`: the per-install secret for eve's
     `httpBasic` route auth
   - `RUNNER_UI_TOKEN`: the local-UI cookie value
 
-  A variable set in the environment wins over the file, as in eve.
+  A variable set in the environment wins over the file, as in eve — except
+  `RUNNER_WORKSPACE`. GitHub Actions sets that one in every job, and a
+  leftover shell export could set another, so once `npm run setup` has
+  written a workspace to `.env.local`, the file always wins for that key:
+  an ambient value can never redirect a set-up runner (P02.2). Before setup
+  has written one, the environment still supplies it, as for a first run.
+  `runner`, `pair`, `ui`, `doctor`, `setup` and `setup -- --forget` all
+  resolve it this same way.
 - **Re-running** keeps the workspace, the stored key and both secrets. It
   updates only what you change.
 
@@ -147,7 +155,10 @@ It has seven items, all required:
 
 Each item is `ok`, `warn` or `fail`. A `warn` is not a failure: a provider
 that is connected but not yet verified is a warn until `doctor -- --live`,
-or "Check the model" on the status page, gets an answer. The JSON form is
+or "Check the model" on the status page, gets an answer. `workspace` is a
+warn when the environment's `RUNNER_WORKSPACE` differs from `.env.local`'s:
+the detail names both paths and says which one the runner uses (P02.2). The
+JSON form is
 `{ ok, checkedAt, items: [{ id, label, status, detail, required, fix? }] }`.
 
 ## The bridge (`server/`)

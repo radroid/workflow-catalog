@@ -16,7 +16,8 @@ import type { RunnerSettings } from "./settings.ts";
  * first five items are the catalog install page's checklist, same ids and
  * labels (apps/catalog/lib/install-status.ts); the last two are the runner's
  * own conditions (mvp-spec §8). Every item is required: doctor exits 1 while
- * any is "fail". A "warn" is not a failure (an unverified model).
+ * any is "fail". A "warn" is not a failure (an unverified model, or an
+ * ambient RUNNER_WORKSPACE that .env.local's workspace overrides, P02.2).
  */
 export type DoctorStatus = "ok" | "warn" | "fail";
 
@@ -183,6 +184,24 @@ async function workspaceItem(settings: RunnerSettings): Promise<{ item: DoctorIt
   }
   try {
     const workspace = await Workspace.open(settings.workspace);
+    // P02.2's one warning: an ambient RUNNER_WORKSPACE that .env.local's
+    // workspace overrode. Not a failure — the runner already resolved and
+    // uses .env.local's value (lib/settings.ts), so this only ever flags a
+    // stale or leftover environment variable.
+    const override = settings.workspaceEnvOverride;
+    if (override) {
+      return {
+        item: {
+          id: "workspace",
+          label,
+          status: "warn",
+          detail: `${workspace.root}. The environment also sets RUNNER_WORKSPACE=${override}, which is ignored: the runner uses runner/.env.local's ${workspace.root}.`,
+          required: true,
+          fix: "Unset RUNNER_WORKSPACE in the environment, or run `npm run setup` to change runner/.env.local's workspace to it.",
+        },
+        workspace,
+      };
+    }
     return { item: { id: "workspace", label, status: "ok", detail: workspace.root, required: true }, workspace };
   } catch (error) {
     return { item: { id: "workspace", label, status: "fail", detail: (error as Error).message, required: true, fix: "Run `npm run setup` in runner/." } };

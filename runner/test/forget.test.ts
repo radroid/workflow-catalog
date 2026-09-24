@@ -115,4 +115,14 @@ describe("uninstall footprint", () => {
     expect(other.items.some((entry) => entry.path === stranger)).toBe(false);
     expect(other.notes.join("\n")).toContain("no valid workspace.json");
   });
+
+  it("targets .env.local's workspace, never one the environment names, as GitHub Actions might (P02.2)", async () => {
+    const install = await fakeInstall();
+    const ambient = path.join(install.root, "someone-elses-workspace");
+    const settings = await loadSettings({ envFile: install.envFile, env: { RUNNER_WORKSPACE: ambient } });
+    expect(settings.workspace).toBe(install.workspace.root);
+    const plan = await planForget({ runnerDir: install.runnerDir, envFile: install.envFile, settings, secrets: install.secrets, homeDir: install.home });
+    expect(plan.items.some((entry) => entry.path === install.workspace.root)).toBe(true);
+    expect(plan.items.some((entry) => entry.path === ambient)).toBe(false);
+  });
 });

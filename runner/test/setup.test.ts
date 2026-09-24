@@ -110,6 +110,20 @@ describe("setup (non-interactive)", () => {
     expect(after.RUNNER_MODEL).toBe("gpt-5.6-terra");
   });
 
+  it("resolves the workspace the same way loadSettings does (P02.2): the environment on a first run, .env.local once it has one", async () => {
+    const box = await sandbox();
+    const ambient = path.join(box.root, "ws-from-env");
+    // First run, no --workspace: an ambient RUNNER_WORKSPACE supplies it, same as `runner`/`doctor`/etc. would resolve on a first run.
+    // (realpath, so macOS's /var -> /private/var means a suffix match, not equality — as the "~/JobAssistant" case above.)
+    const first = await runSetup({ ...CHATGPT }, box.deps({ env: { RUNNER_WORKSPACE: ambient } }));
+    expect(first.workspace.root).toMatch(/\/ws-from-env$/);
+    // Second run, no --workspace, a *different* ambient value: .env.local already names one, so it wins, exactly as loadSettings does.
+    const decoy = path.join(box.root, "someone-elses-workspace");
+    const second = await runSetup({ provider: "chatgpt", model: "gpt-5.6-terra", yes: true }, box.deps({ env: { RUNNER_WORKSPACE: decoy } }));
+    expect(second.workspace.root).toBe(first.workspace.root);
+    expect(second.createdWorkspace).toBe(false);
+  });
+
   it("requires an explicit model for ChatGPT: eve's default is rejected for ChatGPT accounts", async () => {
     const box = await sandbox();
     await expect(runSetup({ provider: "chatgpt", workspace: path.join(box.root, "ws"), yes: true }, box.deps())).rejects.toThrow(/--model/);

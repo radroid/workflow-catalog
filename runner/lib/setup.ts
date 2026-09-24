@@ -11,7 +11,7 @@ import { MIN_NODE_MAJOR } from "./doctor.ts";
 import { readEnvFile, updateEnvFile } from "./env-file.ts";
 import type { Prompter } from "./prompt.ts";
 import { API_KEY_ENV, API_KEY_SECRET_NAME, RUNNER_SECRET_SERVICE, type SecretStore } from "./secret-store.ts";
-import { ENV, ENV_HEADER, ENV_ORDER, PRIVACY_ENV, SECRET_PATTERN } from "./settings.ts";
+import { ENV, ENV_HEADER, ENV_ORDER, PRIVACY_ENV, SECRET_PATTERN, trimmedText } from "./settings.ts";
 
 /**
  * `npm run setup`: checks Node, chooses the workspace, connects the model
@@ -202,9 +202,14 @@ export async function runSetup(options: SetupOptions, deps: SetupDeps): Promise<
   const existing = await readEnvFile(deps.envFile);
   const homeDir = deps.homeDir ?? os.homedir();
 
-  // Workspace.
-  const suggested = existing[ENV.workspace] ?? path.join(homeDir, DEFAULT_WORKSPACE_NAME);
-  const answer = options.workspace ?? (options.yes ? existing[ENV.workspace] : await deps.prompter.ask("Workspace folder (your data lives here)?", suggested));
+  // Workspace: the same precedence as loadSettings (P02.2), so every
+  // command resolves it the same way. Once .env.local names one, it is the
+  // suggestion, and --yes's answer, full stop — an ambient RUNNER_WORKSPACE
+  // no longer matters. Before that (a first run), the ambient value supplies
+  // both, same as loadSettings falls back to it. --workspace overrides either.
+  const currentWorkspace = trimmedText(existing[ENV.workspace]) ?? trimmedText((deps.env ?? process.env)[ENV.workspace]);
+  const suggested = currentWorkspace ?? path.join(homeDir, DEFAULT_WORKSPACE_NAME);
+  const answer = options.workspace ?? (options.yes ? currentWorkspace : await deps.prompter.ask("Workspace folder (your data lives here)?", suggested));
   if (!answer) throw new SetupError("Pass --workspace <folder>: where the runner keeps your data.");
   const dir = await checkWorkspacePath(answer, { homeDir, repoRoot: deps.repoRoot });
   const { workspace, created } = await Workspace.openOrCreate(dir, { packageVersion: deps.packageVersion, clock: deps.clock });
