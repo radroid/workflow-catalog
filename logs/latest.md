@@ -1,6 +1,6 @@
 Latest: iter-006 in progress, started 18:57 on 2026-09-23. Iter 005 closed with P08-A, P03 and P07-B merged (360ac69, 9821bee, e01017c); CI on e01017c is green, extension e2e included. In `.loop/state.json`, `iter` stays 5 until iter 006 closes.
 
-Running now: **P04 revision 1** (PR #14), by the same Sonnet implementer on harness port 4330. Round 1 was REVISE 9 from the reviewer (the URL fetch is broken on Node 24, IPv6 slips the SSRF checks, quadratic HTML, the event held open through the model turn, and more) and UI REVISE 9. Decisions L1–L14 are in `logs/handoff/P04-round-1-review.md`; L5 makes extraction run after the capture responds. Round 2 is narrow. A further REVISE goes to a fresh Opus escalation. The P05 and P03.2 prompts are ready in `logs/handoff/`, with the eval-workspace rule amended.
+Running now: **P04 round 2** (PR #14, head f3cdec8, CI 35954530791 green), a narrow re-check by the same Opus reviewer and UI critic (ports 4320 if needed, and 4340). Revision 1 did L1–L14 from `logs/handoff/P04-round-1-review.md`. It also found that GitHub Actions reserves `RUNNER_WORKSPACE`, so the eval module coordinates through its own variable; a follow-up is pending the reviewer's view. A further REVISE goes to a fresh Opus escalation. After the merge, P05 (Opus) ∥ P03.2 (Sonnet), from the prompts in `logs/handoff/`.
 - **Then:**
   - after P04: P05 (Opus) ∥ P03.2 (Sonnet), which needs P04's turn events. P03.1 follows P03.2, because they share files.
   - after P05: P08-B, which carries P08-A's follow-ups, and P06.
