@@ -35,6 +35,7 @@ Findings: `logs/handoff/P07-B-round-4-review.md` and `logs/handoff/P07-B-round-5
 - **The popup test for K4's second sentence** (reviewer nit 1): "This page couldn't be captured.".
 - **`forgetInvalidToken` window** (documented limitation): a pairing stored between the read and the remove is lost. Consider fixing it with the pause stamps.
 - **Opening stored URLs** (`logs/blocks.md`, "P04 URL rule"): captured URLs may be http. Before opening any stored URL in a tab, refuse loopback, private, link-local and metadata targets, and anything but http(s).
+- **The e2e reaches the real handlers** (P04 round-1 reviewer). `extension/e2e/real-bridge-harness.ts:158` builds the bridge with `modules: []`, so `job_capture` never reaches P04's handler in the e2e. Load the real route modules, and assert that a capture from the popup lands as a job revision.
 
 ## Report
 

@@ -38,6 +38,7 @@ Findings are in `logs/handoff/P08-A-round-3-review.md`.
   - **P-b.** Folders are listed before files in the skipped note, or flagged by the server, and a lone folder reads as a folder.
   - **P-c.** The run-log pause note says what to do: "Runs restart on their own once the runner can read this folder again; check its permissions." With a stored pause on top, the usage line gives a reason for "unknown".
 - **eve:** the authorization case in `eve-runtime.md` §8 item 15 applies to any schedule turn once a connection exists.
+- **Extraction turns and the budget** (P04 round-1 reviewer). P03's onboarding extraction and P04's background job extraction run outside `withRun`, so the daily run limit doesn't see them. P04's extraction already refuses to start while the budget is paused. Decide whether these turns count against the daily limit, or get a limit of their own, and record the choice. P03.2 decides the provider-limit pause for interactive turns; keep the two consistent.
 
 ## Report
 
