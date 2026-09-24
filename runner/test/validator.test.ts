@@ -386,6 +386,17 @@ describe("revision 1, V4: no uncited sentence rides along with a cited one", () 
     expect(rules(resume(statement))).toEqual(["uncited"]);
   });
 
+  // The same, with the uncited sentence first and no marker before the break: only the splitting rules stand between it and the citation.
+  const lead = "Shipped the on-call rotation tooling used by three engineering teams";
+  it.each([
+    ["a full stop straight before a capital", `${lead}.Won the Fernwood award [C3].`],
+    ["a full stop straight before a capital outside ASCII", `${lead}.Élu meilleur ingénieur [C3].`],
+    ["a full stop and a space before a lower-case word", `${lead}. then won the Fernwood award [C3].`],
+    ["an ellipsis character and a space", `${lead}… Won the Fernwood award [C3].`],
+  ])("refuses %s when the cited sentence comes second", (_name, statement) => {
+    expect(rules(resume(statement))).toEqual(["uncited"]);
+  });
+
   it("keeps a statement whole where no sentence ends", () => {
     for (const statement of GOOD.resume.sections.flatMap((section) => section.statements)) expect(splitSentences(statement)).toHaveLength(1);
     expect(splitSentences("Shipped tooling [C3]\n[C1]")).toEqual(["Shipped tooling [C3] [C1]"]);
