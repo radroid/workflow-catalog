@@ -301,9 +301,10 @@ export class ApplicationsStore {
       if (read.kind !== "ok") throw new ApplicationsStoreError(read.kind === "missing" ? "No such application." : `${applicationPath(taskId)} can't be read.`);
       const next = change(read.application);
       if (next === undefined) return read.application;
-      const written = applicationSchema.parse({ ...next, taskId: read.application.taskId, jobId: read.application.jobId, revision: read.application.revision + 1 });
-      await this.#workspace.writeJson([APPLICATIONS_DIR, `${taskId}.json`], written);
-      return written;
+      const parsed = applicationSchema.safeParse({ ...next, taskId: read.application.taskId, jobId: read.application.jobId, revision: read.application.revision + 1 });
+      if (!parsed.success) throw new ApplicationsStoreError("That change would not leave a valid application record, so nothing was written.");
+      await this.#workspace.writeJson([APPLICATIONS_DIR, `${taskId}.json`], parsed.data);
+      return parsed.data;
     });
   }
 
