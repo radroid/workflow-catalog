@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { JobStructured } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { JobsStore } from "../store/jobs.ts";
@@ -198,5 +200,62 @@ describe("JobsStore.captureJob: concurrency (no lost or duplicated job for one U
     expect(a.jobId).toBe(b.jobId);
     expect(new Set([a.revision, b.revision])).toEqual(new Set([1, 2]));
     expect(await store.getJobRevisions(a.jobId)).toHaveLength(2);
+  });
+});
+
+describe("JobsStore resilience (round-1 review L6)", () => {
+  it("a stray non-uuid entry under jobs/ (e.g. a .DS_Store file) never breaks listJobs", async () => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const real = await store.captureJob({ url: FERNWOOD_URL, text: "Staff Software Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    // A plain file, not a directory, sitting directly under jobs/ — readdir(jobs/.DS_Store) would throw ENOTDIR
+    // if listJobs ever tried to descend into it as though it were a job id.
+    await writeFile(path.join(workspace.root, "jobs", ".DS_Store"), "\0\0\0\0");
+
+    const summaries = await store.listJobs();
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.jobId).toBe(real.jobId);
+    // findJobIdByUrl shares the same jobs/ scan and must be equally unbothered by the stray file.
+    expect(await store.findJobIdByUrl(FERNWOOD_URL)).toBe(real.jobId);
+  });
+
+  it("a damaged snapshot file never breaks the list or another job", async () => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const healthy = await store.captureJob({ url: FERNWOOD_URL, text: "Staff Software Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    const damaged = await store.captureJob({ url: HARBOR_URL, text: "Platform Engineer at Harbor.", extractorVersion: "t", capturedAt: "2026-09-22T09:01:00.000Z" });
+    // Overwrite the damaged job's only snapshot with content that is not valid JSON at all.
+    await writeFile(path.join(workspace.root, "jobs", damaged.jobId, "snapshot-1.json"), "{ not valid json");
+
+    expect(await store.getSnapshot(damaged.jobId, 1)).toBeUndefined(); // damaged reads as "not there", not a throw
+
+    const summaries = await store.listJobs();
+    expect(summaries).toHaveLength(1); // the damaged job is skipped entirely; the healthy one is listed normally
+    expect(summaries[0]!.jobId).toBe(healthy.jobId);
+
+    expect(await store.getJobRevisions(damaged.jobId)).toEqual([]); // the job "exists" (its directory does) but has no readable revisions
+    expect(await store.getJobRevisions(healthy.jobId)).toHaveLength(1); // unaffected by the other job's damaged file
+  });
+
+  it("a snapshot file that is valid JSON but fails the schema also reads as \"not there\"", async () => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const job = await store.captureJob({ url: FERNWOOD_URL, text: "Staff Software Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await writeFile(path.join(workspace.root, "jobs", job.jobId, "snapshot-1.json"), JSON.stringify({ not: "a job snapshot" }));
+    expect(await store.getSnapshot(job.jobId, 1)).toBeUndefined();
+  });
+
+  it("only uuid-named directories under jobs/ are ever treated as jobs, even if one holds a plausible-looking snapshot file", async () => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const real = await store.captureJob({ url: FERNWOOD_URL, text: "Staff Software Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    const notAJobId = path.join(workspace.root, "jobs", "not-a-uuid");
+    await mkdir(notAJobId, { recursive: true });
+    await writeFile(path.join(notAJobId, "snapshot-1.json"), JSON.stringify(real.snapshot));
+
+    const summaries = await store.listJobs();
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.jobId).toBe(real.jobId);
+    expect(await store.getJobRevisions("not-a-uuid")).toBeUndefined();
   });
 });

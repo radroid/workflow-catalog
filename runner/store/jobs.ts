@@ -1,4 +1,4 @@
-import { jobSnapshotSchema, jobStructuredSchema, type JobSnapshot, type JobStructured } from "@workflow-catalog/contracts";
+import { jobSnapshotSchema, jobStructuredSchema, uuidSchema, type JobSnapshot, type JobStructured } from "@workflow-catalog/contracts";
 import { z } from "zod";
 import { sha256Hex, newId } from "../lib/crypto.ts";
 import { serialise } from "./profile-writes.ts";
@@ -25,6 +25,11 @@ const JOBS_DIR = "jobs";
 const SNAPSHOT_FILE = /^snapshot-(\d+)\.json$/;
 const MAX_CAPTURE_ATTEMPTS = 5;
 const JOB_CHAINS = new Map<string, Promise<unknown>>();
+
+/** Round-1 review L6: only a uuid-named entry under `jobs/` is a job directory — a stray file such as `.DS_Store` (or any other name `newId()` would never produce) is skipped everywhere a job listing is built, never descended into. */
+function isJobId(name: string): boolean {
+  return uuidSchema.safeParse(name).success;
+}
 
 export class JobsStoreError extends Error {
   override readonly name = "JobsStoreError";
@@ -132,29 +137,42 @@ export class JobsStore {
     return numbers.sort((a, b) => a - b);
   }
 
+  /** Undefined for a missing revision *or* a damaged one (round-1 review L6: unreadable file, invalid JSON, or JSON that no longer matches the schema all read the same way — "not there" — so one corrupt snapshot can never break a caller that only expected "exists" or "doesn't"). */
   async getSnapshot(jobId: string, revision: number): Promise<JobSnapshot | undefined> {
-    const raw = await this.#workspace.readJson(...this.#path(jobId, revision));
-    return raw === undefined ? undefined : jobSnapshotSchema.parse(raw);
+    let raw: unknown;
+    try {
+      raw = await this.#workspace.readJson(...this.#path(jobId, revision));
+    } catch {
+      return undefined; // unreadable, or not valid JSON at all
+    }
+    if (raw === undefined) return undefined;
+    const parsed = jobSnapshotSchema.safeParse(raw);
+    return parsed.success ? parsed.data : undefined; // valid JSON, but not a valid snapshot
   }
 
   /** Every job, its latest revision, and how many revisions it has — the Jobs page's list. Newest capture first. */
   async listJobs(): Promise<JobSummary[]> {
-    const jobIds = await this.#workspace.list(JOBS_DIR);
+    const jobIds = (await this.#workspace.list(JOBS_DIR)).filter(isJobId);
     const summaries: JobSummary[] = [];
     for (const jobId of jobIds) {
-      const numbers = await this.revisions(jobId);
-      const latestNumber = numbers.at(-1);
-      if (latestNumber === undefined) continue;
-      const latestRevision = await this.getSnapshot(jobId, latestNumber);
-      if (!latestRevision) continue;
-      summaries.push({ jobId, latestRevision, revisionCount: numbers.length });
+      try {
+        const numbers = await this.revisions(jobId);
+        const latestNumber = numbers.at(-1);
+        if (latestNumber === undefined) continue;
+        const latestRevision = await this.getSnapshot(jobId, latestNumber);
+        if (!latestRevision) continue; // every revision on disk was damaged (getSnapshot already tolerates one bad revision on its own)
+        summaries.push({ jobId, latestRevision, revisionCount: numbers.length });
+      } catch {
+        continue; // L6: one job's own trouble (e.g. its directory replaced by a file mid-scan) never breaks the list for every other job
+      }
     }
     summaries.sort((a, b) => b.latestRevision.capturedAt.localeCompare(a.latestRevision.capturedAt));
     return summaries;
   }
 
-  /** Every revision of `jobId`, oldest first (for the revisions list and the "posting changed" diff). Undefined when the job does not exist. */
+  /** Every revision of `jobId`, oldest first (for the revisions list and the "posting changed" diff). Undefined when the job does not exist. A damaged individual revision is skipped, not fatal to the rest (L6). */
   async getJobRevisions(jobId: string): Promise<JobSnapshot[] | undefined> {
+    if (!isJobId(jobId)) return undefined;
     const numbers = await this.revisions(jobId);
     if (numbers.length === 0) return undefined;
     const snapshots: JobSnapshot[] = [];
@@ -167,12 +185,16 @@ export class JobsStore {
 
   /** The job that already captured `url`, if any — a job's url never changes across its revisions, so its first revision alone is enough to check. */
   async findJobIdByUrl(url: string): Promise<string | undefined> {
-    for (const jobId of await this.#workspace.list(JOBS_DIR)) {
-      const numbers = await this.revisions(jobId);
-      const first = numbers[0];
-      if (first === undefined) continue;
-      const snapshot = await this.getSnapshot(jobId, first);
-      if (snapshot?.url === url) return jobId;
+    for (const jobId of (await this.#workspace.list(JOBS_DIR)).filter(isJobId)) {
+      try {
+        const numbers = await this.revisions(jobId);
+        const first = numbers[0];
+        if (first === undefined) continue;
+        const snapshot = await this.getSnapshot(jobId, first);
+        if (snapshot?.url === url) return jobId;
+      } catch {
+        continue; // L6: the same "one job's trouble is not every job's trouble" rule as listJobs
+      }
     }
     return undefined;
   }
