@@ -158,7 +158,8 @@ interface VerifiedExtraction {
 
 /**
  * P03.2 (deliverables 1 and 5): the `extract_claims` calls in this turn that
- * verified at least one claim for `category`, read from the turn's own
+ * verified at least one claim for `category` (S1: at least one that also
+ * survives the route's own re-check below), read from the turn's own
  * `action.result` events (`TurnResult.events`, from `collectEvents: true` —
  * the same way `persistedExtraction` used to read `MessageResult.events`).
  * Undefined when none did. `extract_claims` itself only verifies and returns
@@ -182,6 +183,16 @@ interface VerifiedExtraction {
  * belt and suspenders, not a second place a fabricated quote could slip
  * through, since a route that trusted the event's `output.claims` outright
  * would be exactly that.
+ *
+ * S1 (revision 2, round-2 reviewer issue 1): what counts is what survives
+ * that re-check, not what the tool returned. When no claim survives it —
+ * every quote the tool's result carried is missing from the route's own
+ * text — this answers undefined, exactly like a call that verified nothing
+ * at all: the route then saves nothing, records no content hash, and
+ * answers `{ok: false, status: "no_result"}`, so the same text is extracted
+ * again next time. Before this, an all-rejected result still counted as
+ * found: the route persisted an empty list, recorded the hash, answered
+ * `ok: true`, and every retry answered "unchanged" without running a turn.
  */
 function verifiedExtraction(events: readonly MessageStreamEvent[], category: SourceCategory, sourceText: string): VerifiedExtraction | undefined {
   let found: { claims: ExtractClaimsInput["claims"]; rejected: string[] } | undefined;
@@ -198,7 +209,7 @@ function verifiedExtraction(events: readonly MessageStreamEvent[], category: Sou
     }
     found.rejected.push(...output.data.rejected);
   }
-  return found;
+  return found !== undefined && found.claims.length > 0 ? found : undefined;
 }
 
 const accountSourceBodySchema = z

@@ -541,9 +541,13 @@ describe("Q6 (revision 1, reviewer 5): the route re-checks what it saves, not ju
     expect((await store.read()).claims).toEqual([]);
   });
 
-  it("a schema-valid claim whose quote isn't in the route's own source text is rejected, not saved (the quote re-check, previously untested)", async () => {
+  it("S1 (revision 2): a schema-valid claim whose quote isn't in the route's own source text saves nothing, records no hash, is not ok, and the retry opens a second turn", async () => {
     // The tool's action.result claims this verified (the shape a compromised or buggy tool step, or a race
     // against a since-changed source, could produce); RESUME_TEXT genuinely does not contain this quote.
+    // Round-2 reviewer issue 1 (probe 10): revision 1 persisted the empty list that survived the re-check,
+    // recorded the content hash and answered ok:true, so every retry answered "unchanged" and never ran a
+    // turn. With nothing surviving the re-check, the route now answers exactly as it does when the tool
+    // itself verified nothing (the D14 cases below).
     const fabricatedOutput = {
       sourceCategory: "resume",
       claims: [{ text: "Founded Quill.", kind: "fact", evidenceRef: "pasted.txt#1", evidenceQuote: "Founded Quill" }],
@@ -554,13 +558,34 @@ describe("Q6 (revision 1, reviewer 5): the route re-checks what it saves, not ju
     const bridge = await realBridge(fake);
     await provideResume(bridge); // RESUME_TEXT does not contain "Founded Quill"
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: unknown[] };
-    // The store's own persist step still runs (on an empty claims array) and succeeds trivially -- "ok" means
-    // "the store didn't refuse the write", the same as every other partial-rejection extraction; the rejected
-    // count in the message is what proves the fabricated claim was actually counted and excluded, not silently
-    // dropped. What this test exists to prove is the line below: it never reached the profile.
-    expect(body).toEqual({ ok: true, status: "ok", message: "No new claims from Resume; 1 had no matching quote.", claims: [] });
+    expect(body).toEqual({ ok: false, status: "no_result", message: "The model finished without saving any claims. Try again.", claims: [] });
     const store = new ProfileStore(bridge.workspace, bridge.clock);
     expect((await store.read()).claims).toEqual([]);
+    expect(await store.isSourceContentUnchanged("resume", await store.sourceText("resume"))).toBe(false);
+    const retry = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
+    expect(retry).toMatchObject({ ok: false, status: "no_result" }); // a real second turn, never "unchanged"
+    expect(fake.calls.count).toBe(2);
+  });
+
+  it("S1 (revision 2): mixed, one claim survives the re-check and one doesn't: ok, only the surviving claim saved, and the hash recorded", async () => {
+    const mixedOutput = {
+      sourceCategory: "resume",
+      claims: [LED_CLAIM, { text: "Founded Quill.", kind: "fact", evidenceRef: "pasted.txt#2", evidenceQuote: "Founded Quill" }],
+      rejected: [],
+      message: "2 claims verified.",
+    };
+    const fake = fakeExtraction([{ status: "completed", events: [actionResult(mixedOutput)] }]);
+    const bridge = await realBridge(fake);
+    await provideResume(bridge);
+    const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string }> };
+    expect(body).toMatchObject({ ok: true, status: "ok", message: "1 candidate claim extracted from Resume; 1 had no matching quote." });
+    expect(body.claims.map((claim) => claim.text)).toEqual([LED_CLAIM.text]);
+    const store = new ProfileStore(bridge.workspace, bridge.clock);
+    expect((await store.read()).claims.map((claim) => [claim.text, claim.evidence.quote])).toEqual([[LED_CLAIM.text, LED_CLAIM.evidenceQuote]]);
+    expect(await store.isSourceContentUnchanged("resume", await store.sourceText("resume"))).toBe(true);
+    const again = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
+    expect(again).toMatchObject({ ok: true, status: "unchanged" }); // the recorded hash skips the next turn (R7)
+    expect(fake.calls.count).toBe(1);
   });
 });
 
