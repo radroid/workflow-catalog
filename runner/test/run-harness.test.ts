@@ -228,6 +228,25 @@ describe("run-harness.ts: runTurn — turn classification (I1, eve-runtime.md §
   });
 });
 
+describe("run-harness.ts: runTurn — collectEvents (P04, round-1 review L11 nit)", () => {
+  it("collectEvents: true returns the turn's own stream events, in order", async () => {
+    const script = [started("gpt-5.6-luna"), completed({ inputTokens: 1, outputTokens: 1 }), turnCompleted(), sessionWaiting()];
+    const { eve } = fakeEve(async () => script);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go", collectEvents: true });
+    expect(result.status).toBe("ok");
+    expect(result.events).toEqual(script);
+  });
+
+  it("omitting collectEvents (the default) leaves events absent from the result, not an empty array", async () => {
+    const { eve } = fakeEve(async () => [started("gpt-5.6-luna"), completed({ inputTokens: 1, outputTokens: 1 }), turnCompleted(), sessionWaiting()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result).toEqual({ status: "ok", tokens: { input: 1, output: 1 }, model: "gpt-5.6-luna" });
+    expect("events" in result).toBe(false);
+  });
+});
+
 describe("run-harness.ts: runTurn — provider limit (decision 1, G5)", () => {
   it("an ordinary failure (step.failed → turn.failed → session.waiting, as eve ends a failed conversation turn) fails the turn without pausing the budget", async () => {
     const { eve } = fakeEve(async () => [started("m1"), turnFailed("MODEL_CALL_FAILED", "The model declined to answer."), sessionWaiting()]);

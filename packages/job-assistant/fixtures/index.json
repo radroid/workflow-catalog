@@ -4,6 +4,8 @@
   "portfolio.md": "raw-text",
   "repo-summary.md": "raw-text",
   "linkedin-export.md": "raw-text",
+  "job-posting-northwind.txt": "raw-text",
+  "job-posting-hostile.txt": "raw-text",
   "job-fernwood.json": "job-snapshot",
   "job-harbor.json": "job-snapshot",
   "job-hostile.json": "job-snapshot",

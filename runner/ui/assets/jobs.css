@@ -1,0 +1,359 @@
+/* Jobs page: extends runner.css tokens (docs/spec/visuals/theme.css). Kept
+   separate from runner.css, which P04 does not own. */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* P03's J4-J5: the sticky "Last action" line, the page's one live region. JS keeps a focused control clear of it
+   (keepClear) and where it is on screen when the page changes around it (keepInPlace), so the browser's own scroll
+   anchoring is off. */
+html {
+  scroll-padding-top: var(--last-action-offset, 5rem);
+  overflow-anchor: none;
+}
+.last-action {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 0 1.25rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--muted);
+  border-left: 3px solid var(--border);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  box-shadow: 0 1px 0 var(--border);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.last-action .tag {
+  display: block;
+  font: 500 0.675rem/1.5 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.last-action code {
+  font: 0.95em var(--font-mono);
+}
+.last-action a {
+  color: inherit;
+}
+.last-action.done {
+  border-left-color: var(--foreground);
+}
+/* var(--destructive): the same border this page's status line used before L12, measured in round 1 and
+   dark-mode-aware through theme.css's own redefinition of the token. */
+.last-action.refused {
+  border-left-color: var(--destructive);
+}
+/* J5, T18: at most two lines at 640 px and below. The clamp sits on the inner body, which has no padding, so it
+   cuts exactly between the second and third line boxes and no sliver of a third line shows. The whole sentence
+   stays in the DOM, and in the text's title. */
+@media (max-width: 640px) {
+  .last-action {
+    padding: 0.375rem 0.625rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+  }
+  .last-action-body {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .last-action .tag {
+    display: inline;
+    margin-right: 0.375rem;
+  }
+}
+
+/* T19: a heading that takes focus (the opened job's, the page's) shows the theme's ring, never the browser's. */
+[tabindex="-1"]:focus {
+  outline: none;
+}
+[tabindex="-1"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.85rem;
+}
+.field label {
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+/* T15, following runner.css's G7: a form control's border needs 3:1 against the card (WCAG 1.4.11), so it uses
+   --muted-foreground (7.8:1 light, 8.0:1 dark), not the hairline --border (1.27:1). */
+.field input,
+.field textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--muted-foreground);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+.field input:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.field textarea {
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+/* L12 item 6, T15: a field error sits beside its control, with aria-invalid on the control. This rule is more
+   specific than `.field input` above, so the red border always wins, and the inset shadow doubles it so the
+   state doesn't rest on a 1 px line alone. */
+.field input[aria-invalid="true"],
+.field textarea[aria-invalid="true"] {
+  border-color: #b91c1c;
+  box-shadow: inset 0 0 0 1px #b91c1c;
+}
+.field-error {
+  color: #b91c1c;
+  font-size: 0.85rem;
+  margin: 0.3rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.jobs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.job-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+/* L12 polish: mark the currently open row. */
+.job-row.open {
+  border-left: 3px solid var(--foreground);
+}
+.job-open {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  font: 500 0.95rem/1.4 var(--font-sans);
+  color: var(--foreground);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.job-open:hover {
+  text-decoration: underline;
+}
+.job-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.job-row .job-meta,
+.job-row .job-status {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+/* T6: a damaged file is named, with the same left rule the page uses for any refusal; never amber, which is only
+   for "needs a decision". */
+.job-status.refused,
+.detail-unreadable {
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.6rem;
+  overflow-wrap: anywhere;
+}
+.detail-unreadable {
+  margin: 0.75rem 0 0;
+}
+.detail-unreadable p {
+  margin: 0 0 0.25rem;
+}
+.unreadable-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.detail-structured,
+.detail-revisions {
+  margin-top: 1rem;
+}
+.detail-structured h3,
+.detail-revisions h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+.detail-structured .button {
+  margin-top: 0.75rem;
+}
+/* L12 item 8: the detail's address line never causes horizontal scroll, however long the address. */
+.detail-address {
+  overflow-wrap: anywhere;
+}
+.extraction-state {
+  margin: 0.5rem 0 0;
+}
+.extraction-state.refused {
+  color: var(--foreground);
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.6rem;
+}
+.structured-fields {
+  margin: 0;
+}
+.structured-fields dt {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+.structured-fields dt:first-child {
+  margin-top: 0;
+}
+.structured-fields dd {
+  margin: 0.15rem 0 0;
+  overflow-wrap: anywhere;
+}
+.structured-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.revisions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.revision-card {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+.revision-card:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.revision-head {
+  margin: 0;
+}
+.revision-number {
+  font-weight: 500;
+}
+.revision-diff summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+  margin-top: 0.35rem;
+}
+.revision-diff summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* The line diff (L12 item 9, T19). Every line is a grid of a two-character marker column and the text, unchanged
+   lines included, so a wrapped line hangs under its own text and every line's text starts in the same column.
+   The visually hidden "Added:"/"Removed:" prefix is absolutely positioned, so it takes no grid cell. */
+.diff {
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  overflow: hidden;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr);
+  padding: 0.1rem 0.5rem;
+}
+.diff-marker {
+  user-select: none;
+}
+.diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-line.same {
+  color: var(--muted-foreground);
+}
+.diff-line.added {
+  background: var(--secondary);
+}
+.diff-line.removed {
+  background: var(--muted);
+}
+.diff-line.removed .diff-text {
+  text-decoration: line-through;
+}
+.diff-skip {
+  padding: 0.15rem 0.5rem 0.15rem calc(0.5rem + 2ch);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.detail-raw {
+  margin-top: 1rem;
+}
+.detail-raw summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+.detail-raw summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* T17: a scroll container a keyboard can reach: focusable (tabindex="0"), a labelled region, with the theme's
+   ring. */
+.posting-text {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  background: var(--muted);
+  border-radius: calc(var(--radius) - 2px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+.posting-text:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .field-error {
+    color: #f87171;
+  }
+  .field input[aria-invalid="true"],
+  .field textarea[aria-invalid="true"] {
+    border-color: #f87171;
+    box-shadow: inset 0 0 0 1px #f87171;
+  }
+}
