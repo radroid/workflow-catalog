@@ -1,9 +1,9 @@
 Latest: iter-006 in progress, started 18:57 on 2026-09-23. Iter 005 closed with P08-A, P03 and P07-B merged (360ac69, 9821bee, e01017c); CI on e01017c is green, extension e2e included. In `.loop/state.json`, `iter` stays 5 until iter 006 closes.
 
 Running now:
-- **P04 revision 2** (PR #14): a fresh Opus escalation on `packet/P04` from f3cdec8, harness port 4330. Its prompt is `logs/handoff/P04-escalation-prompt.md`.
-  - Round 2 was REVISE 6 and UI REVISE 9. The work list is T1–T21 in `logs/handoff/P04-round-2-review.md`.
-  - Later REVISEs go back to this escalation. Round 3 is narrow, by the same reviewer (its worktree is kept) and the same UI critic.
+- **P04 round 3** (PR #14, head ffc4a0a, CI 35968469459 green): a narrow re-check by the same reviewer (port 4320 if needed) and UI critic (4340).
+  - The Opus escalation did T1–T20; T21 killed 21 of 22 mutations, and M7 wasn't run because it needs real DNS.
+  - Later REVISEs go back to this escalation, whose worktree is kept. Its prompt is `logs/handoff/P04-escalation-prompt.md`.
 - **P02.2** (new, runner workspace precedence): **PR #15**, now in a narrow round 2 by the same Opus reviewer (head 709f86c, CI 35966571636 green).
   - Round 1 was REVISE 3; decisions W1–W8 are in `logs/handoff/P02.2-round-1-review.md`.
   - An orchestrator addendum moved `buildEveEnv` into `lib/eve-env.ts`. Revision 1's entry guard would have skipped the runner on symlinked paths.
