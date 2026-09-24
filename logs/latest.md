@@ -1,8 +1,8 @@
 Latest: iter-007 in progress since 2026-09-24 about 08:10. Round 1 for both PRs returned REVISE, and both are in revision 1 with their own implementers:
 - **P05** (#16): REVISE 9 + UI REVISE 9. V1–V20 in `logs/handoff/P05-round-1-review.md`; sent about 11:59. Port 4320.
-- **P03.2** (#17): REVISE 7 + UI REVISE 5. Q1–Q12 in `logs/handoff/P03.2-round-1-review.md`; sent about 11:36. Port 4330. Last closed: iter-006.
+- **P03.2** (#17): revision 1 (8ddcbae), then round 2 REVISE 4 + UI REVISE 3. A fresh Opus escalation took over `packet/P03.2` about 13:46, with S1–S9 in `logs/handoff/P03.2-round-2-review.md` (prompt: `P03.2-escalation-prompt.md`). Port 4330. Last closed: iter-006.
 
-Next, in iter 007: when a revision reports, round 2 is narrow and reuses the same reviewer and UI critic (SendMessage with their code words). A second REVISE goes to a fresh Opus escalation. When P05 merges, the rulebook's P06 row says P06 extends `routes/applications.ts`.
+Next, in iter 007: when a revision reports, the next round is narrow and reuses the same reviewer and UI critic (SendMessage with their code words). When P05 merges, the rulebook's P06 row says P06 extends `routes/applications.ts`.
 - **Then:**
   - after P05: P08-B (it carries P08-A's follow-ups and the extraction-budget question) and P06 (it carries P04's follow-ups);
   - after P03.2 and P05: P03.1;
