@@ -1001,6 +1001,60 @@ describe("the state while a preparation finishes", () => {
       expect((await detail(run.bridge, run.taskId)).state.status).toBe(outcome);
     }
   });
+
+  /**
+   * A view that read the application record before `finish` and the attempt after it (CI's Linux runner hit
+   * this on revision 1's head: the page read "interrupted" and announced "Couldn't prepare" for a preparation
+   * that had parked). Each view's attempt read is held while the whole preparation finishes.
+   */
+  it("a view whose reads straddle the whole finish reads running, never interrupted, and the next read is the outcome", async () => {
+    const { bridge, model } = await setup(honest(FERNWOOD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, fixtureJob(FERNWOOD_JOB));
+    let turnHeld!: () => void;
+    let releaseTurn!: () => void;
+    const holding = new Promise<void>((resolve) => (turnHeld = resolve));
+    model.beforeTurn = () => {
+      turnHeld();
+      return new Promise<void>((resolve) => (releaseTurn = resolve));
+    };
+    const started = await post<PrepareBody>(bridge, "/prepare", { jobId, coverLetter: false });
+    expect(started.body.outcome).toBe("started");
+    const taskId = started.body.application.taskId;
+    await holding;
+
+    const store = ApplicationsStore.prototype as unknown as { readPreparation(this: ApplicationsStore, taskId: string): Promise<unknown> };
+    const readPreparation = store.readPreparation;
+    let holdViews = true;
+    let heldCount = 0;
+    let releaseViews!: () => void;
+    const viewsReleased = new Promise<void>((resolve) => (releaseViews = resolve));
+    store.readPreparation = async function (this: ApplicationsStore, id: string) {
+      if (holdViews) {
+        heldCount += 1;
+        await viewsReleased;
+      }
+      return readPreparation.call(this, id);
+    };
+    try {
+      // Both views read the application record (processing: running), then wait to read the attempt.
+      const listing = get<ListView>(bridge, "");
+      const opening = get<DetailView>(bridge, `/${taskId}`);
+      while (heldCount < 2) await new Promise((resolve) => setTimeout(resolve, 5));
+      // The whole preparation finishes meanwhile: the application, then the attempt, then out of flight.
+      holdViews = false;
+      releaseTurn();
+      await waitForPreparationQueue(bridge.workspace.root);
+      releaseViews();
+      const [list, view] = await Promise.all([listing, opening]);
+      expect(list.body.applications.find((entry) => entry.taskId === taskId)?.state.status).toBe("running");
+      expect(view.body.state.status).toBe("running");
+    } finally {
+      store.readPreparation = readPreparation;
+    }
+    // The next read is whole: the outcome, never "interrupted".
+    expect((await get<ListView>(bridge, "")).body.applications.find((entry) => entry.taskId === taskId)?.state).toEqual({ status: "parked", message: "2 questions left.", open: 2 });
+    expect((await detail(bridge, taskId)).state.status).toBe("parked");
+  });
 });
 
 describe("refusals before anything runs", () => {

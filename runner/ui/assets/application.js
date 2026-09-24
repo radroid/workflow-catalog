@@ -836,7 +836,16 @@ function lineText() {
 function showUnreachable(error) {
   if (unreachableShown || started.size === 0) return;
   unreachableShown = true;
-  lastAction(error?.code === "unreachable" ? CANT_REACH : "Couldn't refresh your applications: the runner hit a problem.", "refused");
+  const unreachable = error?.code === "unreachable";
+  lastAction(unreachable ? CANT_REACH : "Couldn't refresh your applications: the runner hit a problem.", "refused");
+  if (!unreachable) return;
+  // "The runner's agent is running." was true at the last refresh, not now; the next good refresh renders it from the runner again.
+  const runner = $("ready-runner");
+  if (runner) {
+    runner.className = "ready-blocked";
+    runner.textContent = "The runner can't be reached right now.";
+  }
+  listKey = "";
 }
 
 /** The first good refresh after an outage: the line stops saying the runner can't be reached, and says what is true now. */

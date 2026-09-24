@@ -791,10 +791,15 @@ describe("Applications page: watching (revision 1, V13)", () => {
     }
     expect(page.lines.filter((line) => line === "Can't reach the runner. Is it still running?")).toHaveLength(1);
     expect(page.byId("last-action").className).toContain("refused");
+    // "Before preparing" stops claiming the runner is running while it can't be reached.
+    expect(page.byId("ready-runner").textContent).toBe("The runner can't be reached right now.");
+    expect(page.byId("ready-runner").className).toBe("ready-blocked");
 
     down = false;
     page.refreshNow();
     await until(() => page.lines.at(-1) === "Still preparing “Platform Lead · Fernwood”…", "the notice to clear");
+    await until(() => page.byId("ready-runner").textContent === "The runner's agent is running.", "the runner line to come back");
+    expect(page.byId("ready-runner").className).toBe("ready-ok");
     release();
     await waitForPreparationQueue(bridge.workspace.root);
     page.refreshNow();

@@ -114,6 +114,29 @@ const PROCESS_OWNER = randomUUID();
 const PREPARATION_CHAINS = new Map<string, Promise<unknown>>();
 /** Applications this process has queued and not yet finished, by workspace and task. Checked and set before any await. */
 const IN_FLIGHT = new Set<string>();
+/**
+ * How many times each application's flight has started or ended in this process. A view notes these before it
+ * reads any record, so a preparation that starts or finishes while the view reads is never taken for an
+ * interrupted one: the view may hold the application as it was before `finish` and the attempt as it is after.
+ */
+const FLIGHT_CHANGES = new Map<string, number>();
+
+function beginFlight(flight: string): void {
+  IN_FLIGHT.add(flight);
+  FLIGHT_CHANGES.set(flight, (FLIGHT_CHANGES.get(flight) ?? 0) + 1);
+}
+
+function endFlight(flight: string): void {
+  IN_FLIGHT.delete(flight);
+  FLIGHT_CHANGES.set(flight, (FLIGHT_CHANGES.get(flight) ?? 0) + 1);
+}
+
+/** What a view notes before it reads: each flight's count so far. */
+type FlightMark = ReadonlyMap<string, number>;
+
+function flightMark(): FlightMark {
+  return new Map(FLIGHT_CHANGES);
+}
 /** Answers to one application's questions, one write at a time. */
 const ANSWER_CHAINS = new Map<string, Promise<unknown>>();
 
@@ -333,7 +356,7 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
   const { application } = await applications.ensureForJob(request.jobId);
   const flight = flightKey(ctx, application.taskId);
   if (IN_FLIGHT.has(flight)) return { outcome: "already_running", taskId: application.taskId };
-  IN_FLIGHT.add(flight); // synchronously after the check: a second request for this task sees it
+  beginFlight(flight); // synchronously after the check: a second request for this task sees it
 
   try {
     const previous = await applications.readPreparation(application.taskId);
@@ -370,10 +393,10 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
       kind: request.kind ?? "manual",
       isCatchUp: request.isCatchUp ?? false,
     };
-    void serialise(PREPARATION_CHAINS, ctx.workspace.root, () => runPreparation(ctx, plan)).finally(() => IN_FLIGHT.delete(flight));
+    void serialise(PREPARATION_CHAINS, ctx.workspace.root, () => runPreparation(ctx, plan)).finally(() => endFlight(flight));
     return { outcome: "started", taskId: application.taskId };
   } catch (error) {
-    IN_FLIGHT.delete(flight);
+    endFlight(flight);
     throw error;
   }
 }
@@ -386,7 +409,7 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
 async function reexport(ctx: RunnerContext, application: Application, source: VersionRecord, key: string, details: PersonDetails): Promise<PrepareStart> {
   const flight = flightKey(ctx, application.taskId);
   if (IN_FLIGHT.has(flight)) return { outcome: "already_running", taskId: application.taskId };
-  IN_FLIGHT.add(flight);
+  beginFlight(flight);
   try {
     const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
     const read = await new JobsStore(ctx.workspace).readSnapshot(application.jobId, source.jobRevision);
@@ -401,7 +424,7 @@ async function reexport(ctx: RunnerContext, application: Application, source: Ve
     }));
     return { outcome: "reexported", taskId: application.taskId, version: version.version, replaces: version.replaces ?? source.version };
   } finally {
-    IN_FLIGHT.delete(flight);
+    endFlight(flight);
   }
 }
 
@@ -735,10 +758,13 @@ function parkedState(attempt: PreparationRecord): StateView {
  * The application's state as the page shows it. While this process is still working on the application (queued,
  * in its turn, or writing its result) it is running, whatever the files say in between: `finish` writes the
  * application and then the attempt, and a read between the two must never look finished, or interrupted.
+ * So is one whose preparation started or ended while the view read its records (`mark`, noted before the first
+ * read): the application may have been read before `finish` and the attempt after it, and the next read is whole.
  * A running record that no one in this process is working on was left by a runner that stopped.
  */
-function stateOf(ctx: RunnerContext, application: Application, attempt: PreparationRecord | "unreadable" | undefined): StateView {
-  if (IN_FLIGHT.has(flightKey(ctx, application.taskId))) return { status: "running", message: "Preparing now. This can take a minute or two." };
+function stateOf(ctx: RunnerContext, application: Application, attempt: PreparationRecord | "unreadable" | undefined, mark: FlightMark): StateView {
+  const flight = flightKey(ctx, application.taskId);
+  if (IN_FLIGHT.has(flight) || (FLIGHT_CHANGES.get(flight) ?? 0) !== (mark.get(flight) ?? 0)) return { status: "running", message: "Preparing now. This can take a minute or two." };
   const known = attempt !== undefined && attempt !== "unreadable" ? attempt : undefined;
   if (known?.status === "running" || application.processing.status === "running") return { status: "interrupted", message: INTERRUPTED_MESSAGE };
   if (known?.status === "parked") return parkedState(known);
@@ -778,7 +804,7 @@ function lastActivity(application: Application, attempt: PreparationRecord | "un
   return times.reduce((latest, time) => (time > latest ? time : latest), "");
 }
 
-async function summaryView(ctx: RunnerContext, application: Application, jobs: JobsStore, applications: ApplicationsStore) {
+async function summaryView(ctx: RunnerContext, application: Application, jobs: JobsStore, applications: ApplicationsStore, mark: FlightMark) {
   const latest = application.documents.reduce((max, document) => Math.max(max, document.version), 0);
   const snapshot = await latestSnapshot(jobs, application.jobId);
   const attempt = await applications.readPreparation(application.taskId);
@@ -790,7 +816,7 @@ async function summaryView(ctx: RunnerContext, application: Application, jobs: J
       jobName: jobName(snapshot),
       stage: application.stage,
       latestVersion: latest > 0 ? latest : null,
-      state: stateOf(ctx, application, attempt),
+      state: stateOf(ctx, application, attempt, mark),
     },
   };
 }
@@ -810,6 +836,7 @@ function detailsView(details: PersonDetails) {
 }
 
 async function listView(ctx: RunnerContext) {
+  const mark = flightMark(); // before any record is read
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
   const jobs = new JobsStore(ctx.workspace);
   const loaded = await new ProfileStore(ctx.workspace, ctx.clock).load();
@@ -820,7 +847,7 @@ async function listView(ctx: RunnerContext) {
   const runnerProblem = await runnerRefusal(ctx);
   const budget = await getBudgetState(ctx.workspace, ctx.clock);
   const details = await applications.readDetails();
-  const rows = await Promise.all(listed.applications.map((application) => summaryView(ctx, application, jobs, applications)));
+  const rows = await Promise.all(listed.applications.map((application) => summaryView(ctx, application, jobs, applications, mark)));
   // Most recent activity first; the job's name breaks a tie, so the order never shuffles between refreshes.
   rows.sort((a, b) => (a.activity === b.activity ? a.view.jobName.localeCompare(b.view.jobName) : a.activity > b.activity ? -1 : 1));
   return {
@@ -846,6 +873,7 @@ async function listView(ctx: RunnerContext) {
 }
 
 async function detailView(ctx: RunnerContext, taskId: string) {
+  const mark = flightMark(); // before any record is read
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
   const jobs = new JobsStore(ctx.workspace);
   const application = await applications.get(taskId);
@@ -873,7 +901,7 @@ async function detailView(ctx: RunnerContext, taskId: string) {
     jobId: application.jobId,
     jobName: jobName(latest),
     stage: application.stage,
-    state: stateOf(ctx, application, attempt),
+    state: stateOf(ctx, application, attempt, mark),
     preparation: known
       ? {
           status: known.status,
