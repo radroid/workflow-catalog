@@ -4,9 +4,7 @@ Running now:
 - **P04 round 3** (PR #14, head ffc4a0a, CI 35968469459 green): a narrow re-check by the same reviewer (port 4320 if needed) and UI critic (4340).
   - The Opus escalation did T1–T20; T21 killed 21 of 22 mutations, and M7 wasn't run because it needs real DNS.
   - Later REVISEs go back to this escalation, whose worktree is kept. Its prompt is `logs/handoff/P04-escalation-prompt.md`.
-- **P02.2** (new, runner workspace precedence): **PR #15**, now in a narrow round 2 by the same Opus reviewer (head 709f86c, CI 35966571636 green).
-  - Round 1 was REVISE 3; decisions W1–W8 are in `logs/handoff/P02.2-round-1-review.md`.
-  - An orchestrator addendum moved `buildEveEnv` into `lib/eve-env.ts`. Revision 1's entry guard would have skipped the runner on symlinked paths.
+- **P02.2 merged** (#15, squash 2b93cf0) after REVISE 3, revision 1 plus an orchestrator addendum, and APPROVE. Nits R2-N1, R2-N2 and R2-N5 are carried into P10 part B.
 - After P04 merges: P05 (Opus) ∥ P03.2 (Sonnet), from their prompts in `logs/handoff/`.
 - **Then:**
   - after P04: P05 (Opus) ∥ P03.2 (Sonnet), which needs P04's turn events. P03.1 follows P03.2, because they share files.

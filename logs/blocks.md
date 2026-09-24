@@ -1322,3 +1322,22 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
   - M4 must still fail a test.
 - Round 2 then reviews the fixed head.
 - **Lesson for later grants:** never make a CLI entry file importable by adding an argv guard. Put the testable logic in a `lib/` module.
+
+## 2026-09-24 — P02.2 peer review, round 2 [APPROVED]
+
+**Iter:** 006
+**Source:** peer-review (the same Opus reviewer), PR #15 at 709f86c
+**Severity:** —
+
+**Verdict:** APPROVE. All three round-1 issues and all five nits are fixed (W1–W8, with the W4 addendum).
+- Setup never adopts an ambient workspace.
+- Doctor compares real folders.
+- Forget offers only the workspace `.env.local` records, and notes one that comes only from the environment.
+- `cli/runner.ts` differs from the merge base only by the helper call.
+- M3, M4, a string-compare mutation and a forget-offers-B mutation all fail tests.
+- Chain, merge and CI are green (Playwright 37/37).
+
+**Decision:**
+- Merged: squash 2b93cf0. The remote branch is deleted, the worktrees removed, and GOALS P3.G ticked.
+- Nits R2-N1 (README wording), R2-N2 (a case-only doctor test) and R2-N5 (`eve-env.ts`'s `PATH` source) are carried into P10 part B, with those lines granted.
+- R2-N3, R2-N4 and R2-N6 are dropped as trivial.
