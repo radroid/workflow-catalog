@@ -471,7 +471,18 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     expect(fake.calls.cancelCount).toBe(1);
   });
 
-  it("a 'completed' turn with no terminal session event never finished: not ok, no hash (eve-runtime §8 item 15)", async () => {
+  it("S2 (revision 2): a deadline of a second or more is named in seconds, as the 90 s default is", async () => {
+    // P03's version of the test above asserted the 90 s wording itself; the hanging fixture needs a short
+    // deadline, so a 1 s one keeps the seconds form pinned. The 90 s value is pinned by Q4's test below.
+    const fake = fakeExtraction([{ status: "completed", hang: true }]);
+    const bridge = await realBridge(fake);
+    await provideResume(bridge);
+    extractionTiming.timeoutMs = 1_000;
+    const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string };
+    expect(body).toMatchObject({ ok: false, status: "timeout", message: "The extraction stopped: no answer from the model within 1 s. Try again." });
+  });
+
+  it("a 'completed' turn with no terminal session event never finished: not ok, no hash, and the session is cancelled (eve-runtime §8 item 15)", async () => {
     const fake = fakeExtraction([{ status: "completed", extract: [LED_CLAIM], noBoundary: true }]);
     const bridge = await realBridge(fake);
     await provideResume(bridge);
