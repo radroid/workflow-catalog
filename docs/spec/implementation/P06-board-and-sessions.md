@@ -43,3 +43,4 @@ Findings are in `logs/handoff/P05-round-1-review.md`. On top of P06's Owns, thes
 - **The nav order.** Applications joins the nav through its meta tag, after Status. Place it between Jobs and Board in `NAV_PAGES`.
 - **The Jobs page is silent while the runner is down.** Use the notice P05 adds (V13): show and announce "Can't reach the runner. Is it still running?" once, and clear it on the next good refresh.
 - **Versions that share a profile version look identical.** Excluding a claim keeps P03's approval version, so versions 1 and 2 both say "career profile version 1". Name what separates them.
+- **The Status page's model check** (from P03.2's round-2 critic, iter 007): "Check the model" drops focus to the page body while the check runs, and its result is never announced. Keep focus on the button, mark it `aria-disabled` while busy, and announce the result once. `runner/ui/assets/status.js` is granted.
