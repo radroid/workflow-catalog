@@ -267,6 +267,38 @@ describe("captures.ts: extraction is queued and runs in the background through r
     const outcome = await runExtraction(bridge.ctx, randomUUID(), 1, "some text");
     expect(outcome.status).toBe("not_extracted");
   });
+
+  it("a failed retry keeps the fields an earlier, successful turn already wrote (round-1 review L14, mutation target: 'keep a failed turn's fields')", async () => {
+    const ref: { store?: JobsStore } = {};
+    let calls = 0;
+    // First call (the initial capture's own extraction): a real, successful extract_job round trip, exactly
+    // like extractingScript. Second call (the manual retry below): the turn fails outright, calling no tool at
+    // all — the retry attempt itself found nothing new, it never claims to have erased the earlier result.
+    const { eve } = fakeEve(async (message) => {
+      calls += 1;
+      if (calls === 1) {
+        const jobId = /jobId: "([0-9a-f-]{36})"/.exec(message)?.[1]!;
+        const revision = Number(/revision: (\d+)/.exec(message)?.[1] ?? "0");
+        const result = await ref.store!.recordStructured(jobId, revision, NORTHWIND_STRUCTURED);
+        return [started(), actionResult("extract_job", { jobId, revision, persisted: result.ok, message: result.message }), completedUsage(), turnCompleted(), sessionWaiting()];
+      }
+      return [started(), turnFailed()];
+    });
+    const bridge = await bridgeWith(eve);
+    ref.store = new JobsStore(bridge.workspace);
+    const { token } = await pairDevice(bridge);
+    const captured = (await (await postEvent(bridge, token, jobCapture({ text: "Staff Platform Engineer at Northwind Labs." }))).json()) as { result: { jobId: string; revision: number } };
+    await waitForExtractionQueue(bridge.workspace.root);
+    expect(calls).toBe(1);
+    expect((await ref.store.getSnapshot(captured.result.jobId, captured.result.revision))?.structured).toEqual(NORTHWIND_STRUCTURED);
+
+    const retryResponse = await postCaptures(bridge, `/${captured.result.jobId}/${captured.result.revision}/extract`, {});
+    expect(retryResponse.status).toBe(200);
+    await waitForExtractionQueue(bridge.workspace.root);
+    expect(calls).toBe(2); // the retry's own turn really ran, and really failed
+    const afterRetry = await ref.store.getSnapshot(captured.result.jobId, captured.result.revision);
+    expect(afterRetry?.structured).toEqual(NORTHWIND_STRUCTURED); // the failed retry kept what the first turn wrote
+  });
 });
 
 describe("captures.ts: three paths produce identical snapshot records for the same fixture text (F6 acceptance)", () => {
