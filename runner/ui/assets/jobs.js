@@ -27,7 +27,12 @@ import { el } from "./runner.js";
 
 const $ = (id) => document.getElementById(id);
 
-const LINE_MAX = 90;
+/**
+ * T18: a line that names a job is fitted to 80 characters, so it stays within the two-line clamp at 390 px. Measured
+ * in Chromium with Geist at 390 px, realistic job names fit at 80 and 85; at 90, 9 of 24 did not. The fixed sentences
+ * are 88 characters at most, and every one of them fits.
+ */
+const NAMED_LINE_MAX = 80;
 /** @workflow-catalog/contracts' MAX_JOB_CAPTURE_TEXT_BYTES; the browser can't import that package. */
 const MAX_CAPTURE_TEXT_BYTES = 200_000;
 const FAST_REFRESH_MS = 2_000;
@@ -131,7 +136,7 @@ function shorten(text, max) {
 
 /** `before“name”after`, with the name shortened so the whole sentence fits the line (T18). */
 function withName(before, name, after) {
-  const room = Math.max(16, LINE_MAX - plainOf(before).length - plainOf(after).length - 2);
+  const room = Math.max(16, NAMED_LINE_MAX - plainOf(before).length - plainOf(after).length - 2);
   return [before, data(`“${shorten(name, room)}”`), after];
 }
 
@@ -737,10 +742,26 @@ function renderDetail(detail) {
 /** Shows `detail` in place, and only when it changed (T16): a focused control keeps its place, and open sections stay open. */
 function showDetail(detail) {
   openDetail = detail;
+  syncOpenRow(detail);
   const key = JSON.stringify(detail);
   if (key === detailKey) return;
   detailKey = key;
   keepInPlace(() => renderDetail(detail));
+}
+
+/**
+ * The open job's row shows what its detail shows. A refresh reads the list first and the detail second, so the
+ * detail is the newer of the two; without this, the row could say "Waiting to extract…" while the detail says
+ * "Extracting in the background…" until the next refresh.
+ */
+function syncOpenRow(detail) {
+  const entry = jobsById.get(detail.jobId);
+  const latest = detail.revisions.at(-1);
+  if (!entry || !latest || entry.latestRevision !== latest.revision) return;
+  const extraction = detail.extraction.at(-1) ?? null;
+  if (JSON.stringify([entry.latest, entry.extraction]) === JSON.stringify([latest, extraction])) return;
+  jobsById.set(detail.jobId, { ...entry, latest, extraction });
+  renderList();
 }
 
 /** Re-reads the open job, only while it is still the one open. Never moves focus. */

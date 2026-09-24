@@ -308,8 +308,14 @@ look at, not a merge tool) and, for the latest revision, the structured
 fields found so far (title, company, location, requirements, nice-to-have,
 deadline, apply link) with a button to run extraction again for a revision
 saved before eve was running, whose turn did not finish, or that a person
-just wants re-checked. As with the Runs and Settings pages below, one
-persistent live region announces every outcome once, `aria-disabled` marks a
+just wants re-checked. While it is visible, the page refreshes itself, every
+2 s while an extraction is waiting or running and every 5 s otherwise, and
+updates the list and the open job in place: open sections stay open and a
+focused control never moves. It announces the result of an extraction only
+if the page started it; a capture from the extension joins the list without
+an announcement. As with the Runs and Settings pages below, one
+persistent live region announces every outcome once, in one short sentence
+with the consequence first (the reasons live in the job's detail), `aria-disabled` marks a
 request in flight without dropping focus, and — since `server/http.ts`'s own
 validation messages name the offending field for API consumers, not a person
 reading the page — every message this page shows is its own hand-written

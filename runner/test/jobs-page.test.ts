@@ -256,10 +256,10 @@ describe("Jobs page: paste form", () => {
     const bridge = await realBridge();
     const page = await openJobsPage(bridge);
     page.type("paste-url", "https://jobs.example/fernwood-staff-swe");
-    page.type("paste-text", "Staff Software Engineer at Fernwood. Fictional posting.");
+    page.type("paste-text", "Staff Software Engineer at Fernwood\nFictional posting.");
     page.submit("paste-form");
     await until(() => page.status().startsWith("Saved "), "the save outcome");
-    expect(page.status()).toBe("Saved “Staff Software Engineer at Fernwood. Fictional posting.”; not extracted yet.");
+    expect(page.status()).toBe("Saved “Staff Software Engineer at Fernwood”; not extracted yet.");
     expect(page.byId("paste-url").value).toBe("");
     expect(page.byId("paste-text").value).toBe("");
     expect(page.byId("paste-submit").getAttribute("aria-disabled")).toBe("false");
@@ -738,6 +738,33 @@ describe("Jobs page: extraction in the background (T11)", () => {
     expect(page.status()).toBe("Nothing yet.");
   });
 
+  it("the open job's row never disagrees with its detail: the detail, read after the list, wins", async () => {
+    const held = gate();
+    const { bridge, store } = await bridgeExtracting(NORTHWIND_FIELDS, held.opened);
+    const { capture } = await captureAndExtract(bridge.ctx, { url: "https://jobs.example/northwind-labs/staff-platform-engineer", text: "Staff Platform Engineer at Northwind Labs.", extractorVersion: "extractor@1.0.0", capturedAt: CAPTURED_AT });
+    for (let tries = 0; ((await store.getExtractionState(capture.jobId, 1)) as { status?: string } | undefined)?.status !== "running"; tries += 1) {
+      if (tries > 200) throw new Error("the turn never started");
+      await sleep(10);
+    }
+    // Every list read is a moment older than the detail read that follows it: here, from just before the turn started.
+    const page = await openJobsPage(bridge, {
+      intercept: (input, init) => {
+        if ((init.method ?? "GET") !== "GET" || input !== "/api/captures") return undefined;
+        return bridge.request(input, { headers: { cookie: COOKIE, origin: BRIDGE, "sec-fetch-site": "same-origin" } }).then(async (response) => {
+          const body = (await response.json()) as { jobs: Array<{ extraction: unknown }> };
+          for (const job of body.jobs) job.extraction = { status: "waiting", updatedAt: CAPTURED_AT };
+          return jsonResponse(200, body);
+        });
+      },
+    });
+    await until(() => page.document.querySelector(".job-status")?.textContent === "Waiting to extract…", "the list's older read");
+    await openFirstJob(page);
+    expect(page.byId("detail-extraction-message").textContent).toBe("Extracting in the background…");
+    expect(page.document.querySelector(".job-status")?.textContent).toBe("Extracting…");
+    held.open();
+    await waitForExtractionQueue(bridge.workspace.root);
+  });
+
   it("a new extension capture joins the list on the page's own 5 s refresh, with no announcement", async () => {
     const bridge = await realBridge();
     const page = await openJobsPage(bridge);
@@ -765,7 +792,7 @@ describe("Jobs page: extraction in the background (T11)", () => {
 });
 
 describe("Jobs page: the line (J5, T18)", () => {
-  it("every line message is one sentence of 90 characters or fewer, however long the job's name", async () => {
+  it("every line message is one sentence of 90 characters or fewer, and 80 or fewer when it names a job, however long the name", async () => {
     const bridge = await realBridge(); // no eve: saves are not extracted
     const page = await openJobsPage(bridge);
     const longTitle = "Senior Staff Platform Engineer, Developer Experience and Internal Tooling, at Northwind Labs in Fernwood";
@@ -784,8 +811,9 @@ describe("Jobs page: the line (J5, T18)", () => {
     await until(() => page.lines.at(-1) === "Not saved.", "the refusal to be recorded");
 
     expect(page.lines.length).toBeGreaterThanOrEqual(4);
+    expect(page.lines.filter((line) => line.includes("“")).length).toBeGreaterThanOrEqual(3);
     for (const line of page.lines) {
-      expect(line.length, line).toBeLessThanOrEqual(90);
+      expect(line.length, line).toBeLessThanOrEqual(line.includes("“") ? 80 : 90); // measured to fit two lines at 390 px
       expect(line.replace(/“[^”]*”/g, "“”"), line).not.toMatch(/[.!?] [A-Z]/); // one sentence (a quoted name is data)
     }
   });
