@@ -791,6 +791,72 @@ describe("a turn that doesn't finish", () => {
     expect(started.body.outcome).toBe("started");
     expect((await detail(bridge, application.taskId)).stage).toBe("ready");
   });
+
+  it("a runner that stopped after attaching the documents, before closing the attempt, finds that attempt done at start", async () => {
+    const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    const store = new ApplicationsStore(bridge.workspace, bridge.clock);
+    const finished = await store.readPreparation(taskId);
+    if (!finished || finished === "unreadable") throw new Error("no attempt");
+    // The state between finish's two writes, as a stopped runner would leave it.
+    const { version: _version, ...rest } = finished;
+    void _version;
+    await store.writePreparation(taskId, { ...rest, status: "running", owner: "another-runner-process" });
+    expect((await detail(bridge, taskId)).state.status).toBe("interrupted");
+
+    await applicationsModule.start!(bridge.ctx);
+    expect(await store.readPreparation(taskId)).toMatchObject({ status: "done", version: 1 });
+    const view = await detail(bridge, taskId);
+    expect(view.state).toEqual({ status: "idle", message: "" });
+    expect(view.versions.map((version) => version.version)).toEqual([1]);
+    expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "already_prepared", version: 1 });
+  });
+});
+
+describe("the state while a preparation finishes", () => {
+  /**
+   * The views a page polls, read just before each of the finishing writes (the application record and the
+   * attempt): the preparation must still read as running there, never as finished or interrupted, however the
+   * two files stand. (CI caught the page reading "interrupted" between them, and announcing it.)
+   */
+  async function statesAroundFinish(planner: Planner, job: ReturnType<typeof platformLeadJob>) {
+    const { bridge, model } = await setup(planner);
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, job);
+    const workspace = bridge.workspace as unknown as { writeJson(segments: readonly string[], value: unknown): Promise<void> };
+    const writeJson = workspace.writeJson.bind(bridge.workspace);
+    const seen: Array<{ file: string; detail: string; list: string | undefined }> = [];
+    let finishing = false;
+    workspace.writeJson = async (segments, value) => {
+      const file = segments.join("/");
+      if (finishing && /^applications\/[0-9a-f-]{36}(\.json|\/preparation\.json)$/.test(file)) {
+        const taskId = /([0-9a-f-]{36})/.exec(file)![1]!;
+        const list = (await get<ListView>(bridge, "")).body;
+        seen.push({ file: file.endsWith("preparation.json") ? "attempt" : "application", detail: (await get<DetailView>(bridge, `/${taskId}`)).body.state.status, list: list.applications.find((entry) => entry.taskId === taskId)?.state.status });
+      }
+      return writeJson(segments, value);
+    };
+    model.beforeTurn = async () => {
+      finishing = true; // every write to the application from here on is the turn's result
+    };
+    const started = await prepare(bridge, jobId);
+    return { bridge, taskId: started.body.application.taskId, seen };
+  }
+
+  it("a done, a parked and a refused preparation each read as running until both writes are made, then as their outcome", async () => {
+    const done = await statesAroundFinish(honest(PLATFORM_LEAD_COVERAGE), platformLeadJob());
+    const parked = await statesAroundFinish(honest(FERNWOOD_COVERAGE), fixtureJob(FERNWOOD_JOB));
+    const refused = await statesAroundFinish(honest(PLATFORM_LEAD_COVERAGE, { firstDraft: DRAFT_WITH_EXCLUDED_METRIC, noRevision: true }), platformLeadJob());
+    for (const [run, outcome] of [
+      [done, "idle"],
+      [parked, "parked"],
+      [refused, "failed"],
+    ] as const) {
+      expect(run.seen.map((entry) => entry.file)).toEqual(["application", "attempt"]);
+      for (const entry of run.seen) expect(entry, `${outcome}: ${entry.file}`).toMatchObject({ detail: "running", list: "running" });
+      expect((await detail(run.bridge, run.taskId)).state.status).toBe(outcome);
+    }
+  });
 });
 
 describe("refusals before anything runs", () => {

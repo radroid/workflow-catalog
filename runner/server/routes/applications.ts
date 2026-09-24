@@ -97,7 +97,7 @@ const MAX_PREPARE_BODY_BYTES = 4 * 1024;
 const MAX_DETAILS_BODY_BYTES = 4 * 1024;
 const MAX_ANSWER_BODY_BYTES = 2 * 1024;
 
-/** This runner process, on every `running` attempt it writes; any other owner means the attempt was interrupted. */
+/** This runner process, recorded on every `running` attempt it writes. Whether it is still working on one is `IN_FLIGHT`'s answer. */
 const PROCESS_OWNER = randomUUID();
 /** One preparation turn at a time per workspace. */
 const PREPARATION_CHAINS = new Map<string, Promise<unknown>>();
@@ -406,23 +406,16 @@ async function runPreparation(ctx: RunnerContext, plan: Plan): Promise<void> {
   await finish(ctx, plan, record, outcome);
 }
 
-/** The attempt's final state, and the application's: documents and stage only when done; `processing` always. */
+/**
+ * The application's final state, then the attempt's: documents and stage only when done; `processing` always.
+ * The application goes first, so the documents are attached before anything calls the attempt finished: a
+ * runner that stops between the two writes leaves an attempt still `running`, which the next start marks
+ * interrupted, and never a finished attempt whose documents aren't attached. Readers see neither half-state:
+ * the application stays in flight (`stateOf`) until both writes are done.
+ */
 async function finish(ctx: RunnerContext, plan: Plan, record: RunRecord | undefined, outcome: Outcome): Promise<void> {
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
-  const current = await applications.readPreparation(plan.taskId);
   const runId = record?.runId !== undefined && uuidSchema.safeParse(record.runId).success ? record.runId : undefined;
-  if (current && current !== "unreadable" && current.attemptId === plan.attemptId) {
-    const { owner: _owner, ...rest } = current;
-    void _owner;
-    const base = { ...rest, ...(runId ? { runId } : {}) };
-    const next: PreparationRecord =
-      outcome.kind === "done"
-        ? { ...base, status: "done", version: outcome.version.version, questions: [], problems: [], ...(outcome.coverage ? { coverage: outcome.coverage } : {}) }
-        : outcome.kind === "parked"
-          ? { ...base, status: "parked", questions: outcome.questions, problems: [], ...(outcome.coverage ? { coverage: outcome.coverage } : {}) }
-          : { ...base, status: "failed", error: outcome.error, problems: [...(outcome.problems ?? [])] };
-    await applications.writePreparation(plan.taskId, next);
-  }
   await applications.update(plan.taskId, (application) => {
     const processingBase = runId ? { runId } : {};
     if (outcome.kind === "done") {
@@ -436,6 +429,19 @@ async function finish(ctx: RunnerContext, plan: Plan, record: RunRecord | undefi
     const error = outcome.kind === "parked" ? `Waiting for your answer to ${plural(outcome.questions.length, "question")}.` : outcome.error;
     return { ...application, processing: { status: "failed", ...processingBase, error } };
   });
+  const current = await applications.readPreparation(plan.taskId);
+  if (current && current !== "unreadable" && current.attemptId === plan.attemptId) {
+    const { owner: _owner, ...rest } = current;
+    void _owner;
+    const base = { ...rest, ...(runId ? { runId } : {}) };
+    const next: PreparationRecord =
+      outcome.kind === "done"
+        ? { ...base, status: "done", version: outcome.version.version, questions: [], problems: [], ...(outcome.coverage ? { coverage: outcome.coverage } : {}) }
+        : outcome.kind === "parked"
+          ? { ...base, status: "parked", questions: outcome.questions, problems: [], ...(outcome.coverage ? { coverage: outcome.coverage } : {}) }
+          : { ...base, status: "failed", error: outcome.error, problems: [...(outcome.problems ?? [])] };
+    await applications.writePreparation(plan.taskId, next);
+  }
 }
 
 /**
@@ -609,12 +615,16 @@ export interface StateView {
   readonly message: string;
 }
 
+/**
+ * The application's state as the page shows it. While this process is still working on the application (queued,
+ * in its turn, or writing its result) it is running, whatever the files say in between: `finish` writes the
+ * application and then the attempt, and a read between the two must never look finished, or interrupted.
+ * A running record that no one in this process is working on was left by a runner that stopped.
+ */
 function stateOf(ctx: RunnerContext, application: Application, attempt: PreparationRecord | "unreadable" | undefined): StateView {
+  if (IN_FLIGHT.has(flightKey(ctx, application.taskId))) return { status: "running", message: "Preparing now. This can take a minute or two." };
   const known = attempt !== undefined && attempt !== "unreadable" ? attempt : undefined;
-  if (known?.status === "running" || application.processing.status === "running") {
-    const live = known?.status === "running" && known.owner === PROCESS_OWNER && IN_FLIGHT.has(flightKey(ctx, application.taskId));
-    return live ? { status: "running", message: "Preparing now. This can take a minute or two." } : { status: "interrupted", message: INTERRUPTED_MESSAGE };
-  }
+  if (known?.status === "running" || application.processing.status === "running") return { status: "interrupted", message: INTERRUPTED_MESSAGE };
   if (known?.status === "parked") return { status: "parked", message: application.processing.error ?? "Waiting for your answers." };
   if (application.processing.status === "failed") return { status: "failed", message: application.processing.error ?? "The last preparation didn't finish." };
   return { status: "idle", message: "" };
@@ -763,7 +773,11 @@ async function answerQuestion(ctx: RunnerContext, taskId: string, requirement: n
   });
 }
 
-/** Marks every preparation a stopped runner left `running` as interrupted: nothing is working on it any more. */
+/**
+ * Marks every preparation a stopped runner left `running` as interrupted: nothing is working on it any more.
+ * One exception: a runner that stopped between `finish`'s two writes had already attached the documents
+ * (the application goes first), so an attempt whose key a document carries is recorded as the done one it was.
+ */
 async function sweepInterrupted(ctx: RunnerContext): Promise<void> {
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
   for (const application of (await applications.list()).applications) {
@@ -774,6 +788,11 @@ async function sweepInterrupted(ctx: RunnerContext): Promise<void> {
     if (running) {
       const { owner: _owner, ...rest } = attempt;
       void _owner;
+      const attached = application.documents.find((document) => document.idempotencyKey === attempt.idempotencyKey);
+      if (attached && application.processing.status !== "running") {
+        await applications.writePreparation(application.taskId, { ...rest, status: "done", version: attached.version, questions: [], problems: [] });
+        continue;
+      }
       await applications.writePreparation(application.taskId, { ...rest, status: "failed", error: INTERRUPTED_MESSAGE, problems: [] });
     }
     await applications.update(application.taskId, (current) => ({

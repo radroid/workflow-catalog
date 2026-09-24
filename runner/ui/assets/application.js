@@ -653,8 +653,10 @@ function renderDetail(detail) {
   if ($("detail-title").textContent !== detail.jobName) $("detail-title").textContent = detail.jobName;
   const children = [renderStatus(detail)];
   const preparation = detail.preparation;
-  if (preparation?.status === "parked" && preparation.questions.length > 0) children.push(renderQuestions(detail));
-  if (preparation?.status === "failed" && preparation.problems.length > 0) children.push(renderProblems(detail));
+  // The questions and the refusals follow the state, not the attempt file alone: while a preparation is still
+  // running, nothing it is about to replace shows as current.
+  if (parkedQuestions(detail).length > 0) children.push(renderQuestions(detail));
+  if (detail.state.status === "failed" && preparation?.status === "failed" && preparation.problems.length > 0) children.push(renderProblems(detail));
   children.push(renderActions(detail));
   if (preparation?.coverage?.length > 0) children.push(renderCoverage(detail));
   const versions = detail.versions.map((version, index) => renderVersion(detail, version, index === 0));
