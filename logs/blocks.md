@@ -1278,3 +1278,28 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
   - Of the reviewer's two options, the smaller one: for the workspace key only, `.env.local` wins once setup wrote it, and doctor warns when the environment disagrees.
   - It runs now, with a Sonnet implementer alongside P04's escalation; their Owns are disjoint.
   - Renaming the `RUNNER_` prefix, which GitHub reserves, is an owner question to settle before the first release. It is listed in PR #2.
+
+
+## 2026-09-24 — P02.2 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 006
+**Source:** peer-review (Opus reviewer), PR #15 at db8cbf9
+**Severity:** medium. The core precedence fix is correct, but the edges could still pick or delete the wrong folder.
+
+**Verdict:** REVISE — 3 issues:
+1. The unneeded `setup.ts` change lets an ambient value choose and save the first-run workspace.
+2. Doctor compares strings, so it warns falsely on the same folder spelled differently.
+3. `--forget` offers to delete the environment's workspace when `.env.local` has none. This predates the PR, and the reviewer asked for a ruling.
+
+**What holds:**
+- With `.env.local` naming A, A wins in every command, and the launcher hands eve A.
+- The warning is plain.
+- No path leaks to the extension.
+- Tests were only added to.
+- Chain, merge and CI (Playwright 37/37) are green.
+
+**Decision:**
+- Revision 1 goes to the same Sonnet implementer, with W1–W8 in `logs/handoff/P02.2-round-1-review.md`.
+- **The ruling on issue 3 (W3):** forget removes only the workspace recorded in `.env.local`. It notes, but never offers, a workspace that comes only from the environment. Deletion is irreversible, so it fails safe.
+- **W1:** setup never takes the workspace from the environment. The environment stays a runtime fallback for commands only.
+- **W4:** `cli/runner.ts` is granted a small exported helper, so the launcher's precedence is tested.
