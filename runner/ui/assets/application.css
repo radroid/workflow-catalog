@@ -1,0 +1,392 @@
+/* Applications page (P05): extends runner.css tokens (docs/spec/visuals/theme.css). The live line, fields and
+   list rows follow runner/ui/assets/jobs.css (P04), copied rather than shared because each page owns its own
+   stylesheet. Amber (--decision) marks one thing only: an open question that needs the person's decision. */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+html {
+  scroll-padding-top: var(--last-action-offset, 5rem);
+  overflow-anchor: none;
+}
+main code {
+  overflow-wrap: anywhere;
+}
+
+/* The sticky "Last action" line, the page's one live region (P03's J4-J5, P04's L12). */
+.last-action {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 0 1.25rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--muted);
+  border-left: 3px solid var(--border);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  box-shadow: 0 1px 0 var(--border);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.last-action .tag {
+  display: block;
+  font: 500 0.675rem/1.5 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.last-action code {
+  font: 0.95em var(--font-mono);
+}
+.last-action a {
+  color: inherit;
+}
+.last-action.done {
+  border-left-color: var(--foreground);
+}
+.last-action.refused {
+  border-left-color: var(--destructive);
+}
+@media (max-width: 640px) {
+  .last-action {
+    padding: 0.375rem 0.625rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+  }
+  .last-action-body {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .last-action .tag {
+    display: inline;
+    margin-right: 0.375rem;
+  }
+}
+
+[tabindex="-1"]:focus {
+  outline: none;
+}
+[tabindex="-1"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Fields: a control's border needs 3:1 against the card (WCAG 1.4.11), so it uses --muted-foreground. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.85rem;
+}
+.field label {
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+.field input,
+.field select {
+  width: 100%;
+  max-width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--muted-foreground);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+.field input:focus-visible,
+.field select:focus-visible,
+.check input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.field input[aria-invalid="true"] {
+  border-color: #b91c1c;
+  box-shadow: inset 0 0 0 1px #b91c1c;
+}
+.field-error {
+  color: #b91c1c;
+  font-size: 0.85rem;
+  margin: 0.3rem 0 0;
+  overflow-wrap: anywhere;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.85rem;
+  font-size: 0.9rem;
+}
+.check input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: var(--foreground);
+}
+
+.button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Before preparing: what is ready, and what blocks preparation. A blocker takes the page's refusal rule, never
+   amber. */
+.ready-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.ready-list li {
+  border-left: 3px solid var(--border);
+  padding-left: 0.6rem;
+  overflow-wrap: anywhere;
+}
+.ready-list li.ready-ok {
+  border-left-color: var(--foreground);
+}
+.ready-list li.ready-blocked {
+  border-left-color: var(--destructive);
+}
+
+/* The applications list. */
+.applications-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.app-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+.app-row.open {
+  border-left: 3px solid var(--foreground);
+}
+.app-open {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  font: 500 0.95rem/1.4 var(--font-sans);
+  color: var(--foreground);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.app-open:hover {
+  text-decoration: underline;
+}
+.app-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.app-row .app-meta,
+.app-row .app-status {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+.app-status.refused,
+.detail-state.refused,
+.app-unreadable {
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.6rem;
+}
+.app-unreadable p {
+  margin: 0 0 0.25rem;
+}
+.app-unreadable ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+/* The open application. */
+.detail-status {
+  margin-bottom: 0.75rem;
+}
+.detail-stage {
+  font-weight: 500;
+  margin: 0 0 0.35rem;
+}
+.detail-state {
+  margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
+}
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0.75rem 0 1rem;
+}
+.detail-actions p {
+  margin: 0;
+}
+.detail-body h3,
+#detail-body h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+/* An open gap question: the one place amber is used. */
+.questions-block {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--decision);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0 1rem;
+}
+.questions {
+  margin: 0 0 0.75rem;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.question p {
+  margin: 0 0 0.35rem;
+  overflow-wrap: anywhere;
+}
+.question-text {
+  font-weight: 500;
+}
+.answer-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.button.answer {
+  line-height: 1.3;
+  text-align: left;
+}
+.button.answer[aria-pressed="true"] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+/* The runner's refusals: the page's refusal rule. */
+.problems-block {
+  border-left: 3px solid var(--destructive);
+  padding: 0.25rem 0 0.25rem 0.75rem;
+  margin: 0.5rem 0 1rem;
+}
+.problems {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
+}
+.problem-where {
+  font-weight: 500;
+}
+
+.coverage {
+  margin: 0 0 1rem;
+}
+.coverage summary,
+.changes-detail summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--muted-foreground);
+}
+.coverage summary:focus-visible,
+.changes-detail summary:focus-visible,
+.exports a:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.coverage-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+.detail-versions {
+  margin-top: 0.5rem;
+}
+.version {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
+}
+.version h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+.version-note {
+  border-left: 3px solid var(--border);
+  padding-left: 0.6rem;
+}
+.exports {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.exports li {
+  overflow-wrap: anywhere;
+}
+.exports code {
+  color: var(--muted-foreground);
+}
+.changes-detail h5 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 0.9rem 0 0.4rem;
+}
+.changes {
+  margin: 0;
+  padding-left: 1.1rem;
+  overflow-wrap: anywhere;
+}
+.statements {
+  margin: 0;
+  padding-left: 1.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.statement p {
+  margin: 0 0 0.15rem;
+  overflow-wrap: anywhere;
+}
+.citation {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .field-error {
+    color: #f87171;
+  }
+  .field input[aria-invalid="true"] {
+    border-color: #f87171;
+    box-shadow: inset 0 0 0 1px #f87171;
+  }
+}

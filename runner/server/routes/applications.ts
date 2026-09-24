@@ -5,7 +5,7 @@ import { z } from "zod";
 import { postingText, requirementsDigest } from "../../agent/lib/prepare-logic.ts";
 import { buildPreparationPrompt } from "../../agent/lib/prepare-prompt.ts";
 import { actionsOutsidePreparation, preparationResult, type PrepareApplicationOutput } from "../../agent/lib/prepare-schema.ts";
-import { renderDiffMarkdown, statementDiffs, versionChanges, type SourceClaim, type StatementDiff } from "../../export/diff.ts";
+import { presentationSummary, renderDiffMarkdown, statementDiffs, versionChanges, type SourceClaim, type StatementDiff } from "../../export/diff.ts";
 import { coverLetterModel, letterDate, resumeModel, type PersonHeader } from "../../export/document.ts";
 import { renderDocx } from "../../export/docx.ts";
 import { renderMarkdown } from "../../export/markdown.ts";
@@ -728,7 +728,8 @@ async function detailView(ctx: RunnerContext, taskId: string) {
         jobRevision: version.jobRevision,
         coverLetter: version.coverLetter,
         files: application.documents.filter((document) => document.version === version.version).map((document) => fileView(taskId, document)),
-        statements: version.statements,
+        // Each sentence with its source claims and its presentation change, in the words diff-v<n>.md uses.
+        statements: version.statements.map((statement) => ({ ...statement, presentation: presentationSummary(statement) })),
         changes: version.changes,
         olderProfile: currentVersion !== null && version.profileVersion < currentVersion,
         noLongerConfirmed: stale,
