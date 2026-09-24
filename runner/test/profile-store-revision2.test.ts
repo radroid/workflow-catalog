@@ -62,7 +62,8 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
 
     const result = await store.addStatement("preference", "Remote-first roles.");
     expect(result.ok).toBe(true);
-    expect(result.message).toBe("1 edit saved. Your preference is recorded.");
+    // Q10 (revision 1, critic polish): the edits note now comes after the action's own consequence.
+    expect(result.message).toBe("Your preference is recorded. 1 edit saved.");
     const profile = await store.read();
     expect(profile.claims.find((c) => c.id === claimId)?.text).toBe("Rebuilt the Harbor deployment pipeline.");
     expect(profile.preferences.map((p) => p.text)).toEqual(["Remote-first roles."]);
@@ -80,7 +81,8 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     await handEdit(md, `- ${second!.text}`, "- Never change a date or a title.");
 
     const result = await store.addStatement("preference", "Remote-first roles.");
-    expect(result.message).toBe("2 edits saved. Your preference is recorded.");
+    // Q10 (revision 1, critic polish): the edits note now comes after the action's own consequence.
+    expect(result.message).toBe("Your preference is recorded. 2 edits saved.");
     expect(result.message.length).toBeLessThanOrEqual(90);
     expect((await store.read()).boundaries.map((b) => b.text)).toEqual(["Never invent a metric, a credential or a responsibility.", "Never change a date or a title."]);
   });
@@ -163,6 +165,24 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     expect(loaded.markdownOnDisk).toBeNull();
   });
 
+  it("Q12 (revision 1): the size cap measures bytes, not UTF-16 code units — a multibyte file over MAX_MARKDOWN_BYTES in bytes but under it in .length is still nulled", async () => {
+    // Nit 1's own test above only ever used ASCII ("x"), where .length and Buffer.byteLength agree, so
+    // mutating the real byte measure to onDisk.length passed every existing test unnoticed. "€" (U+20AC) is
+    // one UTF-16 code unit but three UTF-8 bytes: repeated, .length undercounts the real byte size by 3x.
+    const { store, md } = await setup();
+    const claimId = await withConfirmedClaim(store);
+    await handEdit(md, ` \`[${claimId}]\``, "");
+    const padding = "€".repeat(200_000);
+    const stillUnreadable = `${await readFile(md, "utf8")}\n<!-- ${padding} -->`;
+    expect(stillUnreadable.length).toBeLessThanOrEqual(MAX_MARKDOWN_BYTES); // a .length-based check would wrongly pass this
+    expect(Buffer.byteLength(stillUnreadable, "utf8")).toBeGreaterThan(MAX_MARKDOWN_BYTES); // genuinely over, in bytes
+    await writeFile(md, stillUnreadable);
+
+    const loaded = await store.load();
+    expect(loaded.markdownError).not.toBeNull();
+    expect(loaded.markdownOnDisk).toBeNull();
+  });
+
   it("N6 (revision 3): claim text shaped like markers never makes the runner's own file unreadable", async () => {
     const { store, md } = await setup();
     await accountAll(store);
@@ -179,7 +199,8 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     // A hand edit elsewhere in the file still saves; nothing is locked.
     await handEdit(md, "- Do not change employment dates or official titles.", "- Never change a date or a title.");
     const result = await store.addStatement("preference", "Remote-first roles.");
-    expect(result.message).toBe("1 edit saved. Your preference is recorded.");
+    // Q10 (revision 1, critic polish): the edits note now comes after the action's own consequence.
+    expect(result.message).toBe("Your preference is recorded. 1 edit saved.");
     const profile = await store.read();
     expect(profile.claims[0]!.text).toBe(hostile);
     expect(profile.boundaries.map((b) => b.text)).toEqual([boundary.text, "Never change a date or a title."]);

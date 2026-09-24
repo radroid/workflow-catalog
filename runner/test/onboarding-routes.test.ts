@@ -17,6 +17,7 @@ import {
   MARKDOWN_UNREADABLE_EXTRACT_REFUSAL,
   MARKDOWN_UNREADABLE_REFUSAL,
 } from "../server/routes/onboarding.ts";
+import { getBudgetState } from "../store/budget.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { SOURCE_CATEGORY_LABELS } from "../store/profile-types.ts";
 import { PROFILE_BUSY_MESSAGE } from "../store/profile-writes.ts";
@@ -238,22 +239,32 @@ describe("/api/onboarding: body caps (413) and strict-body rejection (400)", () 
     expect((await post(bridge, "/sources/resume", { status: "provided", note: "x".repeat(9 * 1024) })).status).toBe(413);
   });
 
-  it("413s the text box and upload routes over the source-content cap (512 KiB), with a plain-sentence reason", async () => {
-    // P03.2 (round-4 UI critic, outside the round): the generic "Request body is larger than 524288
-    // bytes." from http.ts's readBoundedJson is replaced here with a sentence written for a person.
+  it("413s the text box and upload routes over the source-content cap (512 KB), with a plain-sentence reason", async () => {
+    // P03.2 (round-4 UI critic, outside the round; Q10 revision 1: "KiB" became "KB", plainer wording, same
+    // 512 * 1024 bound): the generic "Request body is larger than 524288 bytes." from http.ts's
+    // readBoundedJson is replaced here with a sentence written for a person.
     const bridge = await realBridge();
     const content = await post(bridge, "/sources/resume/content", { text: "x".repeat(513 * 1024) });
     expect(content.status).toBe(413);
-    expect(((await content.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "That's over 512 KiB. Paste less text, or upload a smaller file." });
+    expect(((await content.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "That's over 512 KB. Paste less text, or upload a smaller file." });
 
     const uploads = await post(bridge, "/sources/resume/uploads", { fileName: "resume.md", text: "x".repeat(513 * 1024) });
     expect(uploads.status).toBe(413);
-    expect(((await uploads.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "That's over 512 KiB. Paste less text, or upload a smaller file." });
+    expect(((await uploads.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "That's over 512 KB. Paste less text, or upload a smaller file." });
   });
 
-  it("413s /markdown over the markdown cap (512 KiB)", async () => {
+  it("413s /markdown over the markdown cap (512 KiB), keeping http.ts's own generic message (Q12, revision 1: boundedSourceBody's substitution is scoped to the two source-content routes only)", async () => {
     const bridge = await realBridge();
-    expect((await post(bridge, "/markdown", { markdown: "x".repeat(513 * 1024) })).status).toBe(413);
+    const response = await post(bridge, "/markdown", { markdown: "x".repeat(513 * 1024) });
+    expect(response.status).toBe(413);
+    expect(((await response.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "Request body is larger than 524288 bytes." });
+  });
+
+  it("413s /sources/:category (the small-body route) keeping the generic message too (Q12, revision 1)", async () => {
+    const bridge = await realBridge();
+    const response = await post(bridge, "/sources/resume", { status: "provided", note: "x".repeat(9 * 1024) });
+    expect(response.status).toBe(413);
+    expect(((await response.json()) as { error: { code: string; message: string } }).error).toEqual({ code: "body_too_large", message: "Request body is larger than 8192 bytes." });
   });
 
   it("400s a body with an extra field a .strict() schema does not declare", async () => {
@@ -405,7 +416,12 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     // P03.2 (deliverable 1): classifyTurn (run-harness.ts) checks for a failure event before it trusts any
     // boundary, so a turn.failed here is "failed", never the "waiting" boundary that follows it — the same
     // scenario R3 always meant to catch, now named the way TurnResult.status names it everywhere else.
-    expect(body).toMatchObject({ ok: false, status: "failed", message: "The extraction failed: model_error: The model call failed." });
+    // Q3 (revision 1, critic 3): the message used to read "The extraction failed: model_error: The model
+    // call failed." — a raw code leaking straight into a person-facing sentence. A real turn.failed event
+    // (not a provider limit) is now "the model's error", with no code or status; the raw detail still goes
+    // to ctx.log.warn (checked below).
+    expect(body).toMatchObject({ ok: false, status: "failed", message: "The extraction failed: the model had a problem answering. Try again." });
+    expect(bridge.logs).toContain("onboarding: extraction turn for resume ended failed (model_error: The model call failed.)");
   });
 
   it("a session.failed status is not ok", async () => {
@@ -459,13 +475,15 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; message: string };
-    expect(body).toMatchObject({ ok: false, message: "The extraction failed: The turn ended without a result." });
-    // classifyTurn cancels a no-boundary end only when it actually saw the abort fire (the signal.aborted
-    // branch); a stream that simply ends with no boundary and no abort, as this fixture scripts, is not
-    // something a real eve@0.63.0 client does on its own (eve-runtime.md §8 item 15) — the quiet-abort case
-    // it does produce is covered against the real client in onboarding-extract-timeout.test.ts, where
-    // classifyTurn does cancel.
-    expect(fake.calls.cancelCount).toBe(0);
+    // Q3 (revision 1): no failure event and no providerLimit -- the same "eve or the network didn't answer"
+    // bucket a thrown, non-abort error falls into (neither is "the model's error": nothing ever told us why).
+    expect(body).toMatchObject({ ok: false, message: "The extraction failed: eve or the network didn't answer. Try again." });
+    // Q2 (revision 1, reviewer 2): classifyTurn now cancels through the session on a no-boundary end even
+    // when it never saw the abort fire, as P03's own route did (run-harness.ts's no-boundary branch) — a
+    // stream that ends with no boundary and no abort, as this fixture scripts, is exactly the quiet-failure
+    // shape a stalled eve produces, so there is no reason to trust it needs no cancel. The genuinely-aborted
+    // quiet-end case is covered against the real client in onboarding-extract-timeout.test.ts.
+    expect(fake.calls.cancelCount).toBe(1);
     await post(bridge, "/sources/resume/extract");
     expect(fake.calls.count).toBe(2); // no hash was recorded, so the same text runs again
   });
@@ -476,6 +494,73 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const response = await post(bridge, "/sources/resume/extract");
     expect(response.status).toBe(503);
     expect(((await response.json()) as { error: { message: string } }).error.message).toBe("eve is not running. Start the runner with npm run runner, then try again.");
+  });
+});
+
+describe("Q4 (revision 1): the 90 s default deadline is pinned", () => {
+  it("EXTRACTION_TIMEOUT_MS is 90 seconds", () => {
+    expect(EXTRACTION_TIMEOUT_MS).toBe(90_000);
+  });
+});
+
+describe("Q5 (revision 1, reviewer 4): a provider limit met interactively never pauses the budget", () => {
+  it("a provider-limit turn.failed is reported failed, with the budget left exactly as it found it (runTurn's own pauseBudgetOnProviderLimit: false)", async () => {
+    // run-harness.ts's runTurn only pauses when result.providerLimit is set AND pauseBudgetOnProviderLimit
+    // isn't false; onboarding.ts:421 always passes false. A mutation that makes runTurn ignore the option
+    // (drop the `?? true` gate, or the `false` argument itself) turns this test red: `paused` would flip
+    // true after the request, since the same turnFailed shape below is run-harness.test.ts's own primary
+    // signal for a provider limit (semanticErrorId: "gateway-rate-limited").
+    const providerLimitEvent: MessageStreamEvent = {
+      type: "turn.failed",
+      data: { code: "MODEL_CALL_FAILED", message: "AI Gateway rate-limited the request.", details: { semanticErrorId: "gateway-rate-limited" }, sequence: 1, turnId: "turn-1" },
+      meta: { at: "2026-01-01T00:00:00.000Z", id: "evt-1" },
+    };
+    const bridge = await realBridge(fakeExtraction([{ status: "waiting", events: [providerLimitEvent] }]));
+    await provideResume(bridge);
+    expect((await getBudgetState(bridge.workspace, bridge.clock)).paused).toBe(false);
+    const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string };
+    expect(body).toMatchObject({ ok: false, status: "failed", message: "The extraction stopped: the model's provider is rate-limited. Try later." });
+    expect((await getBudgetState(bridge.workspace, bridge.clock)).paused).toBe(false);
+  });
+});
+
+describe("Q6 (revision 1, reviewer 5): the route re-checks what it saves, not just what the tool's own action.result claims", () => {
+  it("a wrong-category action.result is never saved, even schema-valid (the category filter, previously untested: mutating it away used to still pass 865/865)", async () => {
+    const wrongCategoryOutput = {
+      sourceCategory: "workSamples",
+      claims: [{ text: "Shipped Ledgerkit.", kind: "fact", evidenceRef: "pasted.txt#1", evidenceQuote: "Led the payments team at Northwind Labs." }],
+      rejected: [],
+      message: "1 claim verified.",
+    };
+    const fake = fakeExtraction([{ status: "completed", events: [actionResult(wrongCategoryOutput)] }]);
+    const bridge = await realBridge(fake);
+    await provideResume(bridge);
+    const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: unknown[] };
+    expect(body).toEqual({ ok: false, status: "no_result", message: "The model finished without saving any claims. Try again.", claims: [] });
+    const store = new ProfileStore(bridge.workspace, bridge.clock);
+    expect((await store.read()).claims).toEqual([]);
+  });
+
+  it("a schema-valid claim whose quote isn't in the route's own source text is rejected, not saved (the quote re-check, previously untested)", async () => {
+    // The tool's action.result claims this verified (the shape a compromised or buggy tool step, or a race
+    // against a since-changed source, could produce); RESUME_TEXT genuinely does not contain this quote.
+    const fabricatedOutput = {
+      sourceCategory: "resume",
+      claims: [{ text: "Founded Quill.", kind: "fact", evidenceRef: "pasted.txt#1", evidenceQuote: "Founded Quill" }],
+      rejected: [],
+      message: "1 claim verified.",
+    };
+    const fake = fakeExtraction([{ status: "completed", events: [actionResult(fabricatedOutput)] }]);
+    const bridge = await realBridge(fake);
+    await provideResume(bridge); // RESUME_TEXT does not contain "Founded Quill"
+    const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: unknown[] };
+    // The store's own persist step still runs (on an empty claims array) and succeeds trivially -- "ok" means
+    // "the store didn't refuse the write", the same as every other partial-rejection extraction; the rejected
+    // count in the message is what proves the fabricated claim was actually counted and excluded, not silently
+    // dropped. What this test exists to prove is the line below: it never reached the profile.
+    expect(body).toEqual({ ok: true, status: "ok", message: "No new claims from Resume; 1 had no matching quote.", claims: [] });
+    const store = new ProfileStore(bridge.workspace, bridge.clock);
+    expect((await store.read()).claims).toEqual([]);
   });
 });
 
@@ -516,7 +601,9 @@ describe("/api/onboarding/sources/:category/extract: R7 and D14, idempotent per 
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const first = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string };
-    expect(first).toEqual({ ok: false, status: "ok", message: "The model finished without saving any claims. Try again.", claims: [] });
+    // Q1 (revision 1, reviewer 1): the turn itself was ok, but nothing was saved, so the response's own
+    // status is "no_result" -- never the self-contradictory {ok:false, status:"ok"} this used to send.
+    expect(first).toEqual({ ok: false, status: "no_result", message: "The model finished without saving any claims. Try again.", claims: [] });
     expect(await readdir(path.join(bridge.workspace.root, ".runner", "onboarding")).catch(() => [])).not.toContain("resume.json");
     const second = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
     expect(second).toMatchObject({ ok: true, status: "ok" });
@@ -540,7 +627,8 @@ describe("/api/onboarding/sources/:category/extract: R7 and D14, idempotent per 
     // The turn itself finished ok (classifyTurn's job); the store's own extractClaims refused the persist
     // (profile-reducer.ts's "extractClaims" case, the same refusal accountSource/decideClaim/etc. all share) —
     // a distinct, later reason the route surfaces verbatim, not a re-derived classification of its own.
-    expect(body).toMatchObject({ ok: false, status: "ok", message: "Nothing to extract: Resume is not marked provided." });
+    // Q1 (revision 1): "no_result", not "ok" -- the response's own status never lies about ok being false.
+    expect(body).toMatchObject({ ok: false, status: "no_result", message: "Nothing to extract: Resume is not marked provided." });
     expect(body.claims).toEqual([]);
     const store = new ProfileStore(bridge.workspace, bridge.clock);
     expect((await store.read()).claims).toEqual([]);
@@ -607,7 +695,8 @@ describe("V1/D9: hand edits to career-profile.md, through the routes", () => {
     const text = await readFile(md, "utf8");
     await writeFile(md, text.replace(view.boundaries[0]!.text, "Never invent a metric, a credential or a responsibility."));
     const response = await post(bridge, "/statements/preference", { text: "Remote-first roles." });
-    expect(((await response.json()) as { message: string }).message).toBe("1 edit saved. Your preference is recorded.");
+    // Q10 (revision 1, critic polish): the edits note now comes after the action's own consequence.
+    expect(((await response.json()) as { message: string }).message).toBe("Your preference is recorded. 1 edit saved.");
     const after = await getJson<{ boundaries: Array<{ text: string }>; preferences: Array<{ text: string }> }>(bridge, "");
     expect(after.boundaries[0]!.text).toBe("Never invent a metric, a credential or a responsibility.");
     expect(after.preferences.map((p) => p.text)).toEqual(["Remote-first roles."]);

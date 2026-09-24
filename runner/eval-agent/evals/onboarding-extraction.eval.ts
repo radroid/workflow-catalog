@@ -69,8 +69,19 @@ import {
  * fields — `status: "candidate"` and a drafted `question`, both
  * `profile-reducer.ts`'s job at persist time, never the tool's — now calls
  * `store.extractClaims` itself, explicitly, right where the production route
- * does (after the turn), so that gate still exercises the real reducer. No
- * gate was dropped; the report maps every one, old label to new.
+ * does (after the turn), so that gate still exercises the real reducer.
+ *
+ * Q8 (revision 1, reviewer 7): this comment previously claimed "no gate was
+ * dropped", which was wrong — the fabricated-quote scenario's own "no new
+ * claim was persisted for the fabricated quote" gate (`after.claims.length
+ * === before.claims.length`) had no replacement, since nothing persists
+ * mid-turn in this architecture any more, so the same store.read() shape
+ * would have been trivially, uninformatively true. It is restored below by
+ * mirroring the route's own post-turn persist step on that scenario's actual
+ * (empty) verified claims, the same way the first scenario already does —
+ * proving the store genuinely adds nothing for a fabricated quote, not just
+ * that the tool's own returned claims list excludes it. The report maps
+ * every gate, old label to new.
  */
 
 // `eve eval` loads this file from a build cache, not from its source path —
@@ -166,6 +177,17 @@ export default defineEval({
         output.claims.some((claim) => claim.text === RESUME_FABRICATED_CLAIM.text),
         equals(false),
       ).label("the fabricated claim's text never verified, so the route would never persist it");
+
+      // Q8 (revision 1, reviewer 7): restores the pre-P03.2 "no new claim was persisted for the fabricated
+      // quote" gate, dropped with no replacement when this scenario moved onto the tool's own output. Mirrors
+      // the route's own post-turn step (routes/onboarding.ts, scenario 1 above does the same) on this call's
+      // actual (empty) verified claims — proving the *store* adds nothing, not only that the tool's returned
+      // list excludes it (the two are different claims: a route that ignored `output.claims` and persisted
+      // `input.claims` outright would still pass every gate above this one).
+      const before = await store.read();
+      const saved = await store.extractClaims("resume", output.claims);
+      t.check(saved.added, equals(0)).label("no new claim was persisted for the fabricated quote");
+      t.check((await store.read()).claims.length, equals(before.claims.length)).label("the store's claim count is unchanged");
     }
 
     // R6: ask_follow_up parks on a real eve HITL input request (ctx.ask),

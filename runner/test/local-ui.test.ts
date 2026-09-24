@@ -8,6 +8,7 @@ import { PAGE_CSP, UI_COOKIE, renderNav } from "../server/local-ui.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
 import type { EveGateway } from "../server/eve-gateway.ts";
 import { ROUTES_DIR } from "../lib/paths.ts";
+import { getBudgetState } from "../store/budget.ts";
 import { BRIDGE, UI_TOKEN, makeBridge, tempDir, type TestBridge } from "./helpers.ts";
 
 const COOKIE = `${UI_COOKIE}=${UI_TOKEN}`;
@@ -258,5 +259,25 @@ describe("local UI: JSON API protection", () => {
     const model = (await (await bridge.request("/api/model", { headers: { cookie: COOKIE } })).json()) as { verified: boolean; lastCheck: { via: string } };
     expect(model.verified).toBe(true);
     expect(model.lastCheck.via).toBe("runner");
+  });
+
+  // Q5 (revision 1, reviewer 4): checkModel runs before a RunnerContext exists (eve-gateway.ts's own doc
+  // comment), so it calls classifyTurn directly and never runTurn -- routes/model.ts has no pauseBudget call
+  // of its own either. A provider limit surfacing through this route must leave the budget exactly as it found
+  // it, so a scheduled run behind a manual model check is never refused by a pause the person never asked for.
+  it("a provider limit through POST /api/model/check leaves the budget unpaused", async () => {
+    const eve = {
+      url: "http://127.0.0.1:3210",
+      client: undefined as never,
+      health: async () => ({ ok: true }),
+      modelId: async () => "gpt-5.6-luna",
+      checkModel: async () => ({ ok: false, detail: "The model's provider is rate-limited right now. Try again later." }),
+    } satisfies EveGateway;
+    const bridge = await realBridge({ eve });
+    expect((await getBudgetState(bridge.workspace, bridge.clock)).paused).toBe(false);
+    const check = await bridge.request("/api/model/check", { method: "POST", headers: SAME_ORIGIN, body: "{}" });
+    expect(check.status).toBe(200);
+    expect(((await check.json()) as { ok: boolean }).ok).toBe(false);
+    expect((await getBudgetState(bridge.workspace, bridge.clock)).paused).toBe(false);
   });
 });

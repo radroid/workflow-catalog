@@ -18,7 +18,7 @@ const ev = (type: string, data: Record<string, unknown>) => ({ type, data, meta:
 const line = (o: unknown) => enc.encode(`${JSON.stringify(o)}\n`);
 const WAITING = () => ev("session.waiting", { continuationToken: SESSION, wait: "next-user-message" });
 
-type Plan = "normal-ok" | "normal-bad-reply" | "cancelled-elsewhere" | "parked" | "hang-open";
+type Plan = "normal-ok" | "normal-bad-reply" | "cancelled-elsewhere" | "parked" | "hang-open" | "stream-401";
 
 /** A scripted fake eve HTTP server for one plan, stood up entirely through a stubbed `fetch`. */
 function stubEve(plan: Plan) {
@@ -46,6 +46,12 @@ function stubEve(plan: Plan) {
     }
     if (method === "GET" && url.pathname === `/eve/v1/session/${SESSION}/stream`) {
       if (plan === "hang-open") return hang();
+      // Q2 (revision 1, reviewer 2): the session itself was created (the POST above already answered), but
+      // opening its event stream is refused. eve's client opens the stream lazily -- the first iteration of
+      // `created.response`, inside classifyTurn's `for await` -- so this throws there, with `session` already
+      // assigned, exercising the non-abort catch path's own cancel (run-harness.ts), not the create()-throws
+      // case (session-utils.js's own client.js tests already cover that shape via a rejected fetch).
+      if (plan === "stream-401") return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } });
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           const push = (o: unknown) => controller.enqueue(line(o));
@@ -125,6 +131,14 @@ describe("createEveGateway(...).checkModel against the real eve@0.63.0 client (P
     const result = await gateway.checkModel(5_000);
     expect(result).toMatchObject({ ok: false, detail: "The model asked for input instead of finishing the run." });
     expect(fake.cancels()).toBe(1);
+  });
+
+  it("Q2 (revision 1): a session created, then its stream refused with a 401, is 'failed' with one real cancel through the session", async () => {
+    const fake = stubEve("stream-401");
+    const gateway = createEveGateway({ password: "fake-eve-password" });
+    const result = await gateway.checkModel(5_000);
+    expect(result.ok).toBe(false);
+    expect(fake.cancels()).toBe(1); // the non-abort catch path (run-harness.ts) now cancels through the session too
   });
 
   it("an abort while the stream is opening ends quietly (no throw) but is still classified 'timeout', with one real cancel", async () => {

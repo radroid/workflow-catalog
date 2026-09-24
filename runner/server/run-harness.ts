@@ -110,15 +110,29 @@ export interface TurnResult {
   readonly model?: string;
   /** Present for every non-"ok" status. */
   readonly detail?: string;
-  /** True when `status: "failed"` was specifically a provider rate limit. `runTurn` has already paused the budget by the time this is set. */
+  /**
+   * True when `status: "failed"` was specifically a provider rate limit,
+   * decided here in `classifyTurn`. Whether that actually pauses the budget
+   * is entirely up to the caller: `runTurn` pauses (its own
+   * `pauseBudgetOnProviderLimit` option, see `RunTurnInput`), but only for a
+   * caller that goes through `runTurn` at all — `eve-gateway.ts`'s
+   * `checkModel` calls `classifyTurn` directly and never pauses anything
+   * (Q5, revision 1: this comment previously claimed the pause had already
+   * happened "by the time this is set", which has it backwards — pausing,
+   * when it happens, is `runTurn`'s later step, after this field is read).
+   */
   readonly providerLimit?: boolean;
   /**
    * P04 (additive): the turn's raw stream events, in order, present only when
    * `RunTurnInput.collectEvents` was set. A caller reads a tool's own output
    * from these the way P03's onboarding route reads `action.result` off
-   * `MessageResult.events` — `captures.ts`'s extraction turn is the first
-   * caller, so it never needs its own turn classifier (there are two already;
-   * a runner follow-up will merge them). Every existing caller that omits
+   * `MessageResult.events` — `captures.ts`'s job-extraction turn was the
+   * first caller. P03.2 (Q5, revision 1: this comment used to say "there are
+   * two [classifiers] already; a runner follow-up will merge them" — true
+   * when P04 wrote it, stale now that merge is this file itself) moved
+   * `onboarding.ts`'s extraction route and `eve-gateway.ts`'s `checkModel`
+   * onto this same classifier, reading a tool's or the reply's own output off
+   * these events the same way. Every existing caller that omits
    * `collectEvents` gets exactly the `TurnResult` shape it always has: this
    * field is simply absent, not `undefined`-valued, on every return path
    * below.
@@ -133,13 +147,22 @@ export interface RunTurnInput {
   readonly collectEvents?: boolean;
   /**
    * P03.2 (deliverable 1): whether a detected provider limit pauses the
-   * budget. Defaults to `true` (every existing caller keeps pausing). A
-   * model check (`eve-gateway.ts`) and onboarding's interactive claim
-   * extraction (`routes/onboarding.ts`) pass `false`: both are single,
-   * manual, foreground actions that never go through `withRun` and write no
-   * `RunRecord`, unlike P04's job-capture extraction queue, which stays
-   * `true` (unattended, potentially many turns in a row) and is not this
-   * packet's to revisit. See the report for the full reasoning.
+   * budget. Defaults to `true` (every existing caller keeps pausing).
+   * Onboarding's interactive claim extraction (`routes/onboarding.ts`) is
+   * the one caller that passes `false`: a single, manual, foreground action
+   * that never goes through `withRun` and writes no `RunRecord`.
+   *
+   * Q5 (revision 1, reviewer 4: this comment previously said a model check
+   * "passes `false`" too, which doesn't describe the code — there is no
+   * option to pass): `eve-gateway.ts`'s `checkModel` doesn't pause on a
+   * provider limit either, but not because of this option — it calls
+   * `classifyTurn` directly (never `runTurn`), so no pause ever runs for it,
+   * regardless of this flag's default. Recorded here as the real decision:
+   * neither a model check nor an interactive extraction pauses the budget
+   * today. Left unrevisited by this packet (P08-B's carried item is where
+   * that gets decided on purpose, not as a side effect of plumbing); P04's
+   * job-capture extraction queue is unattended and potentially many turns in
+   * a row, so it keeps the default `true`.
    */
   readonly pauseBudgetOnProviderLimit?: boolean;
 }
@@ -234,6 +257,11 @@ export async function classifyTurn(client: Client, input: RunTurnInput): Promise
     }
   } catch (caught) {
     if (!signal.aborted) {
+      // Q2 (revision 1, reviewer 2): a session was possibly created before the stream itself threw (a mid-read
+      // drop, say); as P03's own route did before this packet, cancel through it here too, not only on the
+      // abort path below. cancelSession is a no-op when sessions.create() itself is what threw (session still
+      // undefined) — bounded the same way every other cancel in this file is (I3).
+      await cancelSession(session);
       return withEvents({ status: "failed", tokens, ...(model !== undefined ? { model } : {}), detail: nonEmptyOrFallback(shorten(errorMessage(caught))) });
     }
     // An abort while an open stream is being read does throw (eve-runtime.md §8 item 15); fall through to the
@@ -257,6 +285,10 @@ export async function classifyTurn(client: Client, input: RunTurnInput): Promise
 
   if (!boundary) {
     // Not aborted, no failure event, yet the stream ended with no boundary event: never call this "ok" (G1).
+    // Q2 (revision 1, reviewer 2): cancel through the session here too, as P03's route did — a quiet, boundary-
+    // less end is exactly the failure mode a stalled eve produces, so leaving nothing to cancel would be
+    // trusting the very quiet-end behaviour G1 exists not to trust.
+    await cancelSession(session);
     return withEvents({ status: "failed", ...partial, detail: "The turn ended without a result." });
   }
 

@@ -1,4 +1,4 @@
-import { Client, type MessageStreamEvent } from "eve/client";
+import { Client, isTurnFailureEvent, type MessageStreamEvent } from "eve/client";
 import { classifyTurn, type TurnResult } from "./run-harness.ts";
 
 /**
@@ -63,14 +63,36 @@ function lastReplyText(events: readonly MessageStreamEvent[]): string {
 }
 
 /**
+ * Q3 (revision 1, critic 3): `classifyTurn`'s own "failed" detail can be a
+ * raw eve code and message (`${code}: ${message}`) or an arbitrary thrown
+ * error's text — accurate for `ctx.log.warn` (routes/model.ts logs nothing
+ * here itself; the caller decides), wrong for a person to read. `events` is
+ * already being collected (`checkModel` always passes `collectEvents: true`)
+ * for `lastReplyText` below, so re-reading it here to tell "the model itself
+ * answered with a failure" (a real `TurnFailureStreamEvent` came back) from
+ * "eve or the network never answered at all" (the stream threw, or ended
+ * with no boundary, before any such event) is not a second classifier — the
+ * ok/failed/cancelled/parked/timeout decision itself stays entirely
+ * `classifyTurn`'s; this only chooses which already-honest plain sentence to
+ * show for an already-decided "failed".
+ */
+function modelCheckFailureDetail(result: Pick<TurnResult, "detail" | "providerLimit" | "events">): string {
+  if (result.providerLimit) return "The model's provider is rate-limited right now. Try again later.";
+  if ((result.events ?? []).some(isTurnFailureEvent)) return "The model check failed: the model had a problem answering.";
+  return "The model check failed: eve or the network didn't answer.";
+}
+
+/**
  * P03.2 (deliverable 1): a thin adapter over `classifyTurn`'s `TurnResult` —
  * it does no turn classification of its own (that guarantee is `runTurn`'s
  * alone; see run-harness.ts). A good check is an "ok" turn whose reply
- * includes "ok"; any other status (a real failure, a provider limit, a
- * cancel, a timeout, or an unexpected park) is reported with `runTurn`'s own
- * detail, which already reads well standing alone here.
+ * includes "ok". "cancelled"/"parked"/"timeout" already carry a plain,
+ * code-free detail straight from `classifyTurn` itself (run-harness.ts),
+ * which is reported as is; "failed" is phrased for a person here (Q3), never
+ * with the raw code, status or an HTTP number.
  */
-export function interpretModelCheck(result: Pick<TurnResult, "status" | "detail" | "events">): { ok: boolean; detail?: string } {
+export function interpretModelCheck(result: Pick<TurnResult, "status" | "detail" | "events" | "providerLimit">): { ok: boolean; detail?: string } {
+  if (result.status === "failed") return { ok: false, detail: modelCheckFailureDetail(result) };
   if (result.status !== "ok") return { ok: false, detail: shorten(result.detail ?? `The check did not complete ("${result.status}").`) };
   const reply = lastReplyText(result.events ?? []);
   if (!reply.trim().toLowerCase().includes("ok")) return { ok: false, detail: "The model answered, but not with the expected reply." };

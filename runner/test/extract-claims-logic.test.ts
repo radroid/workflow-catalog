@@ -16,12 +16,17 @@ import { newWorkspace } from "./helpers.ts";
  * wrote to the store itself; every check below that used to read `store
  * .read()` to see what the tool *saved* now reads the function's own
  * *returned* `claims`/`rejected`, and separately proves the function writes
- * nothing (`store.read().claims` stays empty throughout this file). The
- * moved persistence checks — the store refusing a write, and idempotent
- * persistence across two turns — are now `onboarding-routes.test.ts`
- * tests of the route's own save after an ok turn (see that file's "D14, via
- * the route" and "idempotent... across two turns" cases); the report maps
- * each one.
+ * nothing (`store.read().claims` stays empty throughout this file). The one
+ * moved persistence check — the store refusing a write when a race unmarks
+ * the source mid-turn — is now `onboarding-routes.test.ts`'s "D14, via the
+ * route" test of the route's own save after an ok turn.
+ *
+ * Q12 (revision 1): this comment previously also claimed an "idempotent...
+ * across two turns" case moved to that same file — there is no such case
+ * there. Idempotent `(source, evidence)` de-duplication was never this
+ * function's test to move: it is the reducer's own behaviour
+ * (`profile-reducer.ts`'s `extractClaims` action), already covered by
+ * `profile-reducer.test.ts:180-191`, unrelated to this packet's move.
  */
 
 async function newStore(): Promise<ProfileStore> {

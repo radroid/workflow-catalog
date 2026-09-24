@@ -211,6 +211,12 @@ interface Reconciled {
  * function's own inconsistent wording, not an established term elsewhere —
  * and dropping "as a/revision(s)" removes the one clause with no fixed
  * length. See profile-store-revision2.test.ts for the combined-length check.
+ *
+ * Q10 (revision 1, critic polish): callers now put this note *after* the
+ * action's own message, not before — the action just taken is the sentence's
+ * own consequence, and a person reads that first ("Accepted. Approval
+ * withdrawn: … needs your answer. 1 edit saved."), not a fact about a file
+ * they didn't just touch.
  */
 function editsNote(applied: number, proposed: number): string {
   const parts: string[] = [];
@@ -367,7 +373,8 @@ export class ProfileStore {
     const { result } = await this.#transaction((profile, reconciled) => {
       const reduced = reduce(profile, action);
       const note = editsNote(reconciled.applied, reconciled.proposed);
-      return { profile: reduced.profile, write: reduced.ok, result: note ? { ...reduced, message: `${note} ${reduced.message}` } : reduced };
+      // Q10 (revision 1): the action's own consequence comes first, the edits note after (see editsNote's doc comment).
+      return { profile: reduced.profile, write: reduced.ok, result: note ? { ...reduced, message: `${reduced.message} ${note}` } : reduced };
     });
     return result;
   }
@@ -405,7 +412,8 @@ export class ProfileStore {
       const reduced = reduce(profile, { type: "extractClaims", category, extracted, now: this.#now(), newId });
       const note = editsNote(reconciled.applied, reconciled.proposed);
       const added = reduced.ok ? reduced.profile.claims.length - profile.claims.length : 0;
-      return { profile: reduced.profile, write: reduced.ok, result: { ...reduced, message: note ? `${note} ${reduced.message}` : reduced.message, added } };
+      // Q10 (revision 1): the action's own consequence comes first, the edits note after.
+      return { profile: reduced.profile, write: reduced.ok, result: { ...reduced, message: note ? `${reduced.message} ${note}` : reduced.message, added } };
     });
     return result;
   }

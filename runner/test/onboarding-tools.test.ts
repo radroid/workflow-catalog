@@ -87,10 +87,30 @@ function answering(answer: { optionId?: string; text?: string }, asked: string[]
 for (const { root, ask, extract } of ROOTS) {
   describe(`${root}: extract_claims`, () => {
     it("verifies only claims whose quote is really in the source, writing nothing itself (deliverable 5)", async () => {
-      const claimId = await extractMetric(extract);
+      // Q12 (revision 1): the test's own name promises "writing nothing itself" — inlined from
+      // extractMetric (rather than calling it) so the profile can be checked *between* the tool call and
+      // the route's own simulated persist step, proving the claim below, not just its end state.
+      const output = await extract.execute(
+        {
+          sourceCategory: "resume",
+          claims: [
+            { text: "Cut the Harbor release time from a day to under an hour.", kind: "metric", evidenceRef: "pasted.txt#1", evidenceQuote: "from a day to under an hour" },
+            { text: "Rewrote the whole pipeline alone.", kind: "fact", evidenceRef: "pasted.txt#2", evidenceQuote: "Rewrote the whole pipeline alone" },
+          ],
+        },
+        {},
+      );
+      expect(output).toMatchObject({
+        sourceCategory: "resume",
+        claims: [{ text: "Cut the Harbor release time from a day to under an hour.", kind: "metric" }],
+        rejected: ["Rewrote the whole pipeline alone"],
+      });
+      expect((await store.read()).claims).toEqual([]); // the tool alone wrote nothing
+      const saved = await store.extractClaims("resume", output.claims as never); // the route's own next step
+      expect(saved.ok).toBe(true);
       const claims = (await store.read()).claims;
       expect(claims.map((claim) => claim.status)).toEqual(["candidate"]);
-      expect(claims[0]!.id).toBe(claimId);
+      expect(claims[0]!.id).toBeDefined();
     });
 
     it("verifies nothing (an empty claims array) when every quote is fabricated, and persists nothing", async () => {
