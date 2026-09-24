@@ -1,4 +1,5 @@
-import { Client, type MessageResult } from "eve/client";
+import { Client, type MessageStreamEvent } from "eve/client";
+import { classifyTurn, type TurnResult } from "./run-harness.ts";
 
 /**
  * The bridge's only way to eve: `eve/client` against `eve start` on
@@ -7,6 +8,17 @@ import { Client, type MessageResult } from "eve/client";
  *
  * `redirect: "manual"` keeps the Authorization header from following a
  * redirect anywhere else (eve docs, guides/client/overview.mdx).
+ *
+ * P03.2 (deliverable 1): `checkModel` runs `run-harness.ts`'s shared
+ * `classifyTurn`, not its own copy (eve-runtime.md §8 item 15's quiet-abort
+ * pattern applies here exactly as it does to a run's own turns). It calls
+ * `classifyTurn` directly, rather than the ctx-aware `runTurn`, because this
+ * gateway is built *before* a `RunnerContext` exists — this object becomes
+ * `ctx.eve` — so there is no workspace/clock to pause a budget with here.
+ * That is also the chosen behaviour, not just a plumbing accident: a model
+ * check is a single, manual, foreground action that never goes through
+ * `withRun`, so a provider limit hit during one never pauses the budget
+ * (see the packet report for the full reasoning).
  */
 export const EVE_HOST = "127.0.0.1";
 export const EVE_PORT = 3210;
@@ -41,23 +53,27 @@ function shorten(text: string, max = 300): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-type TurnOutcome = Pick<MessageResult, "status" | "events" | "message" | "inputRequests">;
+/** The assistant's own reply text, read off the last `message.completed` event (`classifyTurn`'s `TurnResult` carries no `message` field of its own — only a caller that asked for `collectEvents` gets the raw stream to read one from, the way `onboarding.ts`'s extraction route reads a tool's output). */
+function lastReplyText(events: readonly MessageStreamEvent[]): string {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!;
+    if (event.type === "message.completed") return event.data.message ?? "";
+  }
+  return "";
+}
 
 /**
- * Whether a check turn worked. A good turn ends with the session parked for
- * the next message (status "waiting"). A failed model call shows up as
- * step.failed or turn.failed (then "waiting"), or as session.failed
- * (status "failed"); each carries { code, message }.
+ * P03.2 (deliverable 1): a thin adapter over `classifyTurn`'s `TurnResult` —
+ * it does no turn classification of its own (that guarantee is `runTurn`'s
+ * alone; see run-harness.ts). A good check is an "ok" turn whose reply
+ * includes "ok"; any other status (a real failure, a provider limit, a
+ * cancel, a timeout, or an unexpected park) is reported with `runTurn`'s own
+ * detail, which already reads well standing alone here.
  */
-export function interpretModelCheck(result: TurnOutcome): { ok: boolean; detail?: string } {
-  const failure = result.events.find((event) => event.type === "step.failed" || event.type === "turn.failed" || event.type === "session.failed");
-  if (failure || result.status === "failed") {
-    const reason = failure && "data" in failure ? (failure.data as { code?: string; message?: string }) : undefined;
-    const detail = reason?.message ? `${reason.code ? `${reason.code}: ` : ""}${reason.message}` : `The turn ended as "${result.status}".`;
-    return { ok: false, detail: shorten(detail) };
-  }
-  if (result.inputRequests.length > 0) return { ok: false, detail: "The model asked for input instead of answering." };
-  if (!(result.message ?? "").trim().toLowerCase().includes("ok")) return { ok: false, detail: "The model answered, but not with the expected reply." };
+export function interpretModelCheck(result: Pick<TurnResult, "status" | "detail" | "events">): { ok: boolean; detail?: string } {
+  if (result.status !== "ok") return { ok: false, detail: shorten(result.detail ?? `The check did not complete ("${result.status}").`) };
+  const reply = lastReplyText(result.events ?? []);
+  if (!reply.trim().toLowerCase().includes("ok")) return { ok: false, detail: "The model answered, but not with the expected reply." };
   return { ok: true };
 }
 
@@ -101,14 +117,11 @@ export function createEveGateway(options: { readonly password: string; readonly 
     },
     modelId,
     async checkModel(timeoutMs = 90_000) {
-      const signal = AbortSignal.timeout(timeoutMs);
-      try {
-        const { response } = await client.sessions.create({ message: MODEL_CHECK_PROMPT, signal });
-        const result = await response.result();
-        return { ...interpretModelCheck(result), modelId: await modelId() };
-      } catch (error) {
-        return { ok: false, detail: shorten(signal.aborted ? `No answer within ${timeoutMs / 1000} s.` : (error as Error).message) };
-      }
+      // eve-runtime.md §8 item 15, via the shared classifier: reads the stream event by event rather than trusting
+      // response.result() (which resolves "completed" for a turn that quietly never finished), and cancels through
+      // the session on a timeout or an unexpected park, never MessageResponse.cancel().
+      const result = await classifyTurn(client, { message: MODEL_CHECK_PROMPT, timeoutMs, collectEvents: true });
+      return { ...interpretModelCheck(result), modelId: await modelId() };
     },
   };
 }

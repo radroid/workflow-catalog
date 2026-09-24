@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isCurrentTurnBoundaryEvent, isTurnFailureEvent, type ClientSession, type MessageStreamEvent, type TurnFailureStreamEvent } from "eve/client";
+import { isCurrentTurnBoundaryEvent, isTurnFailureEvent, type Client, type ClientSession, type MessageStreamEvent, type TurnFailureStreamEvent } from "eve/client";
 import type { RunKind, RunRecord, RunTokenUsage } from "@workflow-catalog/contracts";
 import { getBudgetState, pauseBudget, withBudgetLock } from "../store/budget.ts";
 import { finishRun, NO_MODEL, startRun, UNKNOWN_MODEL, writePausedRun } from "../store/runs.ts";
@@ -51,6 +51,18 @@ import type { RunnerContext } from "./context.ts";
  * turn"): a plain cancel on a session that is already parked is an accepted
  * no-op on eve's side, so for a parked turn the cancel is a formality. The
  * session simply stays parked, durable and idle.
+ *
+ * P03.2 (deliverable 1, "one turn classifier"): `classifyTurn` below is the
+ * whole algorithm above, taking only a `Client` — no `RunnerContext` — so
+ * `eve-gateway.ts`'s `checkModel` (which runs before a `RunnerContext`
+ * exists: the gateway it builds becomes `ctx.eve`) can call the exact same
+ * classifier instead of a second copy. `runTurn` is a thin wrapper: it adds
+ * the one ctx-dependent side effect (pausing the budget on a detected
+ * provider limit) and the `RunnerContext`-shaped early return when eve isn't
+ * running. `onboarding.ts`'s extraction route and `eve-gateway.ts`'s
+ * `checkModel` both read a tool's or the reply's own output off
+ * `TurnResult.events` (`collectEvents: true`) rather than growing their own
+ * classifier; `grep` for turn classification should find only this file.
  */
 
 const ZERO_TOKENS: RunTokenUsage = { input: 0, output: 0 };
@@ -119,6 +131,17 @@ export interface RunTurnInput {
   readonly timeoutMs?: number;
   /** P04: also collect the turn's events onto the result (see `TurnResult.events`). Defaults to false, so every existing call site is unaffected. */
   readonly collectEvents?: boolean;
+  /**
+   * P03.2 (deliverable 1): whether a detected provider limit pauses the
+   * budget. Defaults to `true` (every existing caller keeps pausing). A
+   * model check (`eve-gateway.ts`) and onboarding's interactive claim
+   * extraction (`routes/onboarding.ts`) pass `false`: both are single,
+   * manual, foreground actions that never go through `withRun` and write no
+   * `RunRecord`, unlike P04's job-capture extraction queue, which stays
+   * `true` (unattended, potentially many turns in a row) and is not this
+   * packet's to revisit. See the report for the full reasoning.
+   */
+  readonly pauseBudgetOnProviderLimit?: boolean;
 }
 
 /** Semantic-error-catalog rule ids that mean "the provider (or the AI Gateway in front of it) rate-limited this request" — decision 1's primary signal. */
@@ -154,19 +177,22 @@ async function cancelSession(session: ClientSession | undefined): Promise<void> 
 }
 
 /**
- * One eve session turn, for use inside a `withRun` body. Never retries — a
- * detected provider limit pauses the budget itself (so `withRun` needs no
- * special case) and fails this turn; the caller is expected to stop, not
- * call `runTurn` again for the same run. Never rejects: every path below
- * resolves a `TurnResult`.
+ * P03.2 (deliverable 1): the one turn classifier, independent of
+ * `RunnerContext` — it needs only a `Client` to start the turn against, so a
+ * caller that runs before a `RunnerContext` exists (`eve-gateway.ts`'s
+ * `checkModel` builds the gateway that *becomes* `ctx.eve`) can drive it
+ * directly instead of growing a second copy. `runTurn` below is `ctx`-aware
+ * sugar over this: the `eve`-not-running early return, and the one
+ * ctx-dependent side effect (pausing the budget). Never rejects: every path
+ * resolves a `TurnResult`. Detects a provider limit (`TurnResult.providerLimit`)
+ * but never pauses the budget itself — that stays `runTurn`'s call, since
+ * pausing needs a workspace and a clock this function is never given.
  */
-export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<TurnResult> {
-  const eve = ctx.eve;
+export async function classifyTurn(client: Client, input: RunTurnInput): Promise<TurnResult> {
   const collectEvents = input.collectEvents ?? false;
   const events: MessageStreamEvent[] = [];
   /** Appends `events` (P04, additive) only for a caller that asked for them; every existing call site's result shape is unchanged. */
   const withEvents = (result: TurnResult): TurnResult => (collectEvents ? { ...result, events } : result);
-  if (!eve) return withEvents({ status: "failed", tokens: ZERO_TOKENS, detail: "eve is not running." });
   const timeoutMs = input.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
   const signal = AbortSignal.timeout(timeoutMs);
 
@@ -179,7 +205,7 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
   let inputRequests = 0;
 
   try {
-    const created = await eve.client.sessions.create({ message: input.message, signal });
+    const created = await client.sessions.create({ message: input.message, signal });
     session = created.session;
     // Event by event (G1): a quietly-ending abort during an open or reconnect never throws here, so the partial
     // usage and model survive it and the signal.aborted check below is what actually catches it.
@@ -223,7 +249,6 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
 
   if (failure) {
     const providerLimit = isProviderLimitFailure(failure);
-    if (providerLimit) await pauseBudget(ctx.workspace, ctx.clock, PROVIDER_LIMIT_REASON);
     const detail = providerLimit ? `${PROVIDER_LIMIT_REASON} (${shorten(failure.data.message)})` : `${failure.data.code}: ${shorten(failure.data.message)}`;
     return withEvents({ status: "failed", ...partial, detail, providerLimit });
   }
@@ -243,6 +268,27 @@ export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<
   // A session.waiting (conversation) or session.completed (task) boundary with no failure, no cancellation, no
   // input request and no abort: the turn finished.
   return withEvents({ status: "ok", ...partial });
+}
+
+/**
+ * One eve session turn, for use inside a `withRun` body. Never retries — a
+ * detected provider limit pauses the budget itself by default (so `withRun`
+ * needs no special case) and fails this turn; the caller is expected to
+ * stop, not call `runTurn` again for the same run. Set
+ * `pauseBudgetOnProviderLimit: false` to skip that (see `RunTurnInput`).
+ * Never rejects: every path resolves a `TurnResult`.
+ */
+export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<TurnResult> {
+  const eve = ctx.eve;
+  if (!eve) {
+    const notRunning: TurnResult = { status: "failed", tokens: ZERO_TOKENS, detail: "eve is not running." };
+    return (input.collectEvents ?? false) ? { ...notRunning, events: [] } : notRunning;
+  }
+  const result = await classifyTurn(eve.client, input);
+  if (result.providerLimit && (input.pauseBudgetOnProviderLimit ?? true)) {
+    await pauseBudget(ctx.workspace, ctx.clock, PROVIDER_LIMIT_REASON);
+  }
+  return result;
 }
 
 // --- withRun -------------------------------------------------------------
