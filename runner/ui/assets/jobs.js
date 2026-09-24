@@ -729,7 +729,13 @@ function setFieldError(fieldId, message) {
 function refuseField(fieldId, message) {
   setFieldError(fieldId, message);
   lastAction("Not saved.", "refused");
-  $(fieldId).focus();
+  const field = $(fieldId);
+  field.focus();
+  // Not left to the global focusin listener: its pointerAt suppression assumes a just-clicked control already
+  // scrolled itself into view, which holds for the control that was actually clicked (the submit button) but not
+  // for this field — a *different* control this refusal is moving focus to, whose new error text can otherwise
+  // land right under the sticky line, invisible until the person scrolls (caught visually taking L13's screenshots).
+  keepClear(field);
 }
 
 for (const id of ["paste-url", "paste-text", "url-input"]) {
