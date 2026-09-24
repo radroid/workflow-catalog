@@ -10,7 +10,7 @@ import { MemorySecretStore, RUNNER_SECRET_SERVICE } from "../lib/secret-store.ts
 import { checkWorkspacePath, runSetup, SetupError, type SetupDeps, type SetupOptions } from "../lib/setup.ts";
 import { PairingCodes } from "../store/pairing.ts";
 import { WorkspaceError } from "../store/workspace.ts";
-import { tempDir } from "./helpers.ts";
+import { newWorkspace, tempDir } from "./helpers.ts";
 
 interface Sandbox {
   readonly root: string;
@@ -110,10 +110,10 @@ describe("setup (non-interactive)", () => {
     expect(after.RUNNER_MODEL).toBe("gpt-5.6-terra");
   });
 
-  it("never takes the workspace from the environment (P02.2 revision 1, W1): only --workspace or .env.local choose it, never an ambient value", async () => {
+  it("never takes the workspace from the environment (P02.2 revision 1, W1, W5: B exists on disk), only --workspace or .env.local choose it, never an ambient value", async () => {
     const box = await sandbox();
-    const ambient = path.join(box.root, "ws-from-env");
-    // --yes, no --workspace, a first run: the environment never supplies it — setup fails, asking for one explicitly, exactly as with no ambient value at all.
+    const ambient = (await newWorkspace()).root;
+    // --yes, no --workspace, a first run: the environment never supplies it — setup fails, asking for one explicitly, exactly as with no ambient value at all — even though `ambient` is a real, valid, pre-existing workspace and old (buggy) code would have happily opened it.
     await expect(runSetup({ ...CHATGPT }, box.deps({ env: { RUNNER_WORKSPACE: ambient } }))).rejects.toThrow(/--workspace/);
     // Interactive, no --workspace, a first run: the suggested default stays ~/JobAssistant (here, <home>/JobAssistant), never the ambient value.
     let offeredDefault: string | undefined;
@@ -130,8 +130,8 @@ describe("setup (non-interactive)", () => {
 
     // A real first run, with --workspace: creates A.
     const first = await runSetup({ ...CHATGPT, workspace: path.join(box.root, "wsA") }, box.deps());
-    // A re-run, no --workspace, a *different* ambient value: .env.local already names A, so it wins — unaffected by W1 (only the first-run fallback was reverted).
-    const decoy = path.join(box.root, "someone-elses-workspace");
+    // A re-run, no --workspace, a *different*, also real and valid, ambient value: .env.local already names A, so it wins — unaffected by W1 (only the first-run fallback was reverted).
+    const decoy = (await newWorkspace()).root;
     const second = await runSetup({ provider: "chatgpt", model: "gpt-5.6-terra", yes: true }, box.deps({ env: { RUNNER_WORKSPACE: decoy } }));
     expect(second.workspace.root).toBe(first.workspace.root);
     expect(second.createdWorkspace).toBe(false);
