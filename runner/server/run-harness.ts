@@ -54,9 +54,13 @@ import type { RunnerContext } from "./context.ts";
  *
  * P03.2 (deliverable 1, "one turn classifier"): `classifyTurn` below is the
  * whole algorithm above, taking only a `Client` — no `RunnerContext` — so
- * `eve-gateway.ts`'s `checkModel` (which runs before a `RunnerContext`
- * exists: the gateway it builds becomes `ctx.eve`) can call the exact same
- * classifier instead of a second copy. `runTurn` is a thin wrapper: it adds
+ * `eve-gateway.ts`'s `checkModel` can call the exact same classifier instead
+ * of a second copy. (S3, revision 2, corrected: the gateway object is built
+ * before the `RunnerContext` and becomes `ctx.eve`, so its methods hold no
+ * ctx; `checkModel` itself runs only inside `routes/model.ts`'s route, which
+ * has one. The split gives the gateway a ctx-free entry point over the
+ * `Client` it owns; it is not forced by when `checkModel` runs.) `runTurn`
+ * is a thin wrapper: it adds
  * the one ctx-dependent side effect (pausing the budget on a detected
  * provider limit) and the `RunnerContext`-shaped early return when eve isn't
  * running. `onboarding.ts`'s extraction route and `eve-gateway.ts`'s
@@ -201,10 +205,12 @@ async function cancelSession(session: ClientSession | undefined): Promise<void> 
 
 /**
  * P03.2 (deliverable 1): the one turn classifier, independent of
- * `RunnerContext` — it needs only a `Client` to start the turn against, so a
- * caller that runs before a `RunnerContext` exists (`eve-gateway.ts`'s
- * `checkModel` builds the gateway that *becomes* `ctx.eve`) can drive it
- * directly instead of growing a second copy. `runTurn` below is `ctx`-aware
+ * `RunnerContext` — it needs only a `Client` to start the turn against, so
+ * code that holds a `Client` but no ctx (`eve-gateway.ts`'s `checkModel`, a
+ * method of the gateway object that is built before the `RunnerContext` and
+ * becomes `ctx.eve`; S3, revision 2: the method itself runs only inside
+ * `routes/model.ts`'s route, which has a ctx) can drive it directly instead
+ * of growing a second copy. `runTurn` below is `ctx`-aware
  * sugar over this: the `eve`-not-running early return, and the one
  * ctx-dependent side effect (pausing the budget). Never rejects: every path
  * resolves a `TurnResult`. Detects a provider limit (`TurnResult.providerLimit`)
