@@ -125,6 +125,8 @@ interface PrepareBody {
   readonly outcome: "started" | "already_prepared" | "already_running" | "reexported";
   readonly version?: number;
   readonly replaces?: number;
+  readonly sameDraftAs?: number;
+  readonly newDetails?: boolean;
   readonly application: DetailView;
 }
 
@@ -1256,6 +1258,116 @@ describe("a changed name or contact line (revision 1, V8)", () => {
     expect(model.prompts[1]).toContain("- Requirement 1: leave it out.");
     expect(model.prompts[1]).toContain("- Requirement 3: leave it out.");
     expect(flat(await documentText(bridge, taskId, "resume-v1.pdf"))).toContain("Ada Q. Quill");
+  });
+});
+
+/** The version numbers a file list names, in order: `["resume-v1.md", "diff-v2.md"]` → `[1, 2]`. */
+function versionsIn(files: readonly string[]): number[] {
+  return [...new Set(files.map((file) => Number(/-v(\d+)\./.exec(file)?.[1])))].sort((a, b) => a - b);
+}
+
+describe("the newest documents decide “already prepared” (revision 2, X5)", () => {
+  it("Ada, then Zoe, then Ada again: version 3 carries Ada's name, replaces version 2, and the notice clears", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    const ada = { ...PERSON };
+    const zoe = { name: "Zoe Quill", contact: "zoe.quill@example.com · Remote" };
+
+    expect((await post<{ outdated: number }>(bridge, "/details", zoe)).body.outdated).toBe(1);
+    expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "reexported", version: 2, replaces: 1, sameDraftAs: 1, newDetails: true });
+
+    // Back to Ada. Version 1 carries Ada's key, but the newest documents, version 2's, carry Zoe's name.
+    expect((await post<{ outdated: number }>(bridge, "/details", ada)).body.outdated).toBe(1);
+    expect((await detail(bridge, taskId)).versions[0]).toMatchObject({ version: 2, olderDetails: true });
+    const back = await prepare(bridge, jobId);
+    expect(back.status).toBe(200);
+    expect(back.body).toMatchObject({ outcome: "reexported", version: 3, replaces: 2, sameDraftAs: 2, newDetails: true });
+    expect(model.prompts).toHaveLength(1);
+    expect((await listRuns(bridge.workspace, bridge.clock)).records).toHaveLength(1);
+
+    const application = await applicationRecord(bridge, taskId);
+    const keyOf = (version: number) => [...new Set(application.documents.filter((document) => document.version === version).map((document) => document.idempotencyKey))];
+    expect(keyOf(3)).toEqual(keyOf(1));
+    expect(keyOf(3)).not.toEqual(keyOf(2));
+    for (const file of ["resume-v3.md", "resume-v3.docx", "resume-v3.pdf"]) {
+      const text = flat(await documentText(bridge, taskId, file));
+      expect(text, file).toContain("Ada Quill");
+      expect(text, file).toContain("ada.quill@example.com");
+      expect(text, file).not.toContain("Zoe");
+      expect(text, file).toContain(KNOWN_SENTENCE.resume);
+    }
+    const v3Record = JSON.parse(await rawFile(bridge, "applications", taskId, "versions", "v3.json"));
+    expect(v3Record).toMatchObject({ version: 3, replaces: 2, sameDraftAs: 2, header: ada });
+    expect(v3Record.draft).toEqual(JSON.parse(await rawFile(bridge, "applications", taskId, "versions", "v1.json")).draft);
+
+    // The newest documents carry the name on file now: the notice clears, and nothing is left to prepare again.
+    const view = await detail(bridge, taskId);
+    expect(view.versions.map((version) => [version.version, version.replacedBy, version.olderDetails])).toEqual([
+      [3, null, false],
+      [2, 3, true],
+      [1, 2, false],
+    ]);
+    expect((await post<{ outdated: number }>(bridge, "/details", ada)).body.outdated).toBe(0);
+    expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "already_prepared", version: 3 });
+    expect(versionsIn(await readdir(bridge.workspace.resolve("applications", taskId, "docs")))).toEqual([1, 2, 3]);
+    expect(model.prompts).toHaveLength(1);
+  });
+
+  it("a newer version made for other inputs doesn't leave an older one current: switching the cover letter back re-exports it as the newest", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId, true)).body.application.taskId;
+    expect((await prepare(bridge, jobId, false)).body.outcome).toBe("started");
+    expect(model.prompts).toHaveLength(2);
+
+    // Version 1 carries the resume-and-letter key, but the newest documents are version 2's resume alone.
+    const back = await prepare(bridge, jobId, true);
+    expect(back.body).toMatchObject({ outcome: "reexported", version: 3, replaces: 2, sameDraftAs: 1, newDetails: false });
+    expect(model.prompts).toHaveLength(2);
+    const view = await detail(bridge, taskId);
+    expect(view.versions.map((version) => [version.version, version.coverLetter, version.sameDraftAs])).toEqual([
+      [3, true, 1],
+      [2, false, null],
+      [1, true, null],
+    ]);
+    expect(view.versions[0]!.files.map((file) => file.name)).toEqual(["resume-v3.md", "resume-v3.docx", "resume-v3.pdf", "cover-v3.md", "cover-v3.docx", "cover-v3.pdf", "diff-v3.md"]);
+    expect(await documentText(bridge, taskId, "cover-v3.md")).toContain(KNOWN_SENTENCE.cover_letter);
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "already_prepared", version: 3 });
+  });
+});
+
+describe("a re-export checks its draft again (revision 2, X7)", () => {
+  it("a stored draft today's checks refuse is never exported under a new name: the re-export is refused plainly, and nothing is written", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    // The stored draft now states a number no claim does (the file was edited, or checked by an older, looser runner).
+    const recordFile = bridge.workspace.resolve("applications", taskId, "versions", "v1.json");
+    const record = JSON.parse(await readFile(recordFile, "utf8"));
+    const honestSentence = record.draft.resume.sections[1].statements[1];
+    expect(honestSentence).toBe("Shipped the on-call rotation tooling used by three engineering teams [C3].");
+    record.draft.resume.sections[1].statements[1] = "Shipped the on-call rotation tooling used by five engineering teams [C3].";
+    await writeFile(recordFile, JSON.stringify(record));
+    const documentsBefore = (await applicationRecord(bridge, taskId)).documents;
+    const filesBefore = await readdir(bridge.workspace.resolve("applications", taskId, "docs"));
+
+    await post(bridge, "/details", { name: "Zoe Quill", contact: "" });
+    const refusal = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false });
+    expect(refusal.status).toBe(409);
+    expect(refusal.body.error).toEqual({ code: "reexport_refused", message: "Version 1's sentences no longer pass the runner's checks, so they weren't exported again. Nothing was written." });
+    await waitForPreparationQueue(bridge.workspace.root);
+    expect((await applicationRecord(bridge, taskId)).documents).toEqual(documentsBefore);
+    expect(await readdir(bridge.workspace.resolve("applications", taskId, "docs"))).toEqual(filesBefore);
+    expect(await readdir(bridge.workspace.resolve("applications", taskId, "versions"))).toEqual(["v1.json"]);
+    expect(model.prompts).toHaveLength(1);
+    expect((await listRuns(bridge.workspace, bridge.clock)).records).toHaveLength(1);
+
+    // The check is all that stopped it: the draft as it was checked re-exports.
+    record.draft.resume.sections[1].statements[1] = honestSentence;
+    await writeFile(recordFile, JSON.stringify(record));
+    expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "reexported", version: 2, replaces: 1 });
+    expect(flat(await documentText(bridge, taskId, "resume-v2.pdf"))).toContain("Zoe Quill");
   });
 });
 

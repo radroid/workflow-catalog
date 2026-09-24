@@ -58,14 +58,16 @@ import { runTurn, withRun, type TurnResult } from "../run-harness.ts";
  *    version, the options that change the output (the cover letter), a
  *    digest of every input the model reads (the confirmed claims, the
  *    profile's notes, the job's fields), and a digest of the documents'
- *    header (the name and contact line). Documents already carrying that key
- *    mean "already prepared": nothing runs and nothing new is written. The
- *    inputs digest is there because excluding a claim after approval keeps
- *    the profile's version (P03), and a document must never outlive a
- *    claim's exclusion unnoticed. When only the header changed, the latest
- *    draft validated for the same inputs is exported again with the new
- *    header, as a new version naming the old one: no model turn runs, and
- *    no run is used.
+ *    header (the name and contact line). The newest documents carrying that
+ *    key mean "already prepared": nothing runs and nothing new is written
+ *    (X5: only the newest; an older version with the key is not what the
+ *    person has now). The inputs digest is there because excluding a claim
+ *    after approval keeps the profile's version (P03), and a document must
+ *    never outlive a claim's exclusion unnoticed. When a version was already
+ *    made from the same inputs but the newest documents differ (another
+ *    header, or a newer version made from other inputs), that version's
+ *    draft is checked again (X7) and exported as a new version naming the
+ *    newest: no model turn runs, and no run is used.
  * 3. A preparation attempt (`applications/<taskId>/preparation.json`)
  *    records the labelled claims and the job revision, and the application's
  *    `processing` goes to `running`. Its stage never moves until documents
@@ -244,7 +246,16 @@ export type PrepareStart =
   | { readonly outcome: "refused"; readonly status: 404 | 409; readonly code: string; readonly message: string }
   | { readonly outcome: "already_prepared"; readonly taskId: string; readonly version: number }
   | { readonly outcome: "already_running"; readonly taskId: string }
-  | { readonly outcome: "reexported"; readonly taskId: string; readonly version: number; readonly replaces: number }
+  | {
+      readonly outcome: "reexported";
+      readonly taskId: string;
+      readonly version: number;
+      readonly replaces: number;
+      /** The version whose checked draft it carries. */
+      readonly sameDraftAs: number;
+      /** Whether the name or contact line differs from the one the newest documents carried: the reason to re-export, or not (X5). */
+      readonly newDetails: boolean;
+    }
   | { readonly outcome: "started"; readonly taskId: string };
 
 interface Plan {
@@ -283,9 +294,14 @@ function newestDocument(documents: readonly ApplicationDocument[]): ApplicationD
   return documents.reduce<ApplicationDocument | undefined>((newest, document) => (!newest || document.version > newest.version ? document : newest), undefined);
 }
 
-/** The newest document carrying `key`, if any: that version is already prepared. */
+/**
+ * The newest documents, when they carry `key`: then, and only then, the job is already prepared (X5). An older
+ * version carrying it (the person switched their name back, say) is not what they have now: that version's draft
+ * is exported again as the newest version instead.
+ */
 function preparedWith(application: Application, key: string): ApplicationDocument | undefined {
-  return newestDocument(application.documents.filter((document) => document.idempotencyKey === key));
+  const newest = newestDocument(application.documents);
+  return newest?.idempotencyKey === key ? newest : undefined;
 }
 
 /** The newest attached version prepared from the same inputs as `content`: what a changed header re-exports (V8). */
@@ -336,9 +352,10 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
     const done = preparedWith(existing, key);
     if (done) return { outcome: "already_prepared", taskId: existing.taskId, version: done.version };
     if (IN_FLIGHT.has(flightKey(ctx, existing.taskId))) return { outcome: "already_running", taskId: existing.taskId };
-    // V8: the same inputs under another name or contact line: export the validated draft again, with no turn.
+    // V8, X5: the same inputs, but not as the newest documents carry them (another name or contact line, or a
+    // newer version made for other inputs): export the checked draft again as the newest version, with no turn.
     const source = await reexportSource(applications, existing, content);
-    if (source) return reexport(ctx, existing, source, key, details);
+    if (source) return reexport(ctx, existing, source, key, details, claims);
     const previous = await applications.readPreparation(existing.taskId);
     if (previous && previous !== "unreadable" && previous.status === "parked" && contentKey(previous.idempotencyKey) === content) {
       const answered = new Map(previous.answers.map((answer) => [answer.requirement, answer.answer]));
@@ -401,19 +418,34 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
   }
 }
 
+/** Why a re-export was refused (X7): its stored draft no longer passes the checks, so nothing was exported. */
+export function reexportRefusedMessage(version: number): string {
+  return `Version ${version}'s sentences no longer pass the runner's checks, so they weren't exported again. Nothing was written.`;
+}
+
 /**
- * V8: exports `source`'s validated draft again under `details`, as a new version naming the one it replaces, and
- * attaches it. No model turn and no run: nothing the model read has changed, so its checked work stands; only the
- * header the runner adds at export is new.
+ * V8, X5: exports `source`'s checked draft again under `details`, as a new version naming the one it replaces
+ * (the newest), and attaches it. No model turn and no run: nothing the model read has changed, so its checked
+ * work stands; only the header the runner adds at export may be new.
+ *
+ * X7: the stored draft is checked again first, against the profile as it is now and the posting, exactly as a
+ * model's draft is. A draft today's checks refuse (the rules grew stricter since, or the file was edited) is
+ * never exported: the re-export is refused, plainly, and nothing is written. The check reads and writes nothing
+ * of the application's, so it runs before the flight begins: a refused re-export never reads as running.
  */
-async function reexport(ctx: RunnerContext, application: Application, source: VersionRecord, key: string, details: PersonDetails): Promise<PrepareStart> {
+async function reexport(ctx: RunnerContext, application: Application, source: VersionRecord, key: string, details: PersonDetails, claims: readonly PreparedClaim[]): Promise<PrepareStart> {
+  const read = await new JobsStore(ctx.workspace).readSnapshot(application.jobId, source.jobRevision);
+  if (read.kind !== "ok") return refused(409, "snapshot_unreadable", "This job's latest revision can't be read, so it can't be prepared.");
+  const check = validateDraft({ draft: source.draft, claims, postingText: postingText(read.snapshot), coverLetterRequested: source.coverLetter });
+  if (!check.ok) return refused(409, "reexport_refused", reexportRefusedMessage(source.version));
+
   const flight = flightKey(ctx, application.taskId);
   if (IN_FLIGHT.has(flight)) return { outcome: "already_running", taskId: application.taskId };
-  beginFlight(flight);
+  beginFlight(flight); // synchronously after the check: a second request for this task sees it
   try {
     const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
-    const read = await new JobsStore(ctx.workspace).readSnapshot(application.jobId, source.jobRevision);
-    if (read.kind !== "ok") return refused(409, "snapshot_unreadable", "This job's latest revision can't be read, so it can't be prepared.");
+    const newest = newestDocument(application.documents);
+    const newDetails = newest === undefined || detailsPartOf(newest.idempotencyKey) !== detailsDigest(details);
     const plan = { taskId: application.taskId, profileVersion: source.profileVersion, jobRevision: source.jobRevision, coverLetter: source.coverLetter, idempotencyKey: key };
     const { version, documents } = await exportVersion(ctx, plan, source.draft, source.sources, read.snapshot, details, source.version);
     await applications.update(application.taskId, (current) => ({
@@ -422,7 +454,7 @@ async function reexport(ctx: RunnerContext, application: Application, source: Ve
       stage: current.stage === "saved" || current.stage === "preparing" ? "ready" : current.stage,
       processing: { status: "idle", ...(current.processing.runId ? { runId: current.processing.runId } : {}) },
     }));
-    return { outcome: "reexported", taskId: application.taskId, version: version.version, replaces: version.replaces ?? source.version };
+    return { outcome: "reexported", taskId: application.taskId, version: version.version, replaces: version.replaces ?? source.version, sameDraftAs: source.version, newDetails };
   } finally {
     endFlight(flight);
   }
@@ -1088,8 +1120,8 @@ export default defineRouteModule({
       const started = await startPreparation(ctx, { jobId: parsed.data.jobId, coverLetter: parsed.data.coverLetter });
       if (started.outcome === "refused") return errorResponse(started.status, started.code, started.message);
       const version = started.outcome === "already_prepared" || started.outcome === "reexported" ? { version: started.version } : {};
-      const replaces = started.outcome === "reexported" ? { replaces: started.replaces } : {};
-      return c.json({ ok: true, outcome: started.outcome, ...version, ...replaces, application: await detailView(ctx, started.taskId) });
+      const reexported = started.outcome === "reexported" ? { replaces: started.replaces, sameDraftAs: started.sameDraftAs, newDetails: started.newDetails } : {};
+      return c.json({ ok: true, outcome: started.outcome, ...version, ...reexported, application: await detailView(ctx, started.taskId) });
     });
 
     router.get("/:taskId", async (c) => {

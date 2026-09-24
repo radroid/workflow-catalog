@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import applicationsModule, { waitForPreparationQueue } from "../server/routes/applications.ts";
+import { ApplicationsStore } from "../store/applications.ts";
 import { pauseBudget } from "../store/budget.ts";
 import { JobsStore } from "../store/jobs.ts";
 import { ProfileStore } from "../store/profile.ts";
@@ -793,6 +794,123 @@ describe("Applications page: a changed name or contact line (revision 1, V8)", (
     press(page, "detail-prepare");
     await until(() => page.outcomes().length === 3, "the third outcome");
     expect(page.outcomes()[2]).toBe("Already prepared: “Platform Lead · Fernwood” matches version 2; nothing new.");
+  });
+});
+
+/** Saves `name` in the documents' header from the page, as a person would, and waits for the save's line. */
+async function saveName(page: Page, name: string): Promise<void> {
+  const before = page.outcomes().length;
+  page.type("details-name", name);
+  page.byId("details-submit").focus();
+  page.submit("details-form");
+  await until(() => page.outcomes().slice(before).some((line) => line.startsWith("Saved")), `the save of ${name}`);
+}
+
+describe("Applications page: switching the name back (revision 2, X5)", () => {
+  it("Ada, then Zoe, then Ada: Prepare again puts Ada back on the newest documents, and the note clears", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    const page = await openPage(bridge);
+    page.document.querySelector(".app-open")!.click();
+    await until(() => page.document.querySelector(".version") !== null, "version 1");
+    const changed = "Your name or contact line has changed since this version. Prepare again to put it on your documents.";
+
+    await saveName(page, "Zoe Quill");
+    const button = press(page, "detail-prepare");
+    await until(() => all(page, ".version").length === 2, "version 2");
+    await saveName(page, "Ada Quill");
+    // The newest documents carry Zoe: saying Ada is outdated there is true, and Prepare again must act on it.
+    expect(page.outcomes().at(-1)).toBe("Saved. Prepare again to put it on your documents.");
+    await until(() => visibleText(page).includes(changed), "the note on version 2");
+
+    press(page, "detail-prepare");
+    await until(() => all(page, ".version").length === 3, "version 3");
+    expect(page.outcomes().at(-1)).toBe("Re-exported “Platform Lead · Fernwood” as version 3, with your new details.");
+    expect(page.document.activeElement).toBe(button);
+    expect(model.prompts).toHaveLength(1);
+    await until(() => !visibleText(page).includes(changed), "the note to clear");
+    const [v3] = all(page, ".version");
+    expect(v3!.querySelector("h4")?.textContent).toBe("Version 3 · resume");
+    expect(v3!.querySelector(".exports a")?.getAttribute("download")).toBe("Ada Quill - Resume - Fernwood Platform Lead.md");
+
+    // Now the newest documents carry this name: already prepared, and nothing new.
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().at(-1)?.startsWith("Already prepared") === true, "already prepared");
+    expect(page.outcomes().at(-1)).toBe("Already prepared: “Platform Lead · Fernwood” matches version 3; nothing new.");
+    expect(all(page, ".version")).toHaveLength(3);
+    await page.quiet();
+    expect(page.outcomes()).toEqual([
+      "Saved. Prepare again to put it on your documents.",
+      "Re-exported “Platform Lead · Fernwood” as version 2, with your new details.",
+      "Saved. Prepare again to put it on your documents.",
+      "Re-exported “Platform Lead · Fernwood” as version 3, with your new details.",
+      "Already prepared: “Platform Lead · Fernwood” matches version 3; nothing new.",
+    ]);
+  });
+
+  it("a re-export that a refresh sees in flight is announced once, as the re-export it was", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    const page = await openPage(bridge);
+    page.document.querySelector(".app-open")!.click();
+    await until(() => page.document.querySelector(".version") !== null, "version 1");
+    await saveName(page, "Zoe Quill");
+
+    // Hold the re-export between its files and its record while the page refreshes: the list reads it running.
+    const store = ApplicationsStore.prototype as unknown as { writeVersion(this: ApplicationsStore, taskId: string, record: unknown): Promise<void> };
+    const writeVersion = store.writeVersion;
+    let reached!: () => void;
+    const atRecord = new Promise<void>((resolve) => (reached = resolve));
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    store.writeVersion = async function (this: ApplicationsStore, taskId: string, record: unknown) {
+      reached();
+      await released;
+      return writeVersion.call(this, taskId, record);
+    };
+    try {
+      press(page, "detail-prepare");
+      await atRecord;
+      page.refreshNow();
+      await until(() => page.document.querySelector(".app-status")?.textContent === "Preparing now…", "the list to read it running");
+    } finally {
+      release();
+      store.writeVersion = writeVersion;
+    }
+    await until(() => page.outcomes().some((line) => line.startsWith("Re-exported")), "the re-export");
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      page.refreshNow();
+      await page.quiet();
+    }
+    expect(page.outcomes()).toEqual(["Saved. Prepare again to put it on your documents.", "Re-exported “Platform Lead · Fernwood” as version 2, with your new details."]);
+  });
+});
+
+describe("Applications page: a re-export whose saved draft no longer passes (revision 2, X7)", () => {
+  it("is refused in one plain line, and nothing new is listed", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    const [task] = (await readdir(bridge.workspace.resolve("applications"))).filter((entry) => entry.endsWith(".json") && entry !== "details.json");
+    const recordFile = bridge.workspace.resolve("applications", task!.replace(/\.json$/, ""), "versions", "v1.json");
+    const record = JSON.parse(await readFile(recordFile, "utf8"));
+    record.draft.resume.sections[1].statements[1] = "Shipped the on-call rotation tooling used by five engineering teams [C3].";
+    await writeFile(recordFile, JSON.stringify(record));
+    const page = await openPage(bridge);
+    page.document.querySelector(".app-open")!.click();
+    await until(() => page.document.querySelector(".version") !== null, "version 1");
+
+    await saveName(page, "Zoe Quill");
+    const button = press(page, "detail-prepare");
+    await until(() => page.outcomes().at(-1)?.startsWith("Not re-exported") === true, "the refusal");
+    expect(page.outcomes().at(-1)).toBe("Not re-exported: its saved sentences no longer pass the runner's checks.");
+    expect(page.byId("last-action").className).toContain("refused");
+    expect(page.document.activeElement).toBe(button);
+    expect(button.getAttribute("aria-disabled")).toBe("false");
+    await page.quiet();
+    expect(all(page, ".version")).toHaveLength(1);
   });
 });
 

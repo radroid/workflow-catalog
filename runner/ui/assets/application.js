@@ -495,7 +495,7 @@ async function loadList({ announceErrors = false, onError } = {}) {
   if (seq < listShown) return true;
   listShown = seq;
   listView = view;
-  watchRunning(view);
+  watchRunning(view, seq);
   renderList();
   return true;
 }
@@ -820,9 +820,27 @@ async function openApplication(taskId, { focus = true, detail: known } = {}) {
 /** Watched preparations: taskId → the job's name. */
 const started = new Map();
 
-/** Watches every application the list shows running. */
-function watchRunning(view) {
-  for (const entry of view.applications) if (isRunning(entry.state) && !started.has(entry.taskId)) started.set(entry.taskId, entry.jobName);
+/**
+ * Applications whose outcome this page announced from its own request's answer (already prepared, re-exported,
+ * refused), by the count of list requests made before that answer. A re-export is in flight for a moment too, so
+ * a list requested before the answer may still show it running: that list must not watch it again, or its next
+ * refresh would announce the same outcome a second time.
+ */
+const answeredAt = new Map();
+
+function answered(taskId) {
+  if (!taskId) return;
+  started.delete(taskId);
+  answeredAt.set(taskId, listSeq);
+}
+
+/** Watches every application the list (requested as number `seq`) shows running, unless the page announced its outcome since. */
+function watchRunning(view, seq) {
+  for (const entry of view.applications) {
+    if (!isRunning(entry.state) || started.has(entry.taskId)) continue;
+    if ((answeredAt.get(entry.taskId) ?? 0) >= seq) continue;
+    started.set(entry.taskId, entry.jobName);
+  }
 }
 
 /** Whether the "can't reach the runner" line is up: it is announced once per outage, and cleared by the next good refresh. */
@@ -945,6 +963,7 @@ const PREPARE_REFUSALS = {
   no_model: "Not prepared: no model is set up.",
   budget_paused: "Not prepared: the run budget is paused; resume it in [Settings](/ui/settings).",
   snapshot_unreadable: "Not prepared: this job's saved posting can't be read.",
+  reexport_refused: "Not re-exported: its saved sentences no longer pass the runner's checks.",
   job_not_found: "Not prepared: that job couldn't be found.",
   profile_busy: "Not prepared: your profile is busy; try again in a moment.",
   unreachable: CANT_REACH,
@@ -973,6 +992,7 @@ async function prepareJob(jobId, coverLetter, button) {
     preparingJobs.delete(jobId);
     button.setAttribute("aria-disabled", "false");
     detailKey = ""; // the next refresh renders the open application's button from its data again
+    answered(listView?.jobs.find((job) => job.jobId === jobId)?.taskId);
     lastAction(PREPARE_REFUSALS[error?.code] ?? "Not prepared: the runner hit a problem; try again.", "refused");
     // The name is what's missing: the name field is where to go next (revision 1, V18).
     if (error?.code === "details_missing") focusNameField();
@@ -983,11 +1003,14 @@ async function prepareJob(jobId, coverLetter, button) {
   stopWorking();
   button.setAttribute("aria-disabled", "false");
   const detail = result.application;
+  if (result.outcome === "already_prepared" || result.outcome === "reexported") answered(detail.taskId);
   if (result.outcome === "already_prepared") {
     lastAction(withName("Already prepared: ", detail.jobName, ` matches version ${result.version}; nothing new.`), "done");
   } else if (result.outcome === "reexported") {
-    // Only the name or contact line changed: the checked draft went out again under it, with no model turn (V8).
-    lastAction(withName("Re-exported ", detail.jobName, ` as version ${result.version}, with your new details.`), "done");
+    // The checked draft went out again with no model turn (V8): under a new name or contact line, or, when those
+    // are unchanged, as the newest version again after a newer one made from other inputs (X5).
+    const how = result.newDetails === false ? `, from version ${result.sameDraftAs}'s sentences.` : ", with your new details.";
+    lastAction(withName("Re-exported ", detail.jobName, ` as version ${result.version}${how}`), "done");
   } else if (result.outcome === "already_running") {
     lastAction(withName("Already preparing ", detail.jobName, "…"), "working");
     started.set(detail.taskId, detail.jobName);
