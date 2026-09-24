@@ -22,6 +22,7 @@ Bounded work packets for the MVP in [../mvp-spec.md](../mvp-spec.md). Each packe
 | [P01.1 contracts follow-ups](P01.1-contracts-followups.md) | P01 | P02, P07, P09 (must land before P03) |
 | [P02 runner spike and skeleton](P02-runner-spike-and-skeleton.md) | P01 | P09 |
 | [P02.1 runner follow-ups](P02.1-runner-followups.md) | P02 | P03–P10 (Owns disjoint) |
+| [P02.2 runner workspace precedence](P02.2-runner-workspace-precedence.md) | — (P02, P02.1 done) | P04, P05, P03.2 (Owns disjoint) |
 | [P03 onboarding and career profile](P03-onboarding-and-career-profile.md) | P02 | P09, P07 (pairing part) |
 | [P03.1 onboarding sources](P03.1-onboarding-sources.md) | P03, P04 (safe-fetch), P03.2 (shared files), P05 (package.json) | P08 (Owns disjoint) |
 | [P03.2 onboarding and model-turn follow-ups](P03.2-onboarding-and-turn-followups.md) | P04 (turn events) | P05 (Owns disjoint) |
