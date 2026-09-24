@@ -1,16 +1,16 @@
-import { boundedHttpUrlSchema, uuidSchema, utf8BoundedTextSchema, MAX_JOB_CAPTURE_TEXT_BYTES, MAX_JOB_CAPTURE_URL_LENGTH } from "@workflow-catalog/contracts";
-import type { MessageStreamEvent } from "eve/client";
+import { randomUUID } from "node:crypto";
+import { boundedHttpUrlSchema, uuidSchema, utf8BoundedTextSchema, MAX_JOB_CAPTURE_TEXT_BYTES, MAX_JOB_CAPTURE_URL_LENGTH, type JobStructured } from "@workflow-catalog/contracts";
 import { z } from "zod";
-import { extractJobOutputSchema } from "../../agent/lib/extract-job-schema.ts";
+import { extractedJobFields } from "../../agent/lib/extract-job-schema.ts";
 import { randomSecret } from "../../lib/crypto.ts";
-import { extractReadableText } from "../../lib/readable-text.ts";
+import { extractReadableText, normalizePostingText } from "../../lib/readable-text.ts";
 import { safeFetch, type SafeFetchRejectionReason } from "../../lib/safe-fetch.ts";
 import { getBudgetState } from "../../store/budget.ts";
-import { JobsStore, type CaptureJobResult, type ExtractionFailureReason, type ExtractionNotRunReason, type ExtractionState } from "../../store/jobs.ts";
+import { jobFilePath, JobsStore, type CaptureJobResult, type ExtractionFailureReason, type ExtractionNotRunReason, type ExtractionState, type JobSummary } from "../../store/jobs.ts";
 import { serialise } from "../../store/profile-writes.ts";
 import type { RunnerContext } from "../context.ts";
 import { errorResponse, readBoundedJson, validationErrorResponse } from "../http.ts";
-import { defineRouteModule } from "../route-modules.ts";
+import { defineRouteModule, EventRejectedError } from "../route-modules.ts";
 import { runTurn } from "../run-harness.ts";
 
 /**
@@ -24,27 +24,35 @@ import { runTurn } from "../run-harness.ts";
  * (`buildJobExtractionPrompt`, mirroring P03's `buildExtractionPrompt`),
  * never spliced into a system prompt or `instructions.md`. The model reports
  * back only `jobId`, `revision`, and the structured fields it drafted
- * (`extract_job`, iter-003 decision: model tools take IDs only) — never a
+ * (`extract_job`, iter-003 decision: model tools take IDs only), never a
  * URL, and never raw text.
  *
  * URL rule (`logs/blocks.md`, "P04 URL rule"): a captured or pasted URL
  * follows the contract's `httpUrlSchema`-family validation (http or https)
- * and is provenance only — nothing on the capture/paste paths fetches it.
+ * and is provenance only; nothing on the capture/paste paths fetches it.
  * Only the URL-fetch path (`POST /url`) goes out to the network, through
- * `../../lib/safe-fetch.ts`, https only, with every SSRF rule.
+ * `../../lib/safe-fetch.ts`, https only, with every SSRF rule. Every stored
+ * URL is re-serialized by the WHATWG URL parser (`stripUrlForStorage`),
+ * which round-2 T10 accepts: it is the same on all three paths and helps
+ * dedupe.
  *
- * Extraction (round-1 review L5, revising the original inline design):
- * a capture responds as soon as its snapshot is saved; extraction for a
- * capture that actually changed the content is *queued*, then runs
- * afterward in the background, one turn at a time per workspace
- * (`EXTRACTION_CHAINS`, reusing `store/profile-writes.ts`'s `serialise`
- * primitive so it is never queued behind, or ahead of, a job-store write).
- * `store/jobs.ts`'s `ExtractionState` (a side-channel file beside the
- * snapshot, `waiting`/`running`/`done`/`not_run`/`failed`) is how a caller —
- * this route's own JSON responses, or a later GET — learns what happened,
- * or is still happening. A turn that isn't `ok`, or has no successful
- * `extract_job` call, records no fields and a plain reason code; nothing
- * here retries a model call.
+ * Text (round-2 T5): each path normalizes the posting text exactly once,
+ * with `normalizePostingText` (`lib/readable-text.ts`), before anything is
+ * hashed or stored, so the same posting stores the same text and content
+ * hash by any path. Text that is empty once normalized is refused plainly.
+ *
+ * Extraction (round-1 L5, round-2 T1–T3, T9): a capture responds as soon as
+ * its snapshot is saved; extraction for a capture that changed the content
+ * is queued and runs in the background, one turn at a time per workspace
+ * (`EXTRACTION_CHAINS`). A revision already waiting or running in this
+ * process is never queued twice (`IN_FLIGHT`). Just before each turn, the
+ * queue checks again that a turn can start (eve, a model, an unpaused
+ * budget). The `extract_job` tool only checks and returns the fields; this
+ * queue writes them, after an ok turn, for exactly the revision it was
+ * extracting, so a failed turn leaves the fields already saved untouched.
+ * `store/jobs.ts`'s `ExtractionState`, a side file beside the snapshot, is
+ * how a caller learns what happened or is still happening; a `waiting` or
+ * `running` state this process doesn't own reads as interrupted.
  */
 
 const MAX_PASTE_BODY_BYTES = 256 * 1024;
@@ -54,12 +62,10 @@ const URL_FETCH_EXTRACTOR_VERSION = "url-fetch@1";
 /** One real model call, single-shot: the same default as onboarding.ts's extraction route. */
 const EXTRACTION_TIMEOUT_MS = 90_000;
 
-const pasteBodySchema = z
-  .object({
-    url: boundedHttpUrlSchema(MAX_JOB_CAPTURE_URL_LENGTH),
-    text: utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES),
-  })
-  .strict();
+/** Only the shape here: each field gets its own plain refusal below (the Jobs page maps a refusal to its field by `code`). */
+const pasteBodySchema = z.object({ url: z.string(), text: z.string() }).strict();
+const pasteUrlSchema = boundedHttpUrlSchema(MAX_JOB_CAPTURE_URL_LENGTH);
+const captureTextSchema = utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES);
 
 const urlBodySchema = z
   .object({
@@ -70,6 +76,8 @@ const urlBodySchema = z
   .strict();
 
 const revisionParamSchema = z.coerce.number().int().positive();
+
+const TEXT_TOO_LARGE_MESSAGE = "This posting is over 200 KB. Paste a shorter excerpt instead.";
 
 /**
  * The extraction turn's user message: an instruction plus the posting text,
@@ -91,86 +99,111 @@ export function buildJobExtractionPrompt(jobId: string, revision: number, text: 
   ].join("\n");
 }
 
-/**
- * D14-equivalent (P03's `persistedExtraction`): the `extract_job` call in
- * this turn that persisted structured fields for exactly this `jobId` and
- * `revision`, read from the turn's own `action.result` events. Undefined
- * when none did.
- */
-function persistedJobExtraction(events: readonly MessageStreamEvent[], jobId: string, revision: number): { message: string } | undefined {
-  let found: { message: string } | undefined;
-  for (const event of events) {
-    if (event.type !== "action.result" || event.data.status !== "completed") continue;
-    const result = event.data.result;
-    if (result.kind !== "tool-result" || result.toolName !== "extract_job" || result.isError) continue;
-    const output = extractJobOutputSchema.safeParse(result.output);
-    if (!output.success || !output.data.persisted || output.data.jobId !== jobId || output.data.revision !== revision) continue;
-    found = { message: output.data.message };
-  }
-  return found;
+/** True when at least one field holds something: an all-empty result is "no fields found", never a reason to replace fields already saved. */
+function hasAnyField(structured: JobStructured): boolean {
+  return Object.values(structured).some((value) => (Array.isArray(value) ? value.length > 0 : value !== undefined));
 }
 
-export type ExtractionStatus = "extracted" | "not_extracted";
-
-export interface ExtractionOutcome {
-  readonly status: ExtractionStatus;
-  /** Present only for `status: "extracted"` — the tool's own persisted-fields message. */
-  readonly message?: string;
-  /** Present only for `status: "not_extracted"` — a stable reason code (`store/jobs.ts`'s `ExtractionFailureReason`); UI wording is `runner/ui/assets/jobs.js`'s job, never a raw server string. */
-  readonly reason?: ExtractionFailureReason;
-}
+export type ExtractionOutcome =
+  | { readonly status: "extracted"; readonly structured: JobStructured }
+  | { readonly status: "not_extracted"; readonly reason: ExtractionFailureReason };
 
 /**
- * Runs the extraction turn and reports what happened, plainly. Never throws:
- * a turn that isn't `ok`, or that never made a successful `extract_job` call
- * for this exact jobId/revision, records no fields — covering eve not
- * running, a timeout, a provider limit, or the model simply not calling the
- * tool, each with its own reason code.
+ * Runs the extraction turn and reports what it found, plainly. Never throws,
+ * and never writes: the queue below saves `structured` itself. Only an `ok`
+ * turn counts, and only an `extract_job` result that accepted fields for
+ * this exact `jobId`/`revision` (`extractedJobFields`); anything else is a
+ * reason code: a timeout, a provider limit (which `runTurn` has already
+ * turned into a budget pause), any other failed turn, or a turn that found
+ * no fields.
  */
 export async function runExtraction(ctx: RunnerContext, jobId: string, revision: number, text: string): Promise<ExtractionOutcome> {
   const result = await runTurn(ctx, { message: buildJobExtractionPrompt(jobId, revision, text), timeoutMs: EXTRACTION_TIMEOUT_MS, collectEvents: true });
   if (result.status === "timeout") return { status: "not_extracted", reason: "timed_out" };
-  if (result.status !== "ok") return { status: "not_extracted", reason: "turn_failed" };
-  const persisted = persistedJobExtraction(result.events ?? [], jobId, revision);
-  if (!persisted) return { status: "not_extracted", reason: "no_fields_found" };
-  return { status: "extracted", message: persisted.message };
+  if (result.status !== "ok") return { status: "not_extracted", reason: result.providerLimit ? "provider_limit" : "turn_failed" };
+  const structured = extractedJobFields(result.events ?? [], jobId, revision);
+  if (!structured || !hasAnyField(structured)) return { status: "not_extracted", reason: "no_fields_found" };
+  return { status: "extracted", structured };
 }
 
-// --- Extraction queue (round-1 review L5) ---------------------------------
+// --- Extraction queue (round-1 L5, round-2 T1–T3, T9) ----------------------
 
 /**
- * One extraction turn at a time per workspace — this module's own map (like
- * `store/jobs.ts`'s `JOB_CHAINS` and `store/profile-writes.ts`'s
- * `PROCESS_CHAINS`), so an extraction turn is never queued behind, or ahead
- * of, an unrelated job-store write, and two captures in quick succession
- * never start two concurrent model turns against the same workspace.
+ * This runner process, as recorded on every `waiting`/`running` state it
+ * writes (round-2 T2). A state carrying any other owner, or none, was left
+ * by an earlier process that stopped before finishing it, and reads as
+ * interrupted; a retry then queues it again.
+ */
+const PROCESS_OWNER = randomUUID();
+
+/**
+ * One extraction turn at a time per workspace: this module's own map (like
+ * `store/jobs.ts`'s `JOB_CHAINS`), so an extraction turn is never queued
+ * behind, or ahead of, an unrelated job-store write, and two captures in
+ * quick succession never start two concurrent model turns against the same
+ * workspace.
  */
 const EXTRACTION_CHAINS = new Map<string, Promise<unknown>>();
 
 /**
- * `jobId:revision` keys with a turn actually in flight *in this process*,
- * right now. A revision whose on-disk extraction state is `running` but
- * whose key is absent from this set was left behind by a process that
- * crashed mid-turn — this process's own set starts empty, so anything it did
- * not itself begin reads that way, including its own past lives before a
- * restart. `describeExtractionState` below reports that combination as
- * `failed`/`interrupted` without ever rewriting the stale `running` record on
- * disk; the next real attempt (a changed capture, or a manual retry)
- * overwrites it normally.
+ * Revisions this process has queued and not yet finished, keyed by
+ * workspace, job and revision (round-2 T9). Checked and set synchronously,
+ * before anything is awaited, so two concurrent retries of one revision
+ * queue exactly one turn. A key is released only after its terminal state
+ * is on disk.
  */
-const ACTIVE_EXTRACTIONS = new Set<string>();
+const IN_FLIGHT = new Map<string, "waiting" | "running">();
 
-function activeKey(jobId: string, revision: number): string {
-  return `${jobId}:${revision}`;
+function flightKey(ctx: RunnerContext, jobId: string, revision: number): string {
+  return `${ctx.workspace.root}\n${jobId}\n${revision}`;
+}
+
+/** An extraction state as the API shows it: no `owner` (an internal detail), and `updatedAt` only when known. */
+export interface ShownExtractionState {
+  readonly status: ExtractionState["status"];
+  readonly reason?: ExtractionNotRunReason | ExtractionFailureReason;
+  readonly updatedAt?: string;
+}
+
+function shown(state: ExtractionState): ShownExtractionState {
+  return { status: state.status, ...(state.reason !== undefined ? { reason: state.reason } : {}), updatedAt: state.updatedAt };
+}
+
+const STALE = Symbol("stale");
+
+/** How a state read from disk shows, or `STALE` for a `waiting`/`running` state this process isn't working on right now. */
+function view(ctx: RunnerContext, jobId: string, revision: number, state: ExtractionState | "unreadable" | undefined): ShownExtractionState | undefined | typeof STALE {
+  if (state === undefined) return undefined;
+  if (state === "unreadable") return { status: "failed", reason: "interrupted" }; // round-2 T6: a damaged state file is never a 500
+  if (state.status !== "waiting" && state.status !== "running") return shown(state);
+  return state.owner === PROCESS_OWNER && IN_FLIGHT.has(flightKey(ctx, jobId, revision)) ? shown(state) : STALE;
 }
 
 /**
- * Whether an extraction turn can even be attempted right now. Checked
- * synchronously before queueing (never inside the queued work itself), so a
- * `not_run` state — and its reason — is visible the moment the capture
- * responds, rather than only after waiting in line behind another
- * workspace's turn: `waiting` is reserved for "an attempt will actually be
- * made, once the current turn (if any) finishes."
+ * The extraction state to show for `jobId`/`revision`. `undefined` when no
+ * extraction was ever recorded for it. A `waiting` or `running` state is
+ * shown as such only while this process is working on it; otherwise it
+ * reads as `failed`/`interrupted` (round-2 T2), and nothing rewrites the file
+ * until a real attempt does. A damaged state file also reads as interrupted
+ * (round-2 T6). The queue writes a terminal state before it releases a
+ * revision, so a second read tells "this process just finished it" apart
+ * from "nobody is working on it".
+ */
+export async function describeExtractionState(ctx: RunnerContext, jobId: string, revision: number): Promise<ShownExtractionState | undefined> {
+  const store = new JobsStore(ctx.workspace);
+  const first = await store.getExtractionState(jobId, revision);
+  const firstView = view(ctx, jobId, revision, first);
+  if (firstView !== STALE) return firstView;
+  const secondView = view(ctx, jobId, revision, await store.getExtractionState(jobId, revision));
+  if (secondView !== STALE) return secondView;
+  return { status: "failed", reason: "interrupted", ...(first !== undefined && first !== "unreadable" ? { updatedAt: first.updatedAt } : {}) };
+}
+
+/**
+ * Whether an extraction turn can start right now. Checked when a revision is
+ * queued, so a `not_run` state and its reason are visible the moment the
+ * capture responds, and again just before its turn starts (round-2 T3),
+ * since an earlier turn in the queue may have paused the budget meanwhile.
  */
 async function extractionPreflight(ctx: RunnerContext): Promise<ExtractionNotRunReason | undefined> {
   if (!ctx.eve) return "runner_not_running";
@@ -181,71 +214,76 @@ async function extractionPreflight(ctx: RunnerContext): Promise<ExtractionNotRun
 }
 
 /**
- * The extraction state to actually show for `jobId`/`revision`: the raw
- * on-disk state and reason, with a persisted `running` reinterpreted as
- * `failed`/`interrupted` whenever this process is not the one running it
- * (see `ACTIVE_EXTRACTIONS`'s own comment). `undefined` when no extraction
- * was ever recorded for this revision (seeded, or captured, before any
- * extraction attempt).
+ * Runs one queued extraction turn for `jobId`/`revision` and records the
+ * outcome. Always `EXTRACTION_CHAINS`'s queued work, so one turn at a time
+ * per workspace. It marks itself `running` only when the turn actually
+ * starts, so a revision waiting behind another one's turn reads `waiting`
+ * for exactly as long as that is true.
  */
-export async function describeExtractionState(ctx: RunnerContext, jobId: string, revision: number): Promise<ExtractionState | undefined> {
+async function runQueuedExtraction(ctx: RunnerContext, jobId: string, revision: number): Promise<void> {
+  const key = flightKey(ctx, jobId, revision);
   const store = new JobsStore(ctx.workspace);
-  const state = await store.getExtractionState(jobId, revision);
-  if (state?.status === "running" && !ACTIVE_EXTRACTIONS.has(activeKey(jobId, revision))) {
-    return { status: "failed", reason: "interrupted", updatedAt: state.updatedAt };
-  }
-  return state;
-}
-
-/**
- * Runs one extraction turn for `jobId`/`revision` and records the outcome.
- * Always called as `EXTRACTION_CHAINS`'s queued work (one turn at a time per
- * workspace): marks itself `running` — and this process's own
- * `ACTIVE_EXTRACTIONS` — the moment it actually starts, not when it is
- * merely queued, so a revision waiting behind another one's turn still
- * reads `waiting` for exactly as long as that remains true.
- */
-async function runQueuedExtraction(ctx: RunnerContext, jobId: string, revision: number, text: string): Promise<void> {
-  const store = new JobsStore(ctx.workspace);
-  const key = activeKey(jobId, revision);
-  ACTIVE_EXTRACTIONS.add(key);
+  const now = () => ctx.clock.now().toISOString();
   try {
-    await store.setExtractionState(jobId, revision, { status: "running", updatedAt: ctx.clock.now().toISOString() });
-    const outcome = await runExtraction(ctx, jobId, revision, text);
-    const updatedAt = ctx.clock.now().toISOString();
-    if (outcome.status === "extracted") await store.setExtractionState(jobId, revision, { status: "done", updatedAt });
-    else await store.setExtractionState(jobId, revision, { status: "failed", reason: outcome.reason, updatedAt });
+    const notRunReason = await extractionPreflight(ctx); // round-2 T3: again, just before the turn
+    if (notRunReason) {
+      await store.setExtractionState(jobId, revision, { status: "not_run", reason: notRunReason, updatedAt: now() });
+      return;
+    }
+    const read = await store.readSnapshot(jobId, revision);
+    if (read.kind !== "ok") {
+      await store.setExtractionState(jobId, revision, { status: "failed", reason: "unreadable", updatedAt: now() });
+      return;
+    }
+    IN_FLIGHT.set(key, "running");
+    await store.setExtractionState(jobId, revision, { status: "running", owner: PROCESS_OWNER, updatedAt: now() });
+    const outcome = await runExtraction(ctx, jobId, revision, read.snapshot.text);
+    if (outcome.status === "not_extracted") {
+      await store.setExtractionState(jobId, revision, { status: "failed", reason: outcome.reason, updatedAt: now() });
+      return;
+    }
+    // Round-2 T1: the one place extracted fields are written, after an ok turn, for the revision this turn extracted.
+    const saved = await store.recordStructured(jobId, revision, outcome.structured);
+    await store.setExtractionState(jobId, revision, saved.ok ? { status: "done", updatedAt: now() } : { status: "failed", reason: "unreadable", updatedAt: now() });
   } catch {
-    // runTurn is documented to never reject (server/run-harness.ts); this is a last-resort net so an unexpected
-    // throw here still leaves a terminal, honest state instead of "running" forever (which would otherwise only
-    // ever resolve to "interrupted", and only after this process itself restarts).
-    await store.setExtractionState(jobId, revision, { status: "failed", reason: "turn_failed", updatedAt: ctx.clock.now().toISOString() }).catch(() => undefined);
+    // runTurn never rejects (server/run-harness.ts); this net keeps an unexpected throw (a disk error, say) from leaving
+    // "running" behind. If even this write fails, the state reads as interrupted once the key below is released.
+    await store.setExtractionState(jobId, revision, { status: "failed", reason: "turn_failed", updatedAt: now() }).catch(() => undefined);
   } finally {
-    ACTIVE_EXTRACTIONS.delete(key);
+    IN_FLIGHT.delete(key);
   }
 }
 
 /**
- * Queues an extraction turn and returns the state to report right away.
- * Preflight runs first, synchronously with respect to the caller (before
- * this function resolves) — a `not_run` state is on disk, and returned,
- * before this ever touches `EXTRACTION_CHAINS`. Otherwise records `waiting`
- * and fires the queued turn *without waiting for it*: the caller (a route or
- * event handler) responds as soon as this resolves, well before the turn
- * itself finishes (round-1 review L5's central requirement).
+ * Queues an extraction turn for `jobId`/`revision` and returns the state to
+ * report right away, without waiting for the turn (round-1 L5). A revision
+ * this process already has waiting or running is reported as it stands and
+ * never queued again (round-2 T9). When a turn can't start at all, `not_run`
+ * and its reason are on disk before this resolves.
  */
-async function queueExtraction(ctx: RunnerContext, jobId: string, revision: number, text: string): Promise<ExtractionState> {
+async function queueExtraction(ctx: RunnerContext, jobId: string, revision: number): Promise<ShownExtractionState> {
+  const key = flightKey(ctx, jobId, revision);
+  const inFlight = IN_FLIGHT.get(key);
+  if (inFlight) return { status: inFlight };
+  IN_FLIGHT.set(key, "waiting"); // synchronously, before the first await: a concurrent retry sees it
   const store = new JobsStore(ctx.workspace);
-  const notRunReason = await extractionPreflight(ctx);
-  if (notRunReason) {
-    const state: ExtractionState = { status: "not_run", reason: notRunReason, updatedAt: ctx.clock.now().toISOString() };
+  let state: ExtractionState;
+  try {
+    const notRunReason = await extractionPreflight(ctx);
+    state = notRunReason
+      ? { status: "not_run", reason: notRunReason, updatedAt: ctx.clock.now().toISOString() }
+      : { status: "waiting", owner: PROCESS_OWNER, updatedAt: ctx.clock.now().toISOString() };
     await store.setExtractionState(jobId, revision, state);
-    return state;
+  } catch (error) {
+    IN_FLIGHT.delete(key);
+    throw error;
   }
-  const state: ExtractionState = { status: "waiting", updatedAt: ctx.clock.now().toISOString() };
-  await store.setExtractionState(jobId, revision, state);
-  void serialise(EXTRACTION_CHAINS, ctx.workspace.root, () => runQueuedExtraction(ctx, jobId, revision, text));
-  return state;
+  if (state.status === "not_run") {
+    IN_FLIGHT.delete(key);
+    return shown(state);
+  }
+  void serialise(EXTRACTION_CHAINS, ctx.workspace.root, () => runQueuedExtraction(ctx, jobId, revision));
+  return shown(state);
 }
 
 /**
@@ -253,10 +291,8 @@ async function queueExtraction(ctx: RunnerContext, jobId: string, revision: numb
  * has settled. A queued turn runs on a real promise chain
  * (`EXTRACTION_CHAINS`), never a timer, so a test that wants to assert on the
  * resulting snapshot or extraction state awaits this right after the
- * capture/retry call that queued it — exactly as a person re-opening the
- * Jobs page a moment later would see the finished result. A no-op (resolves
- * immediately) when nothing was ever queued for this workspace, or the last
- * queued item already finished and cleaned itself up.
+ * capture/retry call that queued it, exactly as a person re-opening the
+ * Jobs page a moment later would see the finished result.
  */
 export async function waitForExtractionQueue(workspaceRoot: string): Promise<void> {
   await (EXTRACTION_CHAINS.get(workspaceRoot) ?? Promise.resolve());
@@ -266,6 +302,7 @@ export async function waitForExtractionQueue(workspaceRoot: string): Promise<voi
 
 export interface CaptureAndExtractInput {
   readonly url: string;
+  /** Already normalized with `normalizePostingText`, and not empty: each route does that once (round-2 T5). */
   readonly text: string;
   readonly extractorVersion: string;
   readonly capturedAt: string;
@@ -274,42 +311,21 @@ export interface CaptureAndExtractInput {
 export interface CaptureAndExtractResult {
   readonly capture: CaptureJobResult;
   /**
-   * Present only when the capture actually changed the content — an
-   * unchanged capture never queues extraction. The state *at response time*:
-   * `not_run` (a reason already known, synchronously) or `waiting` (queued).
-   * Never `done`/`failed`/`running` here — those only ever apply once the
-   * queue has actually started or finished the turn, which happens after
-   * this has already resolved.
+   * Present only when the capture changed the content: an unchanged capture
+   * never queues extraction. The state at response time: `not_run` (a reason
+   * already known) or `waiting` (queued).
    */
-  readonly extraction?: ExtractionState;
-}
-
-/**
- * The one text-normalization rule every capture path applies before hashing
- * or storing (round-1 review L7): previously only the URL-fetch route
- * trimmed its text, so the identical posting produced a different content
- * hash depending on which path captured it (the paste and extension-event
- * paths kept a trailing newline the fetch path's `.trim()` dropped),
- * defeating F6's "three paths produce identical records" acceptance. Trim
- * only — no other rewriting — so the stored text stays exactly what the
- * person saw, less only the leading/trailing whitespace no path assigns
- * meaning to.
- */
-function normalizeCapturedText(text: string): string {
-  return text.trim();
+  readonly extraction?: ShownExtractionState;
 }
 
 /**
  * The one URL-normalization rule every capture path applies before storing
- * (round-1 review L10): drops userinfo (`user:pass@`) and the fragment — a
- * job posting's identity and content never depend on either, and userinfo
- * especially should never be written to disk. No other rewriting: scheme,
- * host, port, path and query pass through untouched. Applied to the URL
- * every path was already going to store — the extension event's and paste's
- * own `url`, and, for the fetch path, `fetched.finalUrl` (the address after
- * following any redirect, which the fetch path's own pre-flight validation
- * below additionally re-bounds — nothing else validates *that* URL's length
- * at all before this).
+ * (round-1 L10): drops userinfo (`user:pass@`) and the fragment; a job
+ * posting's identity and content never depend on either, and userinfo
+ * especially should never be written to disk. The WHATWG serializer then
+ * writes the rest in its canonical form (lower-case host, default port
+ * dropped, path percent-encoded), which round-2 T10 accepts: it is the same
+ * on every path, and it helps two captures of one page dedupe.
  */
 function stripUrlForStorage(url: string): string {
   const parsed = new URL(url);
@@ -319,14 +335,22 @@ function stripUrlForStorage(url: string): string {
   return parsed.toString();
 }
 
-/** The one path every capture (extension event, paste, URL fetch) goes through, so the three produce identical snapshot records for the same text (F6 acceptance). Responds once the snapshot is saved; extraction (when the content changed) is queued, not awaited. */
+/**
+ * The one path every capture (extension event, paste, URL fetch) goes
+ * through, so the three produce identical snapshot records for the same
+ * text (F6 acceptance). Responds once the snapshot is saved; extraction
+ * (when the content changed) is queued, not awaited. The text must already
+ * be normalized: normalizing here as well would let a route skip the shared
+ * rule unnoticed, so a text that isn't is a programming error.
+ */
 export async function captureAndExtract(ctx: RunnerContext, input: CaptureAndExtractInput): Promise<CaptureAndExtractResult> {
+  if (input.text.length === 0 || normalizePostingText(input.text) !== input.text) {
+    throw new Error("captureAndExtract takes posting text already normalized by normalizePostingText, and never empty text.");
+  }
   const store = new JobsStore(ctx.workspace);
-  const text = normalizeCapturedText(input.text);
-  const url = stripUrlForStorage(input.url);
-  const capture = await store.captureJob({ ...input, url, text });
+  const capture = await store.captureJob({ ...input, url: stripUrlForStorage(input.url) });
   if (!capture.contentChanged) return { capture };
-  const extraction = await queueExtraction(ctx, capture.jobId, capture.revision, text);
+  const extraction = await queueExtraction(ctx, capture.jobId, capture.revision);
   return { capture, extraction };
 }
 
@@ -357,14 +381,26 @@ function fetchStatusFor(reason: SafeFetchRejectionReason): number {
   }
 }
 
+/** One list row (round-2 T6, T11): a job whose latest revision can't be read still lists, by its url when any readable revision records it, with its damaged files named; `extraction` is the latest revision's state, for the page's refresh. */
+async function listEntry(ctx: RunnerContext, summary: JobSummary) {
+  const extraction = await describeExtractionState(ctx, summary.jobId, summary.latestRevisionNumber);
+  return {
+    jobId: summary.jobId,
+    revisionCount: summary.revisionCount,
+    latestRevision: summary.latestRevisionNumber,
+    ...(summary.latest ? { latest: summary.latest } : {}),
+    ...(summary.url !== undefined ? { url: summary.url } : {}),
+    ...(summary.newestReadable ? { savedAt: summary.newestReadable.capturedAt } : {}),
+    unreadable: summary.unreadable,
+    extraction: extraction ?? null,
+  };
+}
+
 /**
- * A factory, not a `context.ts` field (round-1 review L7): production wiring
- * (the default export below) always gets the real `safeFetch`; a test that
- * wants to drive the URL-fetch path without a real network call builds its
- * own module instance with a fake in its place — e.g. the "three paths
- * produce identical records" test in `test/captures.test.ts`, which cares
- * about this route's own normalization and storage, not about `safeFetch`'s
- * transport (already covered end to end by `test/safe-fetch.test.ts`).
+ * A factory, not a `context.ts` field (round-1 L7): production wiring (the
+ * default export below) always gets the real `safeFetch`; a test that wants
+ * to drive the URL-fetch path without a real network call builds its own
+ * module instance with a fake in its place.
  */
 export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch) {
   return defineRouteModule({
@@ -375,12 +411,10 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
       // again); the same URL with the same content hash creates no new
       // revision (JobsStore.captureJob).
       job_capture: async (event, ctx) => {
-        const result = await captureAndExtract(ctx, {
-          url: event.url,
-          text: event.text,
-          extractorVersion: event.extractorVersion,
-          capturedAt: event.occurredAt,
-        });
+        const text = normalizePostingText(event.text);
+        // Round-2 T5: a typed refusal (a "rejected" journal record, and a 4xx the extension never retries), never handler_failed.
+        if (text.length === 0) throw new EventRejectedError(422, "empty_text", "The captured page had no text once whitespace was removed.");
+        const result = await captureAndExtract(ctx, { url: event.url, text, extractorVersion: event.extractorVersion, capturedAt: event.occurredAt });
         return { jobId: result.capture.jobId, revision: result.capture.revision, contentChanged: result.capture.contentChanged, extraction: result.extraction };
       },
     },
@@ -388,20 +422,23 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
     api(router, ctx) {
       router.get("/", async (c) => {
         const summaries = await new JobsStore(ctx.workspace).listJobs();
-        return c.json({ jobs: summaries.map((summary) => ({ jobId: summary.jobId, revisionCount: summary.revisionCount, latest: summary.latestRevision })) });
+        return c.json({ jobs: await Promise.all(summaries.map((summary) => listEntry(ctx, summary))) });
       });
 
       router.get("/:jobId", async (c) => {
         const jobId = uuidSchema.safeParse(c.req.param("jobId"));
         if (!jobId.success) return errorResponse(404, "not_found", "No such job.");
-        const store = new JobsStore(ctx.workspace);
-        const revisions = await store.getJobRevisions(jobId.data);
-        if (!revisions) return errorResponse(404, "not_found", "No such job.");
-        // Parallel to `revisions`, same order and length; a JSON `undefined` entry serializes to `null` ("no
-        // extraction ever recorded for this revision"), which is exactly the distinction `describeExtractionState`
-        // draws (`store/jobs.ts`'s own doc comment).
-        const extraction = await Promise.all(revisions.map((revision) => describeExtractionState(ctx, jobId.data, revision.revision)));
-        return c.json({ jobId: jobId.data, revisions, extraction });
+        const detail = await new JobsStore(ctx.workspace).readJob(jobId.data);
+        if (!detail) return errorResponse(404, "not_found", "No such job.");
+        // Parallel to `revisions` (the readable ones), same order and length; null means no extraction was ever recorded.
+        const extraction = await Promise.all(detail.revisions.map((revision) => describeExtractionState(ctx, jobId.data, revision.revision)));
+        return c.json({
+          jobId: jobId.data,
+          latestRevision: detail.revisionNumbers.at(-1),
+          revisions: detail.revisions,
+          extraction: extraction.map((state) => state ?? null),
+          unreadable: detail.unreadable,
+        });
       });
 
       router.post("/paste", async (c) => {
@@ -409,12 +446,14 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
         if (!body.ok) return body.response;
         const parsed = pasteBodySchema.safeParse(body.value);
         if (!parsed.success) return validationErrorResponse(parsed.error);
-        const result = await captureAndExtract(ctx, {
-          url: parsed.data.url,
-          text: parsed.data.text,
-          extractorVersion: PASTE_EXTRACTOR_VERSION,
-          capturedAt: ctx.clock.now().toISOString(),
-        });
+        if (!pasteUrlSchema.safeParse(parsed.data.url).success) {
+          return errorResponse(400, "invalid_url", "Enter the posting's address, starting with https:// or http://.");
+        }
+        // The contract's measure (utf8BoundedTextSchema), on the text as sent, exactly as the Jobs page measures it (round-2 T13).
+        if (parsed.data.text.length > 0 && !captureTextSchema.safeParse(parsed.data.text).success) return errorResponse(413, "text_too_large", TEXT_TOO_LARGE_MESSAGE);
+        const text = normalizePostingText(parsed.data.text); // round-2 T5: the shared rule, once
+        if (text.length === 0) return errorResponse(400, "empty_text", "The posting text is empty.");
+        const result = await captureAndExtract(ctx, { url: parsed.data.url, text, extractorVersion: PASTE_EXTRACTOR_VERSION, capturedAt: ctx.clock.now().toISOString() });
         return c.json(captureResponseBody(result));
       });
 
@@ -435,43 +474,37 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
         }
         const fetched = await fetchUrl(parsedUrl.toString());
         if (!fetched.ok) return errorResponse(fetchStatusFor(fetched.reason), `fetch_${fetched.reason}`, fetched.message);
-        const text = extractReadableText(fetched.text, fetched.contentType).trim();
+        const text = normalizePostingText(extractReadableText(fetched.text, fetched.contentType)); // round-2 T5: the shared rule, once
         if (text.length === 0) return errorResponse(422, "no_text_extracted", "Couldn't find readable text on that page. Try pasting the posting instead.");
-        if (!utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES).safeParse(text).success) {
-          return errorResponse(413, "text_too_large", "This posting is over 200 KB. Paste a shorter excerpt instead.");
-        }
-        // L10: unlike the paste and extension-event paths (whose url already passed boundedHttpUrlSchema in their
-        // own body schema before this route ever ran), nothing bounds the *final* URL after a redirect — strip
-        // userinfo/fragment first (a long fragment or embedded credentials should not by itself refuse an
-        // otherwise-fine address), then re-check it against the same bounded contract schema the other paths get.
+        if (!captureTextSchema.safeParse(text).success) return errorResponse(413, "text_too_large", TEXT_TOO_LARGE_MESSAGE);
+        // L10: unlike the paste and extension-event paths (whose url already passed boundedHttpUrlSchema before this
+        // route ever ran), nothing bounds the *final* URL after a redirect: strip userinfo/fragment first, then
+        // re-check it against the same bounded contract schema the other paths get.
         const finalUrl = stripUrlForStorage(fetched.finalUrl);
         if (!boundedHttpUrlSchema(MAX_JOB_CAPTURE_URL_LENGTH).safeParse(finalUrl).success) {
           return errorResponse(413, "url_too_large", "That page's final address is too long to save. Paste the posting instead.");
         }
-        const result = await captureAndExtract(ctx, {
-          url: finalUrl,
-          text,
-          extractorVersion: URL_FETCH_EXTRACTOR_VERSION,
-          capturedAt: ctx.clock.now().toISOString(),
-        });
+        const result = await captureAndExtract(ctx, { url: finalUrl, text, extractorVersion: URL_FETCH_EXTRACTOR_VERSION, capturedAt: ctx.clock.now().toISOString() });
         return c.json(captureResponseBody(result));
       });
 
       // A revision saved before eve was running (or whose turn didn't finish)
       // has no structured fields yet; this lets the Jobs page try again. Like
       // every other path, this responds once the retry is queued, not once it
-      // finishes — the current state is enough to know what a click just did.
+      // finishes. A revision already waiting or running here is reported as
+      // it stands, never queued twice (round-2 T9); an interrupted one is
+      // queued again (T2); a damaged one is refused plainly (T6).
       router.post("/:jobId/:revision/extract", async (c) => {
         const jobId = uuidSchema.safeParse(c.req.param("jobId"));
         const revision = revisionParamSchema.safeParse(c.req.param("revision"));
         if (!jobId.success || !revision.success) return errorResponse(404, "not_found", "No such job.");
-        const store = new JobsStore(ctx.workspace);
-        const snapshot = await store.getSnapshot(jobId.data, revision.data);
-        if (!snapshot) return errorResponse(404, "not_found", "No such job.");
-        const current = await describeExtractionState(ctx, jobId.data, revision.data);
-        // Already mid-flight: report it as-is rather than queuing a second, redundant turn behind it.
-        const extraction = current?.status === "waiting" || current?.status === "running" ? current : await queueExtraction(ctx, jobId.data, revision.data, snapshot.text);
-        return c.json({ ok: true, extraction, job: snapshot });
+        const read = await new JobsStore(ctx.workspace).readSnapshot(jobId.data, revision.data);
+        if (read.kind === "missing") return errorResponse(404, "not_found", "No such job.");
+        if (read.kind === "unreadable") {
+          return errorResponse(409, "snapshot_unreadable", `That revision's file can't be read: ${jobFilePath(jobId.data, `snapshot-${revision.data}.json`)}.`);
+        }
+        const extraction = await queueExtraction(ctx, jobId.data, revision.data);
+        return c.json({ ok: true, extraction, job: read.snapshot });
       });
     },
   });

@@ -103,7 +103,8 @@ describe("JobsStore.listJobs / getJobRevisions", () => {
     const jobs = await store.listJobs();
     expect(jobs.map((job) => job.jobId)).toEqual([a.jobId, b.jobId]); // Fernwood's revision 2 (24th) is newer than Harbor's only revision (23rd)
     expect(jobs.find((job) => job.jobId === a.jobId)?.revisionCount).toBe(2);
-    expect(jobs.find((job) => job.jobId === a.jobId)?.latestRevision.text).toBe("A2");
+    expect(jobs.find((job) => job.jobId === a.jobId)?.latest?.text).toBe("A2");
+    expect(jobs.find((job) => job.jobId === a.jobId)).toMatchObject({ latestRevisionNumber: 2, url: FERNWOOD_URL, unreadable: [] });
   });
 
   it("getJobRevisions is undefined for a job that does not exist", async () => {
@@ -170,6 +171,13 @@ describe("JobsStore extraction state (round-1 review decision L5: a state beside
     expect(await store.getExtractionState(jobId, revision)).toEqual({ status: "failed", reason: "timed_out", updatedAt: "2026-09-22T09:01:00.000Z" });
   });
 
+  it("keeps the owner of a waiting or running state (round-2 T2)", async () => {
+    const store = await newStore();
+    const { jobId, revision } = await store.captureJob({ url: FERNWOOD_URL, text: "Posting text.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await store.setExtractionState(jobId, revision, { status: "running", owner: "runner-process-a", updatedAt: "2026-09-22T09:00:01.000Z" });
+    expect(await store.getExtractionState(jobId, revision)).toEqual({ status: "running", owner: "runner-process-a", updatedAt: "2026-09-22T09:00:01.000Z" });
+  });
+
   it("each revision of the same job keeps its own extraction state", async () => {
     const store = await newStore();
     const first = await store.captureJob({ url: FERNWOOD_URL, text: "Text A", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
@@ -219,7 +227,7 @@ describe("JobsStore resilience (round-1 review L6)", () => {
     expect(await store.findJobIdByUrl(FERNWOOD_URL)).toBe(real.jobId);
   });
 
-  it("a damaged snapshot file never breaks the list or another job", async () => {
+  it("a job whose only snapshot is damaged still lists, last, with the file named; the other job is unaffected (round-2 T6)", async () => {
     const workspace = await newWorkspace();
     const store = new JobsStore(workspace);
     const healthy = await store.captureJob({ url: FERNWOOD_URL, text: "Staff Software Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
@@ -228,21 +236,69 @@ describe("JobsStore resilience (round-1 review L6)", () => {
     await writeFile(path.join(workspace.root, "jobs", damaged.jobId, "snapshot-1.json"), "{ not valid json");
 
     expect(await store.getSnapshot(damaged.jobId, 1)).toBeUndefined(); // damaged reads as "not there", not a throw
+    expect(await store.readSnapshot(damaged.jobId, 1)).toEqual({ kind: "unreadable" });
 
     const summaries = await store.listJobs();
-    expect(summaries).toHaveLength(1); // the damaged job is skipped entirely; the healthy one is listed normally
-    expect(summaries[0]!.jobId).toBe(healthy.jobId);
+    expect(summaries.map((summary) => summary.jobId)).toEqual([healthy.jobId, damaged.jobId]); // listed, and last: nothing of it can be read
+    expect(summaries[1]).toEqual({ jobId: damaged.jobId, revisionCount: 1, latestRevisionNumber: 1, unreadable: [{ revision: 1, path: `jobs/${damaged.jobId}/snapshot-1.json` }] });
 
-    expect(await store.getJobRevisions(damaged.jobId)).toEqual([]); // the job "exists" (its directory does) but has no readable revisions
+    expect(await store.readJob(damaged.jobId)).toEqual({ jobId: damaged.jobId, revisionNumbers: [1], revisions: [], unreadable: [{ revision: 1, path: `jobs/${damaged.jobId}/snapshot-1.json` }] });
+    expect(await store.getJobRevisions(damaged.jobId)).toEqual([]); // the job exists (its directory does) but has no readable revisions
     expect(await store.getJobRevisions(healthy.jobId)).toHaveLength(1); // unaffected by the other job's damaged file
   });
 
-  it("a snapshot file that is valid JSON but fails the schema also reads as \"not there\"", async () => {
+  it("a job whose latest revision is damaged lists by the url its readable revision records, and names the damaged file (round-2 T6)", async () => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const first = await store.captureJob({ url: FERNWOOD_URL, text: "Original posting text.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await store.captureJob({ url: FERNWOOD_URL, text: "Updated posting text.", extractorVersion: "t", capturedAt: "2026-09-23T09:00:00.000Z" });
+    await writeFile(path.join(workspace.root, "jobs", first.jobId, "snapshot-2.json"), "{ not valid json");
+
+    const [summary] = await store.listJobs();
+    expect(summary).toMatchObject({ jobId: first.jobId, revisionCount: 2, latestRevisionNumber: 2, url: FERNWOOD_URL, unreadable: [{ revision: 2, path: `jobs/${first.jobId}/snapshot-2.json` }] });
+    expect(summary!.latest).toBeUndefined(); // the latest revision is the damaged one
+    expect(summary!.newestReadable?.revision).toBe(1);
+
+    const detail = await store.readJob(first.jobId);
+    expect(detail?.revisionNumbers).toEqual([1, 2]);
+    expect(detail?.revisions.map((snapshot) => snapshot.revision)).toEqual([1]);
+    expect(detail?.unreadable).toEqual([{ revision: 2, path: `jobs/${first.jobId}/snapshot-2.json` }]);
+  });
+
+  it("a recapture of that url lands in the same job, as the next revision (round-2 T6)", async () => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const first = await store.captureJob({ url: FERNWOOD_URL, text: "Original posting text.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await store.captureJob({ url: FERNWOOD_URL, text: "Updated posting text.", extractorVersion: "t", capturedAt: "2026-09-23T09:00:00.000Z" });
+    await writeFile(path.join(workspace.root, "jobs", first.jobId, "snapshot-2.json"), "{ not valid json");
+
+    expect(await store.findJobIdByUrl(FERNWOOD_URL)).toBe(first.jobId);
+    const recapture = await store.captureJob({ url: FERNWOOD_URL, text: "Updated posting text.", extractorVersion: "t", capturedAt: "2026-09-24T09:00:00.000Z" });
+    expect(recapture).toMatchObject({ jobId: first.jobId, revision: 3, isNewJob: false, contentChanged: true }); // a damaged latest can't match any hash
+    expect((await store.listJobs()).map((summary) => summary.jobId)).toEqual([first.jobId]);
+  });
+
+  it("a snapshot file that is valid JSON but fails the schema also reads as unreadable", async () => {
     const workspace = await newWorkspace();
     const store = new JobsStore(workspace);
     const job = await store.captureJob({ url: FERNWOOD_URL, text: "Staff Software Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
     await writeFile(path.join(workspace.root, "jobs", job.jobId, "snapshot-1.json"), JSON.stringify({ not: "a job snapshot" }));
     expect(await store.getSnapshot(job.jobId, 1)).toBeUndefined();
+    expect(await store.readSnapshot(job.jobId, 1)).toEqual({ kind: "unreadable" });
+    expect(await store.readSnapshot(job.jobId, 2)).toEqual({ kind: "missing" });
+  });
+
+  it.each([
+    ["not JSON", "{ not valid json"],
+    ["JSON of the wrong shape", JSON.stringify({ status: "finished" })],
+  ])("an extraction state file that is %s reads as \"unreadable\", never a throw, and a later write replaces it (round-2 T6)", async (_label, content) => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const job = await store.captureJob({ url: FERNWOOD_URL, text: "Staff Software Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await writeFile(path.join(workspace.root, "jobs", job.jobId, "extraction-1.json"), content);
+    expect(await store.getExtractionState(job.jobId, 1)).toBe("unreadable");
+    await store.setExtractionState(job.jobId, 1, { status: "done", updatedAt: "2026-09-22T09:00:05.000Z" });
+    expect(await store.getExtractionState(job.jobId, 1)).toEqual({ status: "done", updatedAt: "2026-09-22T09:00:05.000Z" });
   });
 
   it("only uuid-named directories under jobs/ are ever treated as jobs, even if one holds a plausible-looking snapshot file", async () => {

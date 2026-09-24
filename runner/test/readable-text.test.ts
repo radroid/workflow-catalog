@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractReadableText } from "../lib/readable-text.ts";
+import { extractReadableText, normalizePostingText } from "../lib/readable-text.ts";
 
 /**
  * `readable-text.ts`'s own tests (P04 packet: "give each a small documented
@@ -115,5 +115,35 @@ describe("extractReadableText: linear time on hostile input (round-1 review issu
     const elapsedMs = Date.now() - started;
     expect(elapsedMs).toBeLessThan(1000);
     expect(text).toBe("Staff Engineer\nNorthwind Labs is hiring.");
+  });
+});
+
+describe("normalizePostingText: the one text rule every capture path applies (round-2 review T5)", () => {
+  it("folds CRLF and lone CR, collapses spaces and tabs, trims each line, keeps one blank line at most, and trims the whole", () => {
+    const raw = "  Staff Platform Engineer\t\tat  Northwind Labs.   \r\n\r\n\r\n\r\nRequirements:\r\n  - Node.js  \r  - TypeScript\f\v \n\n";
+    expect(normalizePostingText(raw)).toBe("Staff Platform Engineer at Northwind Labs.\n\nRequirements:\n- Node.js\n- TypeScript");
+  });
+
+  it("is idempotent", () => {
+    const raw = " a \r\n\r\n\r\n b\t c \n\n\n\n d   ";
+    const once = normalizePostingText(raw);
+    expect(normalizePostingText(once)).toBe(once);
+  });
+
+  it("gives the empty string for whitespace-only text, which every path then refuses", () => {
+    expect(normalizePostingText("  \r\n\t \n\f\v  \n")).toBe("");
+  });
+
+  it("changes nothing else: punctuation, case, a non-breaking space inside a line and other Unicode pass through", () => {
+    expect(normalizePostingText("Café — 8+ yrs; ÜBER uns (Remote)")).toBe("Café — 8+ yrs; ÜBER uns (Remote)");
+  });
+
+  it("extractReadableText's output, for either content type, is already a fixed point of it", () => {
+    const plain = extractReadableText("  One \r\n\r\n\r\nTwo  ", "text/plain");
+    const html = extractReadableText("<p> One\r\n </p><div>\t Two </div>", "text/html");
+    expect(normalizePostingText(plain)).toBe(plain);
+    expect(normalizePostingText(html)).toBe(html);
+    expect(plain).toBe("One\n\nTwo");
+    expect(html).toBe("One\nTwo");
   });
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ExtractJobOutput } from "../agent/lib/extract-job-schema.ts";
 import productionExtractJob from "../agent/tools/extract_job.ts";
 import evalExtractJob from "../eval-agent/agent/tools/extract_job.ts";
 import { JobsStore } from "../store/jobs.ts";
@@ -10,11 +11,12 @@ import { newWorkspace } from "./helpers.ts";
  * and `"use step"` directives are plain strings, so `execute` runs the real
  * wrappers against a real workspace (`RUNNER_WORKSPACE`, as in production).
  * The eval exercises the eval agent's root through a real turn; this file is
- * what makes a change to either production wrapper itself (not the shared
- * logic, already covered by `extract-job-logic.test.ts`) fail.
+ * what makes a change to either wrapper itself (not the shared logic,
+ * already covered by `extract-job-logic.test.ts`) fail. Round-2 T1: neither
+ * wrapper writes the snapshot.
  */
 
-type ExtractJobTool = { execute(input: unknown, ctx: unknown): Promise<{ jobId: string; revision: number; persisted: boolean; message: string }> };
+type ExtractJobTool = { execute(input: unknown, ctx: unknown): Promise<ExtractJobOutput> };
 
 const ROOTS = [
   { root: "agent (production)", tool: productionExtractJob as unknown as ExtractJobTool },
@@ -37,19 +39,20 @@ afterEach(() => {
 
 for (const { root, tool } of ROOTS) {
   describe(`${root}: extract_job`, () => {
-    it("persists structured fields onto the real snapshot named by jobId/revision", async () => {
+    it("accepts and returns the fields for the revision being extracted, and never writes the snapshot", async () => {
       const { jobId, revision } = await store.captureJob({ url: "https://jobs.example/northwind-labs/staff-platform-engineer", text: "Staff Platform Engineer at Northwind Labs.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
-      // Round-1 review L5: persistExtractedJob now refuses unless this exact revision is marked "running" — the
-      // queue in captures.ts sets this before running the turn that would call this tool for real.
-      await store.setExtractionState(jobId, revision, { status: "running", updatedAt: "2026-09-22T09:00:00.500Z" });
-      const output = await tool.execute({ jobId, revision, structured: { title: "Staff Platform Engineer", company: "Northwind Labs" } }, {});
-      expect(output).toMatchObject({ jobId, revision, persisted: true });
-      expect((await store.getSnapshot(jobId, revision))?.structured).toEqual({ title: "Staff Platform Engineer", company: "Northwind Labs" });
+      // The queue in captures.ts marks the revision running before the turn that calls this tool for real.
+      await store.setExtractionState(jobId, revision, { status: "running", owner: "test-process", updatedAt: "2026-09-22T09:00:00.500Z" });
+      const structured = { title: "Staff Platform Engineer", company: "Northwind Labs" };
+      const output = await tool.execute({ jobId, revision, structured }, {});
+      expect(output).toMatchObject({ jobId, revision, accepted: true, structured });
+      expect((await store.getSnapshot(jobId, revision))?.structured).toEqual({});
     });
 
-    it("reports persisted: false for a jobId that names no real snapshot", async () => {
+    it("refuses a jobId that names no real snapshot", async () => {
       const output = await tool.execute({ jobId: "00000000-0000-4000-8000-000000000000", revision: 1, structured: { title: "Ghost role" } }, {});
-      expect(output.persisted).toBe(false);
+      expect(output.accepted).toBe(false);
+      expect(output.structured).toBeUndefined();
     });
   });
 }

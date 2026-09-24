@@ -1,5 +1,5 @@
 import { defineWorkflowTool } from "eve/tools";
-import { openJobsStore, persistExtractedJob } from "../../../agent/lib/extract-job-logic.ts";
+import { checkExtractedJob, openJobsStore } from "../../../agent/lib/extract-job-logic.ts";
 import { extractJobInputSchema, extractJobOutputSchema, extractJobToolDescription, type ExtractJobInput, type ExtractJobOutput } from "../../../agent/lib/extract-job-schema.ts";
 
 // The eval agent's own thin wrapper around the shared extract_job logic.
@@ -10,10 +10,12 @@ import { extractJobInputSchema, extractJobOutputSchema, extractJobToolDescriptio
 // one-line step wrapper that calls the directive-free
 // runner/agent/lib/extract-job-logic.ts, exactly as
 // runner/agent/tools/extract_job.ts does. The logic is never copied here.
+// Round-2 T1: like the production tool, it checks and returns the fields and
+// never writes.
 
-async function persistJob(input: ExtractJobInput): Promise<ExtractJobOutput> {
+async function checkJob(input: ExtractJobInput): Promise<ExtractJobOutput> {
   "use step";
-  return persistExtractedJob(input, await openJobsStore());
+  return checkExtractedJob(input, await openJobsStore());
 }
 
 export default defineWorkflowTool({
@@ -22,6 +24,6 @@ export default defineWorkflowTool({
   outputSchema: extractJobOutputSchema,
   async execute(input) {
     "use workflow";
-    return persistJob(input);
+    return checkJob(input);
   },
 });

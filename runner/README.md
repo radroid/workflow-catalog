@@ -268,17 +268,39 @@ the extension's own capture action (the `job_capture` bridge event), pasting
 the posting's text and address, or fetching an `https://` link
 (`lib/safe-fetch.ts`, every SSRF check — a pasted or captured URL may be
 `http://` or `https://` as provenance only, since nothing on those two paths
-fetches it, but the fetch path itself refuses anything but `https://`). All
-three converge on one handler (`captureAndExtract` in
-`server/routes/captures.ts`), so the same text produces the same snapshot
-record regardless of source (F6). A job that already has this exact URL and
+fetches it, but the fetch path itself refuses anything but `https://`). Each
+path normalizes the posting text once, with the one shared rule
+(`normalizePostingText` in `lib/readable-text.ts`: CRLF folded, runs of
+spaces and tabs collapsed, each line trimmed, then the whole), and refuses
+text that is empty afterwards. Each stored address drops its userinfo and
+fragment and is written in the WHATWG URL serialization (lower-case host,
+default port dropped), the same on every path, which also helps two
+captures of one page dedupe. All three converge on one handler
+(`captureAndExtract` in `server/routes/captures.ts`), so the same posting
+produces the same snapshot text and content hash regardless of source (F6),
+whitespace differences included. A job that already has this exact URL and
 unchanged text (by content hash) gets no new revision; changed text creates
-the next revision and keeps every one before it, forever. A content-changing
-capture runs extraction inline through `runTurn` right afterward, never for
-an unchanged one: the posting's text is delivered to the model only as
-user-turn data inside a random per-call boundary, never a system prompt, and
-the model reports back only IDs and the fields it drafted (`extract_job`),
-never a URL or raw text. Opening a job lists every revision, newest first,
+the next revision and keeps every one before it, forever.
+
+A content-changing capture answers as soon as its snapshot is saved, and
+queues extraction, never for an unchanged capture. The queue runs one turn
+at a time per workspace, through `runTurn`, and never queues a revision
+that is already waiting or running. Just before each turn it checks again
+that a turn can start (eve running, a model set, the budget not paused), so
+a turn that hits a provider limit and pauses the budget stops the rest of
+the queue, each recorded as not run. The posting's text is delivered to the
+model only as user-turn data inside a random per-call boundary, never a
+system prompt, and the model reports back only IDs and the fields it
+drafted (`extract_job`, which checks and returns them but never writes).
+The route saves the fields only after the turn ended ok, and only for the
+revision it was extracting, so a failed Re-extract keeps the fields already
+saved, and a running one shows them until it finishes. Each revision's
+extraction state sits beside its snapshot, in
+`jobs/<jobId>/extraction-<rev>.json`; a waiting or running state left by an
+earlier runner process reads as interrupted, and Re-extract queues it
+again. A snapshot or state file that can't be read is never a server error
+or a silent gap: the job still lists, by the address any readable revision
+records, with the damaged file's path named. Opening a job lists every revision, newest first,
 each with a line-based diff against the one before it ("What changed from
 the previous revision", collapsed to a few lines of context around each
 change — no dependency, since a posting is plain text and this is a diff to
@@ -403,6 +425,8 @@ sources/ jobs/ applications/ sessions/ outbox/ inbox/
 jobs/<jobId>/snapshot-<rev>.json         one job posting's revision (P04): url, capturedAt, extractorVersion,
                                          contentHash, text, structured — revision 1 is never overwritten by a
                                          later one; the same URL with the same content hash gets no new revision
+jobs/<jobId>/extraction-<rev>.json       that revision's extraction state (P04): waiting, running, done, not run
+                                         or failed, with a reason code; waiting/running name the runner process
 runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
 runs/budget.json                        daily run limit, per-run item cap, and the pause (P08-A); survives restart
 .runner/devices/<deviceId>.json         paired devices (token hash, origin, expiry)
@@ -483,7 +507,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 | Packet | Adds |
 |---|---|
 | P03 | `server/routes/onboarding.ts`, `store/profile.ts`, `ui/onboarding.html`, `ui/profile.html`, `agent/tools/extract_claims.ts`, `agent/tools/ask_follow_up.ts`, onboarding skills |
-| P04 | `server/routes/captures.ts` (the `job_capture` handler, plus the paste/url-fetch/list/detail/re-extract routes), `store/jobs.ts`, `lib/safe-fetch.ts`, `lib/readable-text.ts`, `agent/tools/extract_job.ts` (IDs only: jobId, revision, structured fields — never a URL or raw text), `ui/jobs.html` |
+| P04 | `server/routes/captures.ts` (the `job_capture` handler, plus the paste/url-fetch/list/detail/re-extract routes), `store/jobs.ts`, `lib/safe-fetch.ts`, `lib/readable-text.ts`, `agent/tools/extract_job.ts` (IDs only: jobId, revision, structured fields — never a URL or raw text; it checks and returns the fields, and the route saves them after an ok turn), `ui/jobs.html` |
 | P05 | `agent/tools/prepare_application.ts`, `store/applications.ts`, `validate/`, `export/`, `ui/application.html`, preparation skills |
 | P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |

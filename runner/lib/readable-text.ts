@@ -68,17 +68,29 @@ function decodeEntities(text: string): string {
   });
 }
 
-/** Collapses runs of spaces/tabs and trims each line. Shared by both content types. */
-function normalizeLines(text: string): string {
+/**
+ * The one rule for posting text, on every capture path (round-2 review T5):
+ * the extension's `job_capture` event, the paste form and the URL fetch all
+ * store exactly what this returns, so the same posting gets the same text and
+ * the same content hash whichever way it arrived, and a re-capture that
+ * differs only in whitespace is not a new revision.
+ *
+ * In order: fold CRLF and lone CR to LF; collapse each run of spaces, tabs,
+ * form feeds and vertical tabs to one space; trim each line; keep at most one
+ * blank line between paragraphs; trim the whole. Nothing else is rewritten.
+ * Idempotent: `normalizePostingText(normalizePostingText(x)) ===
+ * normalizePostingText(x)`, so a path that normalizes text an earlier step
+ * already normalized changes nothing. An empty result means the text was
+ * whitespace only, which every path refuses.
+ */
+export function normalizePostingText(text: string): string {
   return text
+    .replace(/\r\n?/g, "\n")
     .split("\n")
     .map((line) => line.replace(/[ \t\f\v]+/g, " ").trim())
-    .join("\n");
-}
-
-/** For pasted/fetched plain text: a person's own paragraph breaks are kept, at most one blank line between them. */
-function normalizePlainText(text: string): string {
-  return normalizeLines(text).replace(/\n{3,}/g, "\n\n").trim();
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**
@@ -87,10 +99,11 @@ function normalizePlainText(text: string): string {
  * `</h1><p>`) each contribute a boundary newline, which would otherwise leave
  * a blank line between every pair of adjacent elements (fine for prose, but
  * noisy for a list). One line per block-ish unit reads just as well to a
- * model as paragraph-spaced text.
+ * model as paragraph-spaced text. The result is still a fixed point of
+ * `normalizePostingText`.
  */
 function normalizeHtmlText(text: string): string {
-  return normalizeLines(text).replace(/\n{2,}/g, "\n").trim();
+  return normalizePostingText(text).replace(/\n{2,}/g, "\n");
 }
 
 interface ScannedTag {
@@ -181,8 +194,8 @@ function htmlToText(html: string): string {
   return normalizeHtmlText(decodeEntities(out.join("")));
 }
 
-/** `contentType` is the response's own (already validated by the fetch path to be text/html or text/plain). */
+/** `contentType` is the response's own (already validated by the fetch path to be text/html or text/plain). The result is already normalized by `normalizePostingText`. */
 export function extractReadableText(body: string, contentType: string): string {
-  if (contentType === "text/plain") return normalizePlainText(body);
+  if (contentType === "text/plain") return normalizePostingText(body);
   return htmlToText(body);
 }

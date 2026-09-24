@@ -68,12 +68,23 @@ import { Workspace } from "../../store/workspace.ts";
  * `RUNNER_ARCH`, ...), so this avoids that whole prefix — could ever set
  * ambiently, so its mere presence really does mean "this module already ran
  * in this process."
+ *
+ * Round-2 T8: a later call also sets `RUNNER_WORKSPACE` to the workspace it
+ * opened, so the two variables can never disagree. Without that, a
+ * `RUNNER_WORKSPACE` set some other way (ambiently, or by anything between the
+ * two calls) would send the fixtures to one workspace and the tools to
+ * another. `test/shared-workspace-env.test.ts` sets both ambiently, to
+ * different workspaces, and checks they end up in step.
  */
-const EVAL_WORKSPACE_COORDINATION_VAR = "WORKFLOW_CATALOG_EVAL_WORKSPACE";
+export const EVAL_WORKSPACE_COORDINATION_VAR = "WORKFLOW_CATALOG_EVAL_WORKSPACE";
 
 export async function openOrCreateEvalWorkspace(): Promise<Workspace> {
   const existing = process.env[EVAL_WORKSPACE_COORDINATION_VAR];
-  if (existing) return Workspace.open(existing);
+  if (existing) {
+    const workspace = await Workspace.open(existing);
+    process.env.RUNNER_WORKSPACE = workspace.root;
+    return workspace;
+  }
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "wc-eval-workspace-"));
   process.once("exit", () => {
     try {
