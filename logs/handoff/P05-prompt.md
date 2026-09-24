@@ -81,8 +81,8 @@ Stop and ask the orchestrator before touching anything else, including:
   - A changed profile creates a new version that names the old one.
 - **Stage and processing (F8).** A failed or parked preparation never moves the application's stage. It sets `processing`, as `application.ts` describes. P06's board shows it later.
 - **Directives compile per app root** (eve item 14). Shared logic lives in directive-free modules, with a thin wrapper per root, as P03 and P04 do.
-- **Eval workspaces** (from P04's report). eve runs every eval file concurrently, in one process with one environment.
-  - Resolve `RUNNER_WORKSPACE` inside `test()`, and never assign it at the top level of an eval file.
+- **Eval workspaces** (P04 round 1; `logs/blocks.md`, "P04 peer review, round 1"). eve imports every eval file, then starts one dev-host Worker with a copy of `process.env`, and runs every eval concurrently against it. An assignment inside `test()` never reaches the tools.
+  - Import P04's shared eval-workspace module at the top of any eval file whose tools touch the workspace, and never assign `RUNNER_WORKSPACE` yourself.
   - Never assert in an eval on workspace state that another eval's tools can also write, such as the career profile. Put that assertion in a Vitest test with a private workspace.
 
 ## Deliverables and acceptance

@@ -1188,6 +1188,54 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
   - its README lines;
   - and, under the export-dependency rules, a devDependency to read DOCX and PDF text back in tests.
 - P04's report also flagged eval workspaces. eve runs every eval file concurrently, in one process with one environment. So the P05 and P03.2 prompts say:
-  - never assign `RUNNER_WORKSPACE` at the top level of an eval file;
+  - ~~never assign `RUNNER_WORKSPACE` at the top level of an eval file~~ This was wrong; see the amendment in "P04 peer review, round 1". One shared module owns the variable at import time.
   - never assert in an eval on shared workspace state, such as the career profile. That check goes in a Vitest test with a private workspace.
 - The prompts are in `logs/handoff/P05-prompt.md` and `logs/handoff/P03.2-prompt.md`. Both run once P04 merges.
+
+## 2026-09-23 — P04 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 006
+**Source:** peer-review (Opus reviewer) and UI critic (Opus), PR #14 at e8b74de
+**Severity:** high: the URL fetch can't work in production, IPv6 gets past the address checks, and hostile HTML can freeze the bridge.
+
+**Verdicts:**
+- Reviewer: REVISE — 9 issues.
+  1. The pinned `lookup` breaks every hostname fetch on Node 24.
+  2. IPv6 literals and IPv4-mapped forms slip past the address checks.
+  3. `readable-text` is quadratic.
+  4. `safeFetch` throws on body errors.
+  5. `job_capture` holds the event open for the model turn, while the extension times out at 5 s.
+  6. A stray file in `jobs/` breaks every Jobs path.
+  7. "Three paths produce identical records" is unproven, and a trailing newline breaks it.
+  8. Two security properties have no test.
+  9. The hostile fixture never goes through the capture path, and the eval's workspace handling is wrong.
+- UI critic: REVISE — 9 issues:
+  1. outcomes land off-screen;
+  2. busy is invisible;
+  3. jobs are named by hostname;
+  4. extraction messages give no reason;
+  5. a focused node is rebuilt;
+  6. paste refusals are vague;
+  7. the duplicate copy doesn't say nothing was duplicated;
+  8. horizontal scroll with a long address;
+  9. the diff relies on punctuation.
+  The screenshots are also 375 and 1265 px wide, not 390 and 1280.
+
+**What holds:**
+- The chain is green three times over, and the eval passed 100/100 gates each time.
+- CI e2e passed 37/37.
+- `run-harness.ts` is additive only.
+- Event dedupe and conflicts, the atomic store, concurrent revisions, every IPv4 form, redirects, the byte cap and the 128-bit boundary all hold.
+- Scope is clean.
+- axe is clean, contrast holds, there's one announcement per outcome, and the navigation holds.
+
+**Decision:**
+- Revision 1 goes to the same Sonnet implementer, with decisions L1–L14 in `logs/handoff/P04-round-1-review.md`.
+- The main design change, L5: a capture responds once its snapshot is saved, and extraction runs afterwards, one turn at a time. Each revision records an extraction state with a plain reason. Fields appear only after an ok turn.
+- **Amendment to the iter-006 eval rule.** eve's dev host is a Worker that copies `process.env` when it is created, after every eval file has been imported. Assignments inside `test()` never reach the tools.
+  - The rule is now: one shared module next to the evals owns `RUNNER_WORKSPACE` at import time. Every eval file whose tools touch the workspace imports it, and none assigns the variable itself.
+  - Never assert in an eval on shared workspace state.
+  - P04's revision adds the module, with a grant for the workspace lines of `onboarding-extraction.eval.ts`. The P05 and P03.2 prompts are updated.
+- **Carried to other packets:**
+  - P07-C: the e2e bridge loads no route modules, so it never reaches P04's handler.
+  - P08-B: extraction turns run outside `withRun`, so the daily run limit doesn't see them.
