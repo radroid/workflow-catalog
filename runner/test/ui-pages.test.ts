@@ -230,6 +230,51 @@ describe("J4: the focused control is never replaced", () => {
   });
 });
 
+describe("Q9 (revision 1, critic 1 and 4): the tag and the message are separated for assistive tech, on load and after every action", () => {
+  it("onboarding: the whole live region reads 'Last action: Nothing yet.' on load, and reads separately after an action", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+    // page.line() reads only .text; the whole node (tag + the visually-hidden ": " + text) is what a screen
+    // reader announces, and happy-dom's textContent concatenates it exactly that way regardless of CSS.
+    expect(page.byId("last-action").textContent).toBe("Last action: Nothing yet.");
+    const button = page.byId("source-status-resume-provided");
+    button.click();
+    await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the outcome");
+    expect(page.byId("last-action").textContent).toBe("Last action: Resume marked provided: add its text, then extract claims.");
+  });
+
+  it("profile: the whole live region reads 'Last action: Nothing yet.' on load", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("profile", bridge);
+    expect(page.byId("last-action").textContent).toBe("Last action: Nothing yet.");
+  });
+});
+
+describe("Q10 (revision 1, critic polish, \"outside this round\" note): a Confirm that opens a question keeps the server's edits note", () => {
+  it("a hand edit reconciled by the same write that opens a question still shows its own edits note first", async () => {
+    const bridge = await realBridge();
+    const store = new ProfileStore(bridge.ctx.workspace, bridge.ctx.clock);
+    await store.accountSource("resume", "provided");
+    const extracted = await store.extractClaims("resume", [{ text: "Cut report processing time by 30%.", kind: "metric", evidenceRef: "sources/resume/pasted.txt#L3", evidenceQuote: "Cut report processing time by 30%." }]);
+    const id = extracted.profile.claims[0]!.id;
+    const boundary = (await store.load()).profile.boundaries[0]!;
+    const page = await openPage("onboarding", bridge);
+    // The hand edit is made *after* the page's own initial load (which would otherwise reconcile, and
+    // write, it first) -- the Confirm click below must be the write that discovers and reconciles it.
+    const md = path.join(bridge.workspace.root, "career-profile.md");
+    const text = await readFile(md, "utf8");
+    expect(text).toContain(`- ${boundary.text}`);
+    await writeFile(md, text.replace(`- ${boundary.text}`, "- Never invent a metric, a credential or a responsibility."));
+
+    page.byId(`claim-confirm-${id}`).click();
+    await until(() => page.document.activeElement?.id === `claim-answer-${id}`, "focus on the answer box");
+    // Q10: the server's own message was "“Cut report...” needs your answer first: it's a metric claim.
+    // 1 edit saved." (the note after the consequence, this same revision) -- opening a question replaces
+    // only the reducer's own clause, keeping the trailing edits note.
+    expect(page.line()).toBe("An answer is needed. 1 edit saved.");
+  });
+});
+
 describe("J3 and J6.3: refusals and field errors", () => {
   it("while career-profile.md can't be read, a refused write is the one short line: no field error, no aria-invalid, focus and typed text stay", async () => {
     const bridge = await realBridge();

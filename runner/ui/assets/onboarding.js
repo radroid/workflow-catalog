@@ -81,6 +81,21 @@ function messageOf(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Q10 (revision 1, critic polish, "outside this round" note): store/profile.ts's `editsNote` puts a fixed-
+ * shape sentence ("1 edit saved.", "2 edits saved, 1 edit proposed.") *after* the server's own message
+ * whenever a write also reconciled a hand edit to career-profile.md (Q10's own reordering, this same
+ * revision). `decide()` below replaces a Confirm's own message with "An answer is needed." when it opens a
+ * question — losing that trailing note would silently drop real information every other outcome keeps.
+ * Kept here (not read off `editsNote` itself, out of Owns for this packet's revision) as a narrow, named
+ * match on that one fixed shape, moved to follow the replacement instead.
+ */
+const EDITS_NOTE = / \d+ edits? (?:saved|proposed)(?:, \d+ edits? (?:saved|proposed))?\.$/;
+function withEditsNote(message, replacement) {
+  const match = EDITS_NOTE.exec(message);
+  return match ? `${replacement}${match[0]}` : replacement;
+}
+
 /** Appends the children that exist: `Element.append(null)` would add the text "null". */
 function add(parent, ...children) {
   for (const child of children) if (child) parent.append(child);
@@ -115,17 +130,6 @@ function refLabel(ref) {
 const TAGS = { done: "Last action", refused: "Refused", working: "Working" };
 const COMMAND = /npm run runner/g;
 
-/**
- * P03.2 (round-4 UI critic, outside the round): at 640px and below, `.tag`
- * and `.text` sit on the same line with only a CSS margin between them --
- * invisible to assistive tech, which read "LAST ACTIONAn answer is needed."
- * with nothing separating the two. A colon in the tag's own text content
- * fixes that at every width, not just the one where it was visible.
- */
-function tagText(tone) {
-  return `${TAGS[tone]}:`;
-}
-
 /** The line's text, with a command a person types shown as code (J6.2). */
 function lineParts(message) {
   const parts = [];
@@ -155,7 +159,18 @@ function stopWorking() {
   working = null;
 }
 
-/** Announces one outcome, once. The same text twice in a row is cleared first so it is announced again. */
+/**
+ * Announces one outcome, once. The same text twice in a row is cleared first
+ * so it is announced again.
+ *
+ * Q9 (revision 1, critic 1 and 4): the visible tag carries no colon (the
+ * walkthrough's own words, "Last action"/"Refused"/"Working") -- a
+ * *visually hidden* ": " between `.tag` and `.text` in the static markup
+ * (onboarding.html's `#last-action`) is what separates them for assistive
+ * tech instead, on load and after every action, at every width, not only
+ * where a CSS margin happened to be visible. Neither node here ever touches
+ * that separator; it is a fixed sibling this function never renders.
+ */
 function lastAction(message, tone = "done") {
   if (tone !== "working") stopWorking();
   const node = $("last-action");
@@ -164,11 +179,11 @@ function lastAction(message, tone = "done") {
   const apply = () =>
     keepInPlace(() => {
       node.className = `last-action ${tone}`;
-      tag.textContent = tagText(tone);
+      tag.textContent = TAGS[tone];
       text.replaceChildren(...lineParts(message));
       text.title = message; // J5: the whole sentence for a pointer, where the line is clamped
     });
-  if (text.textContent === message && tag.textContent === tagText(tone)) {
+  if (text.textContent === message && tag.textContent === TAGS[tone]) {
     keepInPlace(() => {
       text.textContent = "";
     });
@@ -968,7 +983,7 @@ async function decide(claimId, decision) {
   await load();
   // J4: a question opened. Focus goes to its answer box, whose description carries the question and why; the line says only that.
   const opened = outcome.ok && decision === "confirmed" && view.claims.find((claim) => claim.id === claimId)?.status === "disputed";
-  lastAction(opened ? "An answer is needed." : outcome.message, outcome.ok ? "done" : "refused");
+  lastAction(opened ? withEditsNote(outcome.message, "An answer is needed.") : outcome.message, outcome.ok ? "done" : "refused");
   render(() => claimFocusTarget(claimId));
 }
 

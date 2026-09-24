@@ -32,21 +32,22 @@ html { scroll-padding-top: var(--last-action-offset, 5rem); overflow-anchor: non
 .last-action.refused { border-left-color: #b91c1c; }
 /* J5: at 640 px and below the line is at most two lines; the whole sentence
    stays in the DOM (so in its accessible text) and in the text's title.
-   P03.2 (round-4 UI critic polish 2): the clamp is on .text, not the padded
-   .last-action box -- clamping the box itself, with the tag also inside it,
-   let a sliver of a third line show past the box's own padding. -webkit-inline-box
-   (rather than -webkit-box) keeps .text flowing right after the inline .tag
-   on the same first line, with max-width so it still wraps instead of
-   growing to fit its own unclamped content. */
+   Q9 (revision 1, critic 1): P04's `.last-action-body` pattern (ui/jobs.html,
+   assets/jobs.css) -- the clamp sits on the inner body, which has no padding
+   of its own, and .tag goes inline so it shares the clamped box's first line
+   with .text, instead of taking a whole row to itself. The round-4 UI critic
+   polish 2 attempt (clamping .text alone, with -webkit-inline-box) put the
+   tag and the clamp in two different boxes: every message of 57+ characters
+   showed the tag alone on row 1, then two more rows of text -- three rows,
+   not two. */
 @media (max-width: 640px) {
   .last-action {
     padding: 0.375rem 0.625rem; font-size: 0.8125rem; line-height: 1.4;
   }
-  .last-action .tag { display: inline; margin-right: 0.375rem; }
-  .last-action .text {
-    display: -webkit-inline-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
-    max-width: 100%; vertical-align: top;
+  .last-action-body {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
   }
+  .last-action .tag { display: inline; margin-right: 0.375rem; }
 }
 
 /* Anything focused by the page after an action (a card, a heading) uses the

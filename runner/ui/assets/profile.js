@@ -75,17 +75,6 @@ function formatWhen(iso) {
 const TAGS = { done: "Last action", refused: "Refused", working: "Working" };
 const COMMAND = /npm run runner/g;
 
-/**
- * P03.2 (round-4 UI critic, outside the round): at 640px and below, `.tag`
- * and `.text` sit on the same line with only a CSS margin between them --
- * invisible to assistive tech, which read "LAST ACTIONAn answer is needed."
- * with nothing separating the two. A colon in the tag's own text content
- * fixes that at every width, not just the one where it was visible.
- */
-function tagText(tone) {
-  return `${TAGS[tone]}:`;
-}
-
 function lineParts(message) {
   const parts = [];
   let from = 0;
@@ -107,6 +96,12 @@ function keepInPlace(change) {
   if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
 }
 
+/**
+ * Q9 (revision 1, critic 1 and 4): the visible tag carries no colon (the
+ * walkthrough's own words) -- a *visually hidden* ": " between `.tag` and
+ * `.text` in the static markup (profile.html's `#last-action`) separates
+ * them for assistive tech instead, on load and after every action.
+ */
 function lastAction(message, tone = "done") {
   const node = $("last-action");
   const tag = node.querySelector(".tag");
@@ -114,11 +109,11 @@ function lastAction(message, tone = "done") {
   const apply = () =>
     keepInPlace(() => {
       node.className = `last-action ${tone}`;
-      tag.textContent = tagText(tone);
+      tag.textContent = TAGS[tone];
       text.replaceChildren(...lineParts(message));
       text.title = message;
     });
-  if (text.textContent === message && tag.textContent === tagText(tone)) {
+  if (text.textContent === message && tag.textContent === TAGS[tone]) {
     keepInPlace(() => {
       text.textContent = "";
     });
@@ -266,12 +261,13 @@ async function run(id, work) {
   if (busy.has(id)) return;
   busy.add(id);
   setBusy(id, true);
-  // P03.2 (round-4 reviewer nit 2): save-markdown manages editorError itself, on its own outcome (it must
-  // survive its own failed save, to sit on the editor per J4). Every other action here is unrelated to the
-  // editor, so a stale reason from an earlier failed save must not keep showing a red box after it (e.g.
-  // Accept on a pending revision, which re-renders the whole page, including the editor, on success). Every
-  // path below (work()'s own render, or this function's catch branch) re-renders after this runs, so
-  // clearing the variable here is enough; the next renderEditor() call picks it up.
+  // Q12 (revision 1): tightened -- "save-markdown" is excluded because its own onclick handler sets
+  // editorError on both its outcomes (the error on a refused save, null on a successful one; see below), so
+  // it must not be cleared here first. Every other action is unrelated to the editor: a reason left over from
+  // an earlier failed save must not keep showing a red box after it (e.g. Accept on a pending revision, which
+  // re-renders the whole page, including the editor, on success). Clearing the variable here is enough --
+  // run()'s own render (below, on success or in its catch branch) always follows this line, so the next
+  // renderEditor() call picks the cleared value up.
   if (id !== "save-markdown") editorError = null;
   try {
     await work();
