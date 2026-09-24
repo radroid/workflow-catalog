@@ -1,7 +1,7 @@
 # P05 · Preparation with evidence, the validator, and export
 
-Status: open
-Assignee: none
+Status: claimed (iter 007)
+Assignee: iter-007 implementer (Opus)
 Blocked by: P04
 Owns:
 - The preparation skills in `packages/job-assistant/skills/`: requirements-extraction, claim-matching, resume-drafting, cover-letter-drafting and revision-diff. Also the `resume` and `cover-letter` templates in `packages/job-assistant/templates/`.
