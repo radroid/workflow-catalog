@@ -108,9 +108,13 @@ for (const { root, ask, extract } of ROOTS) {
       expect((await store.read()).claims).toEqual([]); // the tool alone wrote nothing
       const saved = await store.extractClaims("resume", output.claims as never); // the route's own next step
       expect(saved.ok).toBe(true);
+      // S8 (revision 2): round 1's `toBe(claimId)`, restored (revision 1 had weakened it to `toBeDefined()`).
+      // claimId is the id the persist step reports it created, so the claim read back from disk must be that
+      // very claim, not merely some claim with an id.
+      const claimId = saved.profile.claims[0]!.id;
       const claims = (await store.read()).claims;
       expect(claims.map((claim) => claim.status)).toEqual(["candidate"]);
-      expect(claims[0]!.id).toBeDefined();
+      expect(claims[0]!.id).toBe(claimId);
     });
 
     it("verifies nothing (an empty claims array) when every quote is fabricated, and persists nothing", async () => {

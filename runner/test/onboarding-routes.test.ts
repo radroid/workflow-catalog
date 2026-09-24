@@ -466,7 +466,8 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     expect(fake.calls.lastSignal).toBeInstanceOf(AbortSignal);
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean; status: string; message: string; claims: unknown[] };
-    expect(body).toMatchObject({ ok: false, status: "timeout", message: "No answer from the model within 50 ms, so the extraction was stopped. Try again.", claims: [] });
+    // S6 (revision 2, UI critic issue 2): the consequence first.
+    expect(body).toMatchObject({ ok: false, status: "timeout", message: "The extraction stopped: no answer from the model within 50 ms. Try again.", claims: [] });
     expect(fake.calls.cancelCount).toBe(1);
   });
 

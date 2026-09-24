@@ -114,14 +114,14 @@ describe("createEveGateway(...).checkModel against the real eve@0.63.0 client (P
     stubEve("normal-bad-reply");
     const gateway = createEveGateway({ password: "fake-eve-password" });
     const result = await gateway.checkModel(5_000);
-    expect(result).toMatchObject({ ok: false, detail: "The model answered, but not with the expected reply." });
+    expect(result).toMatchObject({ ok: false, detail: "the model answered, but not with the expected reply." }); // S8 (revision 2): lower case after "The check failed: "
   });
 
   it("turn.cancelled then session.waiting is not ok, with no cancel of our own", async () => {
     const fake = stubEve("cancelled-elsewhere");
     const gateway = createEveGateway({ password: "fake-eve-password" });
     const result = await gateway.checkModel(5_000);
-    expect(result).toMatchObject({ ok: false, detail: "The turn was cancelled before it finished." });
+    expect(result).toMatchObject({ ok: false, detail: "it was cancelled before the model answered." }); // S8: no "turn"
     expect(fake.cancels()).toBe(0);
   });
 
@@ -129,7 +129,7 @@ describe("createEveGateway(...).checkModel against the real eve@0.63.0 client (P
     const fake = stubEve("parked");
     const gateway = createEveGateway({ password: "fake-eve-password" });
     const result = await gateway.checkModel(5_000);
-    expect(result).toMatchObject({ ok: false, detail: "The model asked for input instead of finishing the run." });
+    expect(result).toMatchObject({ ok: false, detail: "the model asked a question instead of replying." }); // S8: no "run"
     expect(fake.cancels()).toBe(1);
   });
 
@@ -137,7 +137,7 @@ describe("createEveGateway(...).checkModel against the real eve@0.63.0 client (P
     const fake = stubEve("stream-401");
     const gateway = createEveGateway({ password: "fake-eve-password" });
     const result = await gateway.checkModel(5_000);
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: false, detail: "eve or the network didn't answer." }); // S5 (revision 2): no doubled prefix
     expect(fake.cancels()).toBe(1); // the non-abort catch path (run-harness.ts) now cancels through the session too
   });
 
@@ -147,7 +147,7 @@ describe("createEveGateway(...).checkModel against the real eve@0.63.0 client (P
     const started = performance.now();
     const result = await gateway.checkModel(300);
     expect(result.ok).toBe(false);
-    expect(result.detail).toBe("No answer within 0.3 s.");
+    expect(result.detail).toBe("no answer from the model within 300 ms."); // S8: the deadline this check was given
     expect(fake.cancels()).toBe(1); // a real POST .../cancel, not just a no-op response.cancel()
     expect(performance.now() - started).toBeLessThan(5_000);
   });

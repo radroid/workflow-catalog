@@ -52,7 +52,8 @@ const SAME_ORIGIN = { cookie: COOKIE, origin: BRIDGE, "content-type": "applicati
 const SESSION = "s-extract";
 const CANCEL_PATH = `/eve/v1/session/${SESSION}/cancel`;
 const SHORT_DEADLINE_MS = 300;
-const TIMED_OUT = { ok: false, status: "timeout", message: "No answer from the model within 300 ms, so the extraction was stopped. Try again.", claims: [] };
+// S6 (revision 2, UI critic issue 2): the consequence first.
+const TIMED_OUT = { ok: false, status: "timeout", message: "The extraction stopped: no answer from the model within 300 ms. Try again.", claims: [] };
 const RESUME_TEXT = "Led the payments team at Northwind Labs. Cut the Harbor release time from a day to under an hour.";
 const LED_CLAIM = { text: "Led the payments team at Northwind Labs.", kind: "fact" as const, evidenceRef: "pasted.txt#1", evidenceQuote: "Led the payments team at Northwind Labs." };
 
@@ -315,7 +316,7 @@ describe("extraction deadline against the real eve@0.63.0 client (eve-runtime §
     expect(await response.json()).toMatchObject({
       ok: false,
       status: "parked", // TurnResult's own vocabulary, not eve's raw "waiting" boundary (deliverable 1)
-      message: "The model asked a question this page can't show, so the extraction stopped. Try again.",
+      message: "The extraction stopped: the model asked a question this page can't show. Try again.", // S6: the consequence first
     });
     expect(eve.cancels()).toBe(1);
     expect(eve.requests.at(-1)).toBe(`POST ${CANCEL_PATH}`);

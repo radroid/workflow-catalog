@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { UI_COOKIE } from "../server/local-ui.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
 import { MARKDOWN_UNREADABLE_REFUSAL } from "../server/routes/onboarding.ts";
 import { ProfileStore } from "../store/profile.ts";
+import { PROFILE_BUSY_MESSAGE } from "../store/profile-writes.ts";
 import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
 
 /**
@@ -453,26 +454,40 @@ describe("Q7 (revision 1, reviewer 6 and critic 2): a server refusal also carrie
     Object.defineProperty(input, "files", { value: [{ name: "resume.txt", text: async () => "x".repeat(513 * 1024) }], configurable: true });
     (input as unknown as { onchange(event: { currentTarget: DomNode }): void }).onchange({ currentTarget: input });
 
-    await until(() => page.line() === "Not uploaded: That's over 512 KB. Paste less text, or upload a smaller file.", "the short reason");
+    // S8 (revision 2): after the line's own colon, the server's sentence starts in lower case; the field's
+    // own error, where the sentence stands alone, keeps it as the server wrote it.
+    await until(() => page.line() === "Not uploaded: that's over 512 KB. Paste less text, or upload a smaller file.", "the short reason");
     expect(page.document.activeElement).toBe(input); // focus never moved, so the line had to carry the reason
     expect(page.describedBy("source-file-resume")).toContain("That's over 512 KB. Paste less text, or upload a smaller file.");
   });
 
-  it("a statement the server 413s for size is not just \"Not added.\" while the input still has focus", async () => {
+  it("S8 (revision 2): a statement the server refuses (the profile lock's 503) is not just \"Not added.\" while the input still has focus", async () => {
+    // Revision 1 used an 8 KiB statement, which the page can't send (the input's maxlength is 600). The
+    // profile lock is a refusal the page does meet: another process (eve's ask_follow_up tool, say) holds
+    // .runner/profile.lock past the route's 5 s wait, and the route answers 503 with PROFILE_BUSY_MESSAGE.
     const bridge = await realBridge();
     const page = await openPage("onboarding", bridge);
+    const lock = path.join(bridge.workspace.root, ".runner", "profile.lock");
+    await writeFile(lock, `${JSON.stringify({ token: "another-process", pid: 999999, acquiredAt: new Date().toISOString() })}\n`);
+    // The other process lets go once the page's request has been refused, so the page's own reload in
+    // refused() doesn't wait the lock out a second time (that 5 s is P03's, carried to P03.1).
+    const pageFetch = (globalThis as unknown as { fetch: (input: string, init?: object) => Promise<Response> }).fetch;
+    (globalThis as Record<string, unknown>).fetch = async (input: string, init?: object) => {
+      const response = await pageFetch(input, init);
+      if (input.startsWith("/api/onboarding/statements/")) await unlink(lock);
+      return response;
+    };
 
     const input = page.byId("statement-input-preference");
     input.focus();
     expect(page.document.activeElement).toBe(input);
-    // Over the real 8 KiB small-body cap (MAX_SMALL_BODY_BYTES); /statements/:kind never goes through
-    // boundedSourceBody (Q12, revision 1), so this is http.ts's own generic body_too_large message -- the
-    // server's one message, reused as both the field's detail and the line's focused reason (refused()).
-    page.type("statement-input-preference", "x".repeat(9 * 1024));
+    page.type("statement-input-preference", "Remote-first roles.");
     page.submit("statement-form-preference");
 
-    await until(() => page.line() === "Not added: Request body is larger than 8192 bytes.", "the short reason");
-    expect(page.document.activeElement).toBe(input);
-    expect(page.describedBy("statement-input-preference")).toContain("Request body is larger than 8192 bytes.");
+    await until(() => page.line() === "Not added: the profile is busy. Try again in a moment.", "the short reason", 15_000);
+    expect(page.document.activeElement).toBe(input); // focus never moved, so the line had to carry the reason
+    expect(input.isConnected).toBe(true);
+    expect(input.value).toBe("Remote-first roles."); // the typed text stays for the retry
+    expect(page.describedBy("statement-input-preference")).toContain(PROFILE_BUSY_MESSAGE);
   });
 });

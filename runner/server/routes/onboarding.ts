@@ -138,16 +138,21 @@ function extractionFailureMessage(result: Pick<TurnResult, "detail" | "providerL
  * itself — what counts as cancelled, parked, timed out or failed, following
  * eve-runtime.md §8 item 15 — stays entirely in `run-harness.ts`; this only
  * phrases an already-decided `TurnResult.status` for a person to read (J5,
- * one short sentence, about 80 characters, Q3). "cancelled" and "parked"
- * keep P03's exact wording (unchanged by this move); "timeout" keeps P03's
- * exact wording too, built from the deadline this route itself chose.
- * "failed" is phrased by `extractionFailureMessage` above (Q3) — never the
- * raw code, status or an HTTP number.
+ * one short sentence, about 80 characters, Q3). "cancelled" keeps P03's
+ * exact wording (unchanged by this move). "failed" is phrased by
+ * `extractionFailureMessage` above (Q3) — never the raw code, status or an
+ * HTTP number.
+ *
+ * S6 (revision 2, round-2 UI critic issue 2): "parked" and "timeout" now put
+ * the consequence first, as every other outcome here does ("The extraction
+ * stopped: …", "The extraction failed: …"); P03's wording put the cause
+ * first ("No answer from the model within 90 s, so the extraction was
+ * stopped."). The timeout still names the deadline this route chose.
  */
 function extractionRefusal(result: TurnResult, timeoutMs: number): string {
   if (result.status === "cancelled") return EXTRACTION_STOPPED;
-  if (result.status === "parked") return "The model asked a question this page can't show, so the extraction stopped. Try again.";
-  if (result.status === "timeout") return `No answer from the model within ${seconds(timeoutMs)}, so the extraction was stopped. Try again.`;
+  if (result.status === "parked") return "The extraction stopped: the model asked a question this page can't show. Try again.";
+  if (result.status === "timeout") return `The extraction stopped: no answer from the model within ${seconds(timeoutMs)}. Try again.`;
   return extractionFailureMessage(result);
 }
 
