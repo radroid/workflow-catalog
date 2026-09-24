@@ -1442,3 +1442,31 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
   - V16: the PDF never drops characters silently; a Unicode font is preferred.
 - **Carried to P06:** a waiting value for a parked preparation in `application.ts`, the nav order, the Jobs page's silent runner-down, and version labels.
 - **Carried to P08-B:** `authorization.required` without a webhook is waiting on the person, and a parked run is not a failure.
+
+## 2026-09-24 — P03.2 peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #17 at 8ddcbae
+**Severity:** medium. Revision 1 fixed Q2–Q4, Q7 and Q9–Q10, and every round-1 surviving mutation now fails a test. But it added one behaviour bug, left the record partly false, and three messages and eight screenshots are still wrong.
+
+**Verdict:** REVISE — 4 issues; UI REVISE — 3 issues.
+- **Reviewer:**
+  1. When Q6's re-check rejects every claim, the route answers ok and records the content hash, so a retry never runs.
+  2. Q1's list of edited assertions leaves out round 1's edits.
+  3. The report's corrections weren't made, and there are new false statements.
+  4. Q8's gate mapping is partial, and two restored gates can't fail.
+- **UI critic:**
+  1. The model check's failure reads "The model check failed" twice.
+  2. The timeout and parked messages give the cause first.
+  3. Eight committed screenshots don't show their message.
+
+**What holds:**
+- The chain, and CI 36004602174 (37/37).
+- Merging onto integration, and with P05's revision on top, is clean and green: runner 1077, evals 163 gates.
+- The pinned line is two rows at 390, the 413 reason is announced, and the tag reads separately on load.
+- `runTurn`'s new cancels are bounded, and P04's and P08-A's tests are unchanged.
+
+**Decision:**
+- This is the second REVISE, so a fresh Opus escalation takes over `packet/P03.2` at 8ddcbae, with S1–S9 in `logs/handoff/P03.2-round-2-review.md` and the prompt `logs/handoff/P03.2-escalation-prompt.md`.
+- **S8:** the weakened `toBe(claimId)` → `toBeDefined()` is restored. The reviewer called it a nit, but a weakened assertion is never accepted.
+- **Carried:** the Status page's model-check focus and announcement go to P06, with `status.js` granted. The ~10 s delay before "profile busy" appears goes to P03.1.
