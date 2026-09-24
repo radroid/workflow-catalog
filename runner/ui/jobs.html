@@ -15,8 +15,8 @@
       <h1 id="page-title" tabindex="-1">Jobs</h1>
       <p class="lede">Save a posting from the extension, paste its text, or fetch it from an <code>https://</code> link. Every save that changes the text keeps the version before it — nothing is overwritten.</p>
 
-      <!-- The page's one persistent live region (round-1 review L12 item 1, P03's pinned "Last action" line): sticky, so an outcome always shows where the person is working, not just at the top of a long page. -->
-      <div id="last-action" class="last-action" role="status" aria-atomic="true"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div>
+      <!-- The page's one persistent live region (round-1 review L12 item 1, P03's pinned "Last action" line): sticky, so an outcome always shows where the person is working, not just at the top of a long page. The inner body carries the two-line clamp at 640 px and below (T18), so no sliver of a third line shows in the line's padding. -->
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><div class="last-action-body"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div></div>
 
       <section class="card" aria-labelledby="paste-title">
         <h2 id="paste-title">Paste a posting</h2>
@@ -32,7 +32,7 @@
             <textarea id="paste-text" name="text" rows="8" aria-describedby="paste-text-error" required></textarea>
             <p id="paste-text-error" class="field-error" hidden></p>
           </div>
-          <button class="button" type="submit" id="paste-submit">Save posting</button>
+          <button class="button" type="submit" id="paste-submit" aria-disabled="false">Save posting</button>
         </form>
       </section>
 
@@ -45,7 +45,7 @@
             <input id="url-input" name="url" type="url" autocomplete="off" placeholder="https://jobs.example/…" aria-describedby="url-input-error" required />
             <p id="url-input-error" class="field-error" hidden></p>
           </div>
-          <button class="button" type="submit" id="url-submit">Fetch and save</button>
+          <button class="button" type="submit" id="url-submit" aria-disabled="false">Fetch and save</button>
         </form>
       </section>
 
