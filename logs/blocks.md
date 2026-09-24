@@ -1396,3 +1396,77 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
   - Q2: cancel through the session when the stream throws or ends without a boundary.
   - Q9: the `#last-action` markup in `onboarding.html` and `profile.html`, for P04's two-row pattern and a visually hidden separator.
 - **Carried to P06:** the Jobs page's tag runs into its message at 640 px and below.
+
+## 2026-09-24 — P05 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #16 at 3130763
+**Severity:** medium to high. The pipeline, the boundary and the security hold. But the validator (the packet's core promise, "every sentence cites a confirmed claim") lets unstated numbers, inflated titles, open-ended dates and uncited sentences through, and two acceptance tests prove nothing for DOCX.
+
+**Verdict:** REVISE — 9 issues; UI REVISE — 9 issues.
+- **Reviewer:**
+  1. Unstated numbers pass.
+  2. Inflated titles pass.
+  3. Open-ended dates pass.
+  4. Uncited sentences ride along with cited ones.
+  5. The server's re-validation is untested.
+  6. The DOCX acceptance checks are vacuous.
+  7. A damaged record forks the job.
+  8. A corrected name never reaches the documents.
+  9. §5 lacks the new workspace files.
+- **UI critic:**
+  1. The name change (the reviewer's issue 8).
+  2. A stale row and amber after answers.
+  3. Links point to Profile rather than Onboarding.
+  4. No announcement after a reload.
+  5. Silence while the runner is down.
+  6. Anonymous download names.
+  7. A stale note on version 1.
+  8. "???" in the PDF.
+  9. A path not in `<code>`.
+
+**What holds:**
+- Excluded claims never reach the model, and the per-call boundary holds.
+- The turn runs through `runTurn` inside `withRun`, and the server re-reads and re-validates after it.
+- Idempotency holds, including two concurrent Prepares, and so do restarts, the CI race fix and F8.
+- Route security, and the dependencies: exact pins and no install scripts.
+- The chain, three identical test runs and CI (37/37) are green. Merging onto integration, and with #17 on top, is clean and green.
+- axe finds no violations in 127 audits, and all 20 screenshots are right.
+
+**Decision:**
+- Revision 1 goes to the same Opus implementer, with V1–V20 in `logs/handoff/P05-round-1-review.md`. Every validator change is stricter, with a draft-level test.
+- **Rulings:**
+  - V8: a name change re-exports the stored draft as a new version, with no model turn. The key gains `details@<digest>`.
+  - V9: §5 and the ARCHITECTURE index are granted, so the spec changes in the same PR.
+  - V10: the model can't tell an excluded label from an unknown one.
+  - V16: the PDF never drops characters silently; a Unicode font is preferred.
+- **Carried to P06:** a waiting value for a parked preparation in `application.ts`, the nav order, the Jobs page's silent runner-down, and version labels.
+- **Carried to P08-B:** `authorization.required` without a webhook is waiting on the person, and a parked run is not a failure.
+
+## 2026-09-24 — P03.2 peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #17 at 8ddcbae
+**Severity:** medium. Revision 1 fixed Q2–Q4, Q7 and Q9–Q10, and every round-1 surviving mutation now fails a test. But it added one behaviour bug, left the record partly false, and three messages and eight screenshots are still wrong.
+
+**Verdict:** REVISE — 4 issues; UI REVISE — 3 issues.
+- **Reviewer:**
+  1. When Q6's re-check rejects every claim, the route answers ok and records the content hash, so a retry never runs.
+  2. Q1's list of edited assertions leaves out round 1's edits.
+  3. The report's corrections weren't made, and there are new false statements.
+  4. Q8's gate mapping is partial, and two restored gates can't fail.
+- **UI critic:**
+  1. The model check's failure reads "The model check failed" twice.
+  2. The timeout and parked messages give the cause first.
+  3. Eight committed screenshots don't show their message.
+
+**What holds:**
+- The chain, and CI 36004602174 (37/37).
+- Merging onto integration, and with P05's revision on top, is clean and green: runner 1077, evals 163 gates.
+- The pinned line is two rows at 390, the 413 reason is announced, and the tag reads separately on load.
+- `runTurn`'s new cancels are bounded, and P04's and P08-A's tests are unchanged.
+
+**Decision:**
+- This is the second REVISE, so a fresh Opus escalation takes over `packet/P03.2` at 8ddcbae, with S1–S9 in `logs/handoff/P03.2-round-2-review.md` and the prompt `logs/handoff/P03.2-escalation-prompt.md`.
+- **S8:** the weakened `toBe(claimId)` → `toBeDefined()` is restored. The reviewer called it a nit, but a weakened assertion is never accepted.
+- **Carried:** the Status page's model-check focus and announcement go to P06, with `status.js` granted. The ~10 s delay before "profile busy" appears goes to P03.1.
