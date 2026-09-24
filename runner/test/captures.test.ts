@@ -277,7 +277,7 @@ describe("captures.ts: extraction is queued and runs in the background through r
     const { eve } = fakeEve(async (message) => {
       calls += 1;
       if (calls === 1) {
-        const jobId = /jobId: "([0-9a-f-]{36})"/.exec(message)?.[1]!;
+        const jobId = /jobId: "([0-9a-f-]{36})"/.exec(message)?.[1] ?? "";
         const revision = Number(/revision: (\d+)/.exec(message)?.[1] ?? "0");
         const result = await ref.store!.recordStructured(jobId, revision, NORTHWIND_STRUCTURED);
         return [started(), actionResult("extract_job", { jobId, revision, persisted: result.ok, message: result.message }), completedUsage(), turnCompleted(), sessionWaiting()];
