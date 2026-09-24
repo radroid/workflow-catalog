@@ -158,23 +158,23 @@ describe("captures.ts: job_capture event (extension path)", () => {
 
 describe("captures.ts: extraction runs inline through runTurn when content changed", () => {
   it("persists structured fields via the real extract_job tool round trip", async () => {
-    let store: JobsStore | undefined;
-    const { eve, calls } = fakeEve(extractingScript(() => store!, NORTHWIND_STRUCTURED));
+    const ref: { store?: JobsStore } = {};
+    const { eve, calls } = fakeEve(extractingScript(() => ref.store!, NORTHWIND_STRUCTURED));
     const withEve = await bridgeWith(eve);
-    store = new JobsStore(withEve.workspace);
+    ref.store = new JobsStore(withEve.workspace);
     const { token } = await pairDevice(withEve);
     const response = await postEvent(withEve, token, jobCapture({ text: "Staff Platform Engineer at Northwind Labs." }));
     const body = (await response.json()) as { result: { jobId: string; revision: number } };
     expect(calls).toHaveLength(1);
-    const snapshot = await store.getSnapshot(body.result.jobId, body.result.revision);
+    const snapshot = await ref.store.getSnapshot(body.result.jobId, body.result.revision);
     expect(snapshot?.structured).toEqual(NORTHWIND_STRUCTURED);
   });
 
   it("delivers the posting text only as user-turn data (mutation target: 'put the posting text into the instructions')", async () => {
-    let store: JobsStore | undefined;
-    const { eve, calls } = fakeEve(extractingScript(() => store!, NORTHWIND_STRUCTURED));
+    const ref: { store?: JobsStore } = {};
+    const { eve, calls } = fakeEve(extractingScript(() => ref.store!, NORTHWIND_STRUCTURED));
     const bridge = await bridgeWith(eve);
-    store = new JobsStore(bridge.workspace);
+    ref.store = new JobsStore(bridge.workspace);
     const { token } = await pairDevice(bridge);
     const text = "Staff Platform Engineer at Northwind Labs. Fictional posting for the mutation-proof test.";
     await postEvent(bridge, token, jobCapture({ text }));
@@ -184,10 +184,10 @@ describe("captures.ts: extraction runs inline through runTurn when content chang
   });
 
   it("does not re-run extraction when the capture is an unchanged duplicate (no new revision)", async () => {
-    let store: JobsStore | undefined;
-    const { eve, calls } = fakeEve(extractingScript(() => store!, NORTHWIND_STRUCTURED));
+    const ref: { store?: JobsStore } = {};
+    const { eve, calls } = fakeEve(extractingScript(() => ref.store!, NORTHWIND_STRUCTURED));
     const bridge = await bridgeWith(eve);
-    store = new JobsStore(bridge.workspace);
+    ref.store = new JobsStore(bridge.workspace);
     const { token } = await pairDevice(bridge);
     const capture = jobCapture();
     await postEvent(bridge, token, capture);
@@ -196,18 +196,20 @@ describe("captures.ts: extraction runs inline through runTurn when content chang
   });
 
   it("a turn that isn't ok records no fields and says so plainly (mutation target: 'count a non-ok turn as extracted')", async () => {
-    const bridge = await bridgeWith();
+    // The fake eve must actually be wired into the bridge: bridgeWith() with no eve makes runTurn report
+    // "failed" on its own (eve not running) before ever reading an event, which would let this test pass
+    // for the wrong reason and never exercise the turn.failed classification the mutation targets.
     const { eve } = fakeEve(async () => [started(), turnFailed(), sessionWaiting()]);
+    const bridge = await bridgeWith(eve);
     const outcome = await runExtraction(bridge.ctx, randomUUID(), 1, "some text");
     expect(outcome.status).toBe("not_extracted");
   });
 
   it("a turn with no successful extract_job call records no fields", async () => {
-    const bridge = await bridgeWith();
     const { eve } = fakeEve(async () => [started(), turnCompleted(), sessionWaiting()]); // no tool call at all
+    const bridge = await bridgeWith(eve);
     const outcome = await runExtraction(bridge.ctx, randomUUID(), 1, "some text");
     expect(outcome.status).toBe("not_extracted");
-    expect(eve).toBeDefined();
   });
 });
 

@@ -1,0 +1,214 @@
+/* Jobs page: extends runner.css tokens (docs/spec/visuals/theme.css). Kept
+   separate from runner.css, which P04 does not own. */
+
+/* The page's one persistent live region (role="status"): present throughout the page's life, empty and
+   visually silent until there is a success or refusal to announce (runs.css carries the same rule; kept
+   in sync deliberately since each page's CSS is its own file). min-height reserves the line's height even
+   while empty, so a message appearing never shifts the forms below it out from under the pointer. */
+.status-message {
+  margin: 0 0 1.25rem;
+  overflow-wrap: anywhere;
+  min-height: 1.55em;
+}
+.status-message:empty {
+  display: block;
+}
+/* Foreground text with a destructive left-border marker, not red text alone (the same measured pattern as
+   runs.css's .status-message.error: red-on-background alone falls short of 4.5:1 in this theme). */
+.status-message.error {
+  color: var(--foreground);
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.6rem;
+}
+.status-message.success {
+  color: var(--muted-foreground);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.85rem;
+}
+.field label {
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+.field input,
+.field textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+.field textarea {
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.jobs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.job-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+.job-open {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  font: 500 0.95rem/1.4 var(--font-sans);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.job-open:hover {
+  text-decoration: underline;
+}
+.job-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.job-row .muted {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-structured,
+.detail-revisions {
+  margin-top: 1rem;
+}
+.detail-structured h3,
+.detail-revisions h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+.detail-structured .button {
+  margin-top: 0.75rem;
+}
+.structured-fields {
+  margin: 0;
+}
+.structured-fields dt {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+.structured-fields dt:first-child {
+  margin-top: 0;
+}
+.structured-fields dd {
+  margin: 0.15rem 0 0;
+  overflow-wrap: anywhere;
+}
+.structured-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.revisions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.revision-card {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+.revision-card:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.revision-head {
+  margin: 0;
+}
+.revision-number {
+  font-weight: 500;
+}
+.revision-diff summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+  margin-top: 0.35rem;
+}
+.revision-diff summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* The line diff: a leading "+ " / "− " marker plus (for "removed") a strikethrough carry the change, not
+   background tint alone — theme.css is deliberately monochrome outside the one amber "needs a decision" token,
+   which this page never uses (nothing here is a decision). */
+.diff {
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  overflow: hidden;
+}
+.diff-line {
+  padding: 0.1rem 0.5rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-line.same {
+  color: var(--muted-foreground);
+}
+.diff-line.added {
+  background: var(--secondary);
+}
+.diff-line.added::before {
+  content: "+ ";
+}
+.diff-line.removed {
+  background: var(--muted);
+  text-decoration: line-through;
+}
+.diff-line.removed::before {
+  content: "\2212 ";
+}
+.diff-skip {
+  padding: 0.15rem 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.detail-raw {
+  margin-top: 1rem;
+}
+.detail-raw summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+.detail-raw summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.posting-text {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  background: var(--muted);
+  border-radius: calc(var(--radius) - 2px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  max-height: 20rem;
+  overflow-y: auto;
+}

@@ -186,6 +186,14 @@ async function readBounded(body: AsyncIterable<Uint8Array>, maxBytes: number): P
   return { ok: true, text: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8") };
 }
 
+/** Fully drains `body` without keeping any of it: used for a redirect, a non-2xx status, or a rejected content type, where the bytes are never the content we want but the stream still has to be consumed. Written with the iterator protocol directly (not `for await (const chunk of body)`) so there is no declared-but-unused loop variable. */
+async function drainBody(body: AsyncIterable<Uint8Array>): Promise<void> {
+  const iterator = body[Symbol.asyncIterator]();
+  for (let step = await iterator.next(); !step.done; step = await iterator.next()) {
+    // discard step.value
+  }
+}
+
 /**
  * Fetches `rawUrl`: https only, no loopback/private/link-local/metadata
  * address (checked after DNS resolution and again on every redirect), a
@@ -225,9 +233,7 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
 
     if (REDIRECT_STATUSES.has(response.status)) {
       // Drain and discard the redirect body; it is never the content we want.
-      for await (const _chunk of response.body) {
-        // discard
-      }
+      await drainBody(response.body);
       const location = response.headers.get("location");
       if (!location) return { ok: false, reason: "redirect_missing_location", message: "The server redirected without saying where to." };
       if (redirects >= maxRedirects) return { ok: false, reason: "too_many_redirects", message: `Too many redirects (over ${maxRedirects}).` };
@@ -240,17 +246,13 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
     }
 
     if (response.status < 200 || response.status >= 300) {
-      for await (const _chunk of response.body) {
-        // discard
-      }
+      await drainBody(response.body);
       return { ok: false, reason: "http_status", message: `The page answered with an error (HTTP ${response.status}).` };
     }
 
     const contentType = contentTypeOf(response.headers);
     if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-      for await (const _chunk of response.body) {
-        // discard
-      }
+      await drainBody(response.body);
       return { ok: false, reason: "unsupported_content_type", message: "That page is not plain text or HTML." };
     }
 
