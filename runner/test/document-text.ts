@@ -79,6 +79,13 @@ export function docxAllText(archive: Buffer): string {
     .join("\n");
 }
 
+/** One XML part of a DOCX as it is stored (entities left as written): `docProps/core.xml`, say. */
+export function docxPart(archive: Buffer, name: string): string {
+  const part = unzip(archive).find((entry) => entry.name === name);
+  if (!part) throw new Error(`No ${name} in this DOCX.`);
+  return part.data.toString("utf8");
+}
+
 /** A PDF's text, every page, as PDF.js extracts it. */
 export async function pdfText(file: Buffer): Promise<string> {
   const { text } = await extractText(new Uint8Array(file), { mergePages: true });

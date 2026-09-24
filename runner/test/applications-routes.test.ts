@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { actionsOutsidePreparation, requestedActions } from "../agent/lib/prepare-schema.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import applicationsModule, { EXCLUDED_PROBLEM_MESSAGE, INTERRUPTED_MESSAGE, keptProblems, waitForPreparationQueue } from "../server/routes/applications.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import { ApplicationsStore } from "../store/applications.ts";
-import { getBudgetState } from "../store/budget.ts";
+import { getBudgetState, pauseBudget } from "../store/budget.ts";
 import { JobsStore } from "../store/jobs.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { listRuns } from "../store/runs.ts";
@@ -56,6 +56,7 @@ const MODULES: readonly LoadedRouteModule[] = [{ name: "applications", module: a
 interface StateView {
   readonly status: string;
   readonly message: string;
+  readonly open?: number;
 }
 
 interface FileView {
@@ -64,6 +65,8 @@ interface FileView {
   readonly name: string;
   readonly label: string;
   readonly href: string;
+  readonly download: string;
+  readonly missing: string[];
 }
 
 interface StatementView {
@@ -78,6 +81,9 @@ interface StatementView {
 interface VersionView {
   readonly version: number;
   readonly replaces: number | null;
+  readonly replacedBy: number | null;
+  readonly sameDraftAs: number | null;
+  readonly olderDetails: boolean;
   readonly profileVersion: number;
   readonly jobRevision: number;
   readonly coverLetter: boolean;
@@ -106,17 +112,19 @@ interface DetailView {
 }
 
 interface ListView {
-  readonly readiness: { readonly ready: boolean; readonly message: string | null; readonly profileVersion: number | null };
-  readonly details: { readonly name: string; readonly contact: string } | null;
+  readonly readiness: { readonly ready: boolean; readonly code: string | null; readonly message: string | null; readonly profileVersion: number | null };
+  readonly details: { readonly name: string; readonly contact: string; readonly pdfMissing: string[] } | null;
   readonly runner: { readonly ready: boolean; readonly code: string | null; readonly message: string | null };
+  readonly budget: { readonly dailyRunLimit: number; readonly runsUsedToday: number };
   readonly jobs: Array<{ readonly jobId: string; readonly name: string; readonly revision: number; readonly extracted: boolean; readonly taskId: string | null }>;
   readonly applications: Array<{ readonly taskId: string; readonly jobName: string; readonly stage: string; readonly latestVersion: number | null; readonly state: StateView }>;
 }
 
 interface PrepareBody {
   readonly ok: true;
-  readonly outcome: "started" | "already_prepared" | "already_running";
+  readonly outcome: "started" | "already_prepared" | "already_running" | "reexported";
   readonly version?: number;
+  readonly replaces?: number;
   readonly application: DetailView;
 }
 
@@ -302,7 +310,22 @@ describe("preparing a saved job", () => {
     const [v1] = view.versions;
     expect(v1).toMatchObject({ version: 1, replaces: null, profileVersion: 1, jobRevision: 1, coverLetter: false, olderProfile: false, noLongerConfirmed: [] });
     expect(v1!.files.map((file) => file.name)).toEqual(["resume-v1.md", "resume-v1.docx", "resume-v1.pdf", "diff-v1.md"]);
-    expect(v1!.files[0]).toEqual({ kind: "resume", format: "md", name: "resume-v1.md", label: "Resume · Markdown", href: `/api/applications/${taskId}/docs/resume-v1.md` });
+    // The workspace keeps its own file names; each downloads under the person's name, the document and the job (revision 1, V14).
+    expect(v1!.files[0]).toEqual({
+      kind: "resume",
+      format: "md",
+      name: "resume-v1.md",
+      label: "Resume · Markdown",
+      href: `/api/applications/${taskId}/docs/resume-v1.md`,
+      download: "Ada Quill - Resume - Fernwood Platform Lead.md",
+      missing: [],
+    });
+    expect(v1!.files.map((file) => file.download)).toEqual([
+      "Ada Quill - Resume - Fernwood Platform Lead.md",
+      "Ada Quill - Resume - Fernwood Platform Lead.docx",
+      "Ada Quill - Resume - Fernwood Platform Lead.pdf",
+      "Ada Quill - What changed in version 1 - Fernwood Platform Lead.md",
+    ]);
     // The per-bullet diff: each sentence, the claim behind it, and how its wording differs.
     const onCall = v1!.statements.find((statement) => statement.labels.includes("C3"));
     expect(onCall).toMatchObject({ part: "resume", heading: "Experience", text: "Shipped the on-call rotation tooling used by three engineering teams.", change: "same" });
@@ -317,7 +340,7 @@ describe("preparing a saved job", () => {
     expect(application.stage).toBe("ready");
     expect(application.processing.status).toBe("idle");
     const key = application.documents[0]!.idempotencyKey;
-    expect(key).toMatch(new RegExp(`^${jobId}@1\\+profile@v1\\+resume\\+inputs@[0-9a-f]{12}$`));
+    expect(key).toMatch(new RegExp(`^${jobId}@1\\+profile@v1\\+resume\\+inputs@[0-9a-f]{12}\\+details@[0-9a-f]{12}$`));
     expect(application.documents.map((document) => [document.kind, document.format, document.path])).toEqual([
       ["resume", "md", `applications/${taskId}/docs/resume-v1.md`],
       ["resume", "docx", `applications/${taskId}/docs/resume-v1.docx`],
@@ -333,7 +356,8 @@ describe("preparing a saved job", () => {
 
     const markdown = await download(bridge, taskId, "resume-v1.md");
     expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
-    expect(markdown.headers["content-disposition"]).toBe('attachment; filename="resume-v1.md"');
+    expect(markdown.headers["content-disposition"]).toBe('attachment; filename="Ada Quill - Resume - Fernwood Platform Lead.md"');
+    expect((await download(bridge, taskId, "resume-v1.pdf")).headers["content-disposition"]).toBe('attachment; filename="Ada Quill - Resume - Fernwood Platform Lead.pdf"');
     const text = markdown.body.toString("utf8");
     expect(text).toContain("# Ada Quill");
     expect(text).toContain("- Led the payments infrastructure team at Northwind Labs, redesigning the ledger service behind its billing.");
@@ -581,6 +605,46 @@ describe("the excluded metric (acceptance)", () => {
     expect(runs.records[0]).toMatchObject({ outcome: "failure", error: "The draft didn't pass the runner's checks, so nothing was saved." });
   });
 
+  it("a turn that reports “accepted” for a draft the validator refuses saves nothing: the runner checks the draft itself (revision 1, V5)", async () => {
+    // What a lying tool result (or a turn that forged one) would hand the bridge: status accepted, and a draft with
+    // an unstated number and the excluded metric in it. Only the runner's own check after the turn stands in the way.
+    const forgedResume = {
+      sections: [
+        ...DRAFT_WITH_EXCLUDED_METRIC.sections,
+        { heading: "Impact", statements: ["Shipped the on-call rotation tooling used by 5 engineering teams [C3]."] },
+      ],
+    };
+    const { bridge, model } = await setup((prompt) => ({
+      skills: ["claim-matching", "resume-drafting"],
+      forged: { requirements: requirementEntries(PLATFORM_LEAD_COVERAGE, prompt), resume: forgedResume },
+    }));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const started = await prepare(bridge, jobId);
+    expect(started.body.outcome).toBe("started");
+    const taskId = started.body.application.taskId;
+    expect(model.outputs.map((output) => output.status)).toEqual(["accepted"]);
+
+    // No document, no version, `processing` failed, the stage unchanged.
+    const application = await applicationRecord(bridge, taskId);
+    expect(application.documents).toEqual([]);
+    expect(application.stage).toBe("saved");
+    expect(application.processing).toMatchObject({ status: "failed", error: "The draft didn't pass the runner's checks, so nothing was saved." });
+    expect(await readdir(bridge.workspace.resolve("applications", taskId, "docs")).catch(() => [])).toEqual([]);
+    expect(await readdir(bridge.workspace.resolve("applications", taskId, "versions")).catch(() => [])).toEqual([]);
+
+    // The refusals are kept for the page: the number by its sentence, the excluded metric by place only.
+    const view = await detail(bridge, taskId);
+    expect(view.stage).toBe("saved");
+    expect(view.versions).toEqual([]);
+    expect(view.state).toEqual({ status: "failed", message: "The draft didn't pass the runner's checks, so nothing was saved." });
+    expect(view.preparation?.status).toBe("failed");
+    expect(view.preparation?.problems).toContainEqual({ rule: "excluded_claim", where: "Resume, Projects, bullet 1", sentence: "", message: EXCLUDED_PROBLEM_MESSAGE });
+    expect(view.preparation?.problems.find((problem) => problem.rule === "number")).toMatchObject({ where: "Resume, Impact, bullet 1", sentence: "Shipped the on-call rotation tooling used by 5 engineering teams." });
+    expect(JSON.stringify(view)).not.toContain("Grew signups");
+    const runs = await listRuns(bridge.workspace, bridge.clock);
+    expect(runs.records[0]).toMatchObject({ outcome: "failure", error: "The draft didn't pass the runner's checks, so nothing was saved." });
+  });
+
   it("keeps one problem per sentence that drew on an excluded claim, with no sentence and no detail", () => {
     const where = "Resume, Projects, bullet 1";
     const sentence = "Grew signups 500% after launching the self-serve onboarding flow.";
@@ -606,7 +670,8 @@ describe("gap questions", () => {
 
     let view = await detail(bridge, taskId);
     expect(view.stage).toBe("saved");
-    expect(view.state).toEqual({ status: "parked", message: "Waiting for your answer to 2 questions." });
+    // The line comes from the answers, never the count frozen when the preparation parked (revision 1, V11).
+    expect(view.state).toEqual({ status: "parked", message: "2 questions left.", open: 2 });
     expect(view.preparation?.questions).toEqual([
       { requirement: 1, requirementText: "8+ years of backend engineering experience", question: "How many years of backend engineering experience can you show?", answer: null },
       { requirement: 3, requirementText: "Strong distributed systems fundamentals", question: "Which of your work shows distributed systems experience?", answer: null },
@@ -627,8 +692,12 @@ describe("gap questions", () => {
     const answered = await post<{ ok: boolean; application: DetailView }>(bridge, `/${taskId}/answers`, { requirement: 1, answer: "leave_out" });
     expect(answered.status).toBe(200);
     expect(answered.body.application.preparation?.questions[0]?.answer).toBe("leave_out");
+    expect(answered.body.application.state).toEqual({ status: "parked", message: "1 question left.", open: 1 });
     expect((await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false })).body.error.message).toBe("Answer the 1 open question first; preparation continues after that.");
     expect((await post(bridge, `/${taskId}/answers`, { requirement: 3, answer: "leave_out" })).status).toBe(200);
+    expect((await detail(bridge, taskId)).state).toEqual({ status: "parked", message: "Ready to continue.", open: 0 });
+    const listed = (await get<ListView>(bridge, "")).body.applications.find((entry) => entry.taskId === taskId);
+    expect(listed?.state).toEqual({ status: "parked", message: "Ready to continue.", open: 0 });
     expect((await post<ErrorBody>(bridge, `/${taskId}/answers`, { requirement: 2, answer: "leave_out" })).body.error.code).toBe("no_open_question");
     expect(model.prompts).toHaveLength(1);
 
@@ -654,6 +723,7 @@ describe("gap questions", () => {
     const taskId = first.body.application.taskId;
     await post(bridge, `/${taskId}/answers`, { requirement: 1, answer: "add_evidence" });
     await post(bridge, `/${taskId}/answers`, { requirement: 3, answer: "leave_out" });
+    expect((await detail(bridge, taskId)).state).toEqual({ status: "parked", message: "Waiting for the evidence you're adding.", open: 0 });
     const refused = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false });
     expect(refused.status).toBe(409);
     expect(refused.body.error).toEqual({ code: "needs_profile", message: "Add the missing evidence to your profile and approve it, then prepare again." });
@@ -835,6 +905,57 @@ describe("a turn that doesn't finish", () => {
     expect(view.versions.map((version) => version.version)).toEqual([1]);
     expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "already_prepared", version: 1 });
   });
+
+  it("a runner that stopped after writing a version's files and record, before the application listed them, adopts that version at start (revision 1, nit c)", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    const store = new ApplicationsStore(bridge.workspace, bridge.clock);
+    const finished = await store.readPreparation(taskId);
+    if (!finished || finished === "unreadable") throw new Error("no attempt");
+    // The state just before finish's first write: every file and the version record written, nothing listed yet.
+    const { version: _version, ...rest } = finished;
+    void _version;
+    await store.update(taskId, (current) => ({ ...current, documents: [], stage: "saved", processing: { status: "running" } }));
+    await store.writePreparation(taskId, { ...rest, status: "running", owner: "another-runner-process" });
+
+    await applicationsModule.start!(bridge.ctx);
+    const application = await applicationRecord(bridge, taskId);
+    expect(application.documents.map((document) => [document.version, document.kind, document.format])).toEqual([
+      [1, "resume", "md"],
+      [1, "resume", "docx"],
+      [1, "resume", "pdf"],
+      [1, "diff", "md"],
+    ]);
+    expect(application.stage).toBe("ready");
+    expect(application.processing.status).toBe("idle");
+    expect(await store.readPreparation(taskId)).toMatchObject({ status: "done", version: 1 });
+    expect((await detail(bridge, taskId)).state).toEqual({ status: "idle", message: "" });
+    // No version number is skipped, and nothing is prepared twice.
+    expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "already_prepared", version: 1 });
+    expect(model.prompts).toHaveLength(1);
+  });
+
+  it("a version missing any of its files is never adopted: that preparation was interrupted", async () => {
+    const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    const store = new ApplicationsStore(bridge.workspace, bridge.clock);
+    const finished = await store.readPreparation(taskId);
+    if (!finished || finished === "unreadable") throw new Error("no attempt");
+    const { version: _version, ...rest } = finished;
+    void _version;
+    await store.update(taskId, (current) => ({ ...current, documents: [], stage: "saved", processing: { status: "running" } }));
+    await store.writePreparation(taskId, { ...rest, status: "running", owner: "another-runner-process" });
+    await unlink(bridge.workspace.resolve("applications", taskId, "docs", "resume-v1.pdf"));
+
+    await applicationsModule.start!(bridge.ctx);
+    const application = await applicationRecord(bridge, taskId);
+    expect(application.documents).toEqual([]);
+    expect(application.stage).toBe("saved");
+    expect(application.processing).toEqual({ status: "failed", error: INTERRUPTED_MESSAGE });
+    expect(await store.readPreparation(taskId)).toMatchObject({ status: "failed", error: INTERRUPTED_MESSAGE });
+  });
 });
 
 describe("the state while a preparation finishes", () => {
@@ -891,7 +1012,7 @@ describe("refusals before anything runs", () => {
     expect(refused.body.error).toEqual({ code: "not_ready", message: "Preparation is locked: the career profile has not been approved yet. The workflow will not guess." });
     expect(model.prompts).toEqual([]);
     const list = (await get<ListView>(bridge, "")).body;
-    expect(list.readiness).toEqual({ ready: false, message: "Preparation is locked: the career profile has not been approved yet. The workflow will not guess.", profileVersion: null });
+    expect(list.readiness).toEqual({ ready: false, code: "not_ready", message: "Preparation is locked: the career profile has not been approved yet. The workflow will not guess.", profileVersion: null });
     expect(list.applications).toEqual([]);
   });
 
@@ -913,10 +1034,11 @@ describe("refusals before anything runs", () => {
     expect(refused.status).toBe(409);
     expect(refused.body.error).toEqual({ code: "details_missing", message: "Add your name for the documents' header first." });
     expect((await post<ErrorBody>(bridge, "/details", { name: "   ", contact: "" })).body.error.code).toBe("name_missing");
-    const saved = await post<{ ok: boolean; details: { name: string; contact: string } }>(bridge, "/details", { name: " Ada Quill ", contact: "ada.quill@example.com" });
+    const saved = await post<{ ok: boolean; details: { name: string; contact: string; pdfMissing: string[] }; outdated: number }>(bridge, "/details", { name: " Ada Quill ", contact: "ada.quill@example.com" });
     expect(saved.status).toBe(200);
-    expect(saved.body.details).toEqual({ name: "Ada Quill", contact: "ada.quill@example.com" });
-    expect((await get<ListView>(bridge, "")).body.details).toEqual({ name: "Ada Quill", contact: "ada.quill@example.com" });
+    expect(saved.body.details).toEqual({ name: "Ada Quill", contact: "ada.quill@example.com", pdfMissing: [] });
+    expect(saved.body.outdated).toBe(0);
+    expect((await get<ListView>(bridge, "")).body.details).toEqual({ name: "Ada Quill", contact: "ada.quill@example.com", pdfMissing: [] });
     expect(model.prompts).toEqual([]);
   });
 
@@ -938,13 +1060,183 @@ describe("refusals before anything runs", () => {
   });
 });
 
+/** Every application record in the workspace, by file name. */
+async function applicationFiles(bridge: TestBridge): Promise<string[]> {
+  return (await readdir(bridge.workspace.resolve("applications"))).filter((name) => name.endsWith(".json") && name !== "details.json").sort();
+}
+
+describe("a damaged application record (revision 1, V7)", () => {
+  it("while the job's record can't be read, Prepare refuses and names the file, and never starts a second application", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    const file = bridge.workspace.resolve("applications", `${taskId}.json`);
+    const good = await readFile(file, "utf8");
+
+    // A hand edit that broke the record but kept its job id.
+    await writeFile(file, JSON.stringify({ ...JSON.parse(good), stage: "shipped" }));
+    let refused = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toEqual({
+      code: "application_unreadable",
+      message: `The application record applications/${taskId}.json can't be read, and it may be this job's, so preparing now could start a second one. Fix or restore that file, then prepare again.`,
+    });
+    expect(model.prompts).toHaveLength(1);
+    expect(await applicationFiles(bridge)).toEqual([`${taskId}.json`]);
+
+    // A record so damaged it names no job may be any job's: it refuses the same way.
+    await writeFile(file, "{ not json");
+    refused = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: true });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe("application_unreadable");
+    expect(refused.body.error.message).toContain(`applications/${taskId}.json`);
+    expect(model.prompts).toHaveLength(1);
+    expect(await applicationFiles(bridge)).toEqual([`${taskId}.json`]);
+    // The store refuses too, whoever asks.
+    await expect(new ApplicationsStore(bridge.workspace, bridge.clock).ensureForJob(jobId)).rejects.toThrow(`applications/${taskId}.json can't be read`);
+
+    // Restored, the job is prepared as before.
+    await writeFile(file, good);
+    expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "already_prepared", version: 1 });
+  });
+
+  it("a damaged record that names another job doesn't block this one", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const first = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const firstTask = (await prepare(bridge, first.jobId)).body.application.taskId;
+    const file = bridge.workspace.resolve("applications", `${firstTask}.json`);
+    await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, "utf8")), stage: "shipped" }));
+
+    const second = await seedJob(bridge.workspace, bridge.clock, { ...platformLeadJob(), url: "https://jobs.example/postings/fernwood-platform-lead-2" });
+    const started = await prepare(bridge, second.jobId);
+    expect(started.body.outcome).toBe("started");
+    expect(model.prompts).toHaveLength(2);
+    expect(await applicationFiles(bridge)).toHaveLength(2);
+    // The list still names the damaged file.
+    expect((await get<ListView & { unreadable: Array<{ path: string }> }>(bridge, "")).body.unreadable).toEqual([{ path: `applications/${firstTask}.json` }]);
+  });
+});
+
+describe("a changed name or contact line (revision 1, V8)", () => {
+  it("re-exports the latest validated draft with the new header as a new version naming the old one, with no model turn; the same header is already prepared", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId, true)).body.application.taskId;
+    const v1Documents = (await applicationRecord(bridge, taskId)).documents;
+    const v1Key = v1Documents[0]!.idempotencyKey;
+    expect(model.prompts).toHaveLength(1);
+    const v1Resume = await documentText(bridge, taskId, "resume-v1.md");
+
+    // The person corrects their name and contact line. The page is told the documents don't carry it yet.
+    const corrected = { name: "Ada Q. Quill", contact: "ada.q.quill@example.com · Remote" };
+    const saved = await post<{ ok: boolean; outdated: number }>(bridge, "/details", corrected);
+    expect(saved.body.outdated).toBe(1);
+    const latestBefore = (await detail(bridge, taskId)).versions[0]!;
+    expect(latestBefore.olderDetails).toBe(true);
+
+    // Even with the budget paused: a re-export runs no model and uses no run.
+    await pauseBudget(bridge.workspace, bridge.clock, "paused for this test");
+    bridge.clock.advance(60_000);
+    const again = await prepare(bridge, jobId, true);
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ outcome: "reexported", version: 2, replaces: 1 });
+    expect(model.prompts).toHaveLength(1);
+    expect((await listRuns(bridge.workspace, bridge.clock)).records).toHaveLength(1);
+
+    const application = await applicationRecord(bridge, taskId);
+    const v2Documents = application.documents.filter((document) => document.version === 2);
+    expect(v2Documents.map((document) => [document.kind, document.format])).toEqual([
+      ["resume", "md"],
+      ["resume", "docx"],
+      ["resume", "pdf"],
+      ["cover_letter", "md"],
+      ["cover_letter", "docx"],
+      ["cover_letter", "pdf"],
+      ["diff", "md"],
+    ]);
+    const v2Key = v2Documents[0]!.idempotencyKey;
+    expect(v2Key).not.toBe(v1Key);
+    expect(v2Key.replace(/\+details@[0-9a-f]+$/, "")).toBe(v1Key.replace(/\+details@[0-9a-f]+$/, ""));
+    expect(application.documents.filter((document) => document.version === 1)).toEqual(v1Documents);
+    // Every version-2 document carries the new header and the same sentences; version 1's files are untouched.
+    for (const document of v2Documents.filter((entry) => entry.kind !== "diff")) {
+      const text = flat(await documentText(bridge, taskId, document.path.split("/").at(-1)!));
+      expect(text, document.path).toContain("Ada Q. Quill");
+      expect(text, document.path).toContain(KNOWN_SENTENCE[document.kind]);
+      if (document.kind === "resume") expect(text, document.path).toContain("ada.q.quill@example.com");
+      expect(text, document.path).not.toContain("ada.quill@example.com");
+    }
+    expect(await documentText(bridge, taskId, "resume-v1.md")).toBe(v1Resume);
+    const v1Record = JSON.parse(await rawFile(bridge, "applications", taskId, "versions", "v1.json"));
+    const v2Record = JSON.parse(await rawFile(bridge, "applications", taskId, "versions", "v2.json"));
+    expect(v2Record).toMatchObject({ version: 2, replaces: 1, sameDraftAs: 1, header: corrected, profileVersion: 1, jobRevision: 1, coverLetter: true });
+    expect(v2Record.draft).toEqual(v1Record.draft);
+    expect(await documentText(bridge, taskId, "diff-v2.md")).toContain("- Only the name and contact line at the top changed. Every sentence is the same as in version 1, and no model ran.");
+
+    const view = await detail(bridge, taskId);
+    expect(view.versions.map((version) => [version.version, version.replaces, version.replacedBy, version.sameDraftAs, version.olderDetails])).toEqual([
+      [2, 1, null, 1, false],
+      [1, null, 2, null, true],
+    ]);
+    expect(view.versions[0]!.files[0]!.download).toBe("Ada Q. Quill - Resume - Fernwood Platform Lead.md");
+    expect(view.versions[1]!.files[0]!.download).toBe("Ada Quill - Resume - Fernwood Platform Lead.md");
+
+    // The same header again: already prepared, nothing new written.
+    const same = await prepare(bridge, jobId, true);
+    expect(same.body).toMatchObject({ outcome: "already_prepared", version: 2 });
+    expect((await applicationRecord(bridge, taskId)).documents).toHaveLength(14);
+    expect((await post<{ outdated: number }>(bridge, "/details", corrected)).body.outdated).toBe(0);
+  });
+
+  it("answers carried by a parked preparation survive a changed header", async () => {
+    const { bridge, model } = await setup(honest(FERNWOOD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, fixtureJob(FERNWOOD_JOB));
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    await post(bridge, `/${taskId}/answers`, { requirement: 1, answer: "leave_out" });
+    await post(bridge, "/details", { name: "Ada Q. Quill", contact: "" });
+    // One question is still open whatever the header: preparing is refused, not restarted from scratch.
+    expect((await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false })).body.error.code).toBe("needs_answers");
+    await post(bridge, `/${taskId}/answers`, { requirement: 3, answer: "leave_out" });
+    const next = await prepare(bridge, jobId);
+    expect(next.body.outcome).toBe("started");
+    expect(model.prompts[1]).toContain("- Requirement 1: leave it out.");
+    expect(model.prompts[1]).toContain("- Requirement 3: leave it out.");
+    expect(flat(await documentText(bridge, taskId, "resume-v1.pdf"))).toContain("Ada Q. Quill");
+  });
+});
+
+describe("characters the PDF can't draw (revision 1, V16)", () => {
+  it("are named for the page at the name field and beside each PDF, and the download names keep them", async () => {
+    const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE), { details: false });
+    const saved = await post<{ details: { pdfMissing: string[] } }>(bridge, "/details", { name: "Ада Квилл 李", contact: "ada.quill@example.com" });
+    expect(saved.body.details.pdfMissing).toEqual(["李"]);
+    expect((await get<ListView>(bridge, "")).body.details?.pdfMissing).toEqual(["李"]);
+
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId, true)).body.application.taskId;
+    const [version] = (await detail(bridge, taskId)).versions;
+    const missing = Object.fromEntries(version!.files.map((file) => [file.name, file.missing]));
+    expect(missing).toEqual({ "resume-v1.md": [], "resume-v1.docx": [], "resume-v1.pdf": ["李"], "cover-v1.md": [], "cover-v1.docx": [], "cover-v1.pdf": ["李"], "diff-v1.md": [] });
+    // The PDF prints the Cyrillic as typed and marks the one character it can't draw; the Markdown keeps it.
+    expect(flat(await documentText(bridge, taskId, "resume-v1.pdf"))).toContain("Ада Квилл �");
+    expect(await documentText(bridge, taskId, "resume-v1.md")).toContain("# Ада Квилл 李");
+    // A name outside ASCII downloads under its own name (RFC 6266's filename*), with a plain fallback.
+    const pdf = await download(bridge, taskId, "resume-v1.pdf");
+    expect(pdf.headers["content-disposition"]).toBe(
+      `attachment; filename="___ _____ _ - Resume - Fernwood Platform Lead.pdf"; filename*=UTF-8''${encodeURIComponent("Ада Квилл 李 - Resume - Fernwood Platform Lead.pdf")}`,
+    );
+    expect(version!.files.find((file) => file.name === "resume-v1.pdf")?.download).toBe("Ада Квилл 李 - Resume - Fernwood Platform Lead.pdf");
+  });
+});
+
 describe("the list view and downloads", () => {
   it("lists saved jobs to prepare and the applications", async () => {
     const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE));
     const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
     let list = (await get<ListView>(bridge, "")).body;
-    expect(list.readiness).toEqual({ ready: true, message: null, profileVersion: 1 });
+    expect(list.readiness).toEqual({ ready: true, code: null, message: null, profileVersion: 1 });
     expect(list.runner).toEqual({ ready: true, code: null, message: null });
+    expect(list.budget).toEqual({ dailyRunLimit: 10, runsUsedToday: 0 });
     expect(list.jobs).toEqual([{ jobId, name: "Platform Lead · Fernwood", revision: 1, extracted: true, taskId: null }]);
     expect(list.applications).toEqual([]);
 
@@ -952,6 +1244,24 @@ describe("the list view and downloads", () => {
     list = (await get<ListView>(bridge, "")).body;
     expect(list.jobs[0]!.taskId).toBe(started.body.application.taskId);
     expect(list.applications).toEqual([{ taskId: started.body.application.taskId, jobId, jobName: "Platform Lead · Fernwood", stage: "ready", latestVersion: 1, state: { status: "idle", message: "" } }]);
+    expect(list.budget).toEqual({ dailyRunLimit: 10, runsUsedToday: 1 });
+  });
+
+  it("lists applications by their most recent activity, newest first (revision 1, V18)", async () => {
+    const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const lead = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const second = await seedJob(bridge.workspace, bridge.clock, { ...platformLeadJob(), url: "https://jobs.example/postings/fernwood-platform-lead-2", structured: { ...platformLeadJob().structured, title: "Staff Platform Lead" } });
+    const first = (await prepare(bridge, lead.jobId)).body.application.taskId;
+    bridge.clock.advance(60_000);
+    const later = (await prepare(bridge, second.jobId)).body.application.taskId;
+    let order = (await get<ListView>(bridge, "")).body.applications.map((entry) => entry.taskId);
+    expect(order).toEqual([later, first]);
+    // Preparing the first one again (a new version) makes it the most recent.
+    await new ProfileStore(bridge.workspace, bridge.clock).decideClaim((await new ProfileStore(bridge.workspace, bridge.clock).read()).claims[5]!.id, "excluded");
+    bridge.clock.advance(60_000);
+    await prepare(bridge, lead.jobId);
+    order = (await get<ListView>(bridge, "")).body.applications.map((entry) => entry.taskId);
+    expect(order).toEqual([first, later]);
   });
 
   it("serves only the documents an application lists, as attachments that can't run in the page", async () => {

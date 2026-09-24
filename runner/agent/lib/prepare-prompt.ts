@@ -33,8 +33,9 @@ export interface PreparationPromptInput {
   readonly job: JobStructured;
 }
 
+/** `text` on one line: every run of white space, and NEL (U+0085, which `\s` leaves out), is one space (revision 1, nit d). */
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return text.replace(/[\s\u{85}]+/gu, " ").trim();
 }
 
 function list(items: readonly string[], empty: string): string[] {

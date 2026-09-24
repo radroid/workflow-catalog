@@ -32,8 +32,9 @@
         <form id="details-form" novalidate>
           <div class="field">
             <label for="details-name">Name</label>
-            <input id="details-name" name="name" type="text" autocomplete="name" maxlength="80" aria-describedby="details-name-error" required />
+            <input id="details-name" name="name" type="text" autocomplete="name" maxlength="80" aria-describedby="details-name-error details-name-note" required />
             <p id="details-name-error" class="field-error" hidden></p>
+            <p id="details-name-note" class="field-note small" hidden></p>
           </div>
           <div class="field">
             <label for="details-contact">Contact line <span class="muted">(optional)</span></label>

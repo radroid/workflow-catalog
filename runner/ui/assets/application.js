@@ -321,7 +321,26 @@ function formatDate(iso) {
 }
 
 /** A server message chosen for the person, in plain words. Only these codes' messages are shown as they come. */
-const PLAIN_SERVER_MESSAGES = new Set(["runner_not_running", "no_model", "budget_paused"]);
+const PLAIN_SERVER_MESSAGES = new Set(["runner_not_running", "no_model"]);
+
+/** The runner's own sentences name two pages; on this page each is a link (revision 1, V18). Only runner-written text passes through here. */
+const PAGE_LINKS = [
+  [/\bin Settings\b/g, "in [Settings](/ui/settings)"],
+  [/\bthe Runs page\b/g, "the [Runs](/ui/runs) page"],
+];
+
+function withPageLinks(message) {
+  return PAGE_LINKS.reduce((text, [pattern, link]) => text.replace(pattern, link), message);
+}
+
+/** What the PDF can't draw, and which formats keep it (revision 1, V16). `missing` is the person's own text: shown, never parsed. */
+function pdfWarning(missing) {
+  const shown = missing.slice(0, 6).map(quote);
+  const list = shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}` : shown[0];
+  const more = missing.length > 6 ? ` and ${plural(missing.length - 6, "more character")}` : "";
+  const one = missing.length === 1;
+  return `The PDF can't draw ${list}${more}, so it prints � in ${one ? "its" : "their"} place. The Markdown and Word files keep ${one ? "it" : "them"}.`;
+}
 
 // ---------------------------------------------------------------------------
 // The list: readiness, the job picker, the applications
@@ -337,16 +356,34 @@ let detailShown = 0;
 let detailKey = "";
 let openRequestToken = 0;
 
+/** Why the runner can't prepare, in this page's words. The paused budget gets its own, with the pages that act on it (revision 1, V18). */
+function runnerLine(runner) {
+  if (runner.code === "budget_paused") return "The run budget is paused, so nothing can be prepared. Resume it in [Settings](/ui/settings); the [Runs](/ui/runs) page shows why it paused.";
+  return PLAIN_SERVER_MESSAGES.has(runner.code) ? runner.message : "The runner can't prepare anything right now.";
+}
+
 function renderReady(view) {
   const items = [];
   const readiness = view.readiness;
   if (readiness.ready) {
     items.push(el("li", { className: "ready-ok", attrs: { id: "ready-profile" } }, `Your career profile, version ${readiness.profileVersion}, is approved.`));
+  } else if (readiness.code === "profile_unreadable") {
+    // The one case the Profile page is for: the file itself (revision 1, V12, V17).
+    items.push(el("li", { className: "ready-blocked", attrs: { id: "ready-profile" } }, ...renderPieces("Your `career-profile.md` has an edit the runner can't read. Fix it on the [Profile](/ui/profile) page first.")));
   } else {
-    items.push(el("li", { className: "ready-blocked", attrs: { id: "ready-profile" } }, readiness.message ?? "Preparation is locked until your career profile is ready.", " ", ...renderPieces("See the [Profile](/ui/profile) page.")));
+    // The reasons can quote a claim, so they are data, never markup; the way on is Onboarding, where evidence, sources and approval live.
+    items.push(
+      el("li", { className: "ready-blocked", attrs: { id: "ready-profile" } }, ...renderPieces([data(readiness.message ?? "Preparation is locked until your career profile is ready."), " Finish it on the [Onboarding](/ui/onboarding) page."])),
+    );
   }
   if (view.runner.ready) items.push(el("li", { className: "ready-ok", attrs: { id: "ready-runner" } }, "The runner's agent is running."));
-  else items.push(el("li", { className: "ready-blocked", attrs: { id: "ready-runner" } }, ...renderPieces(PLAIN_SERVER_MESSAGES.has(view.runner.code) ? view.runner.message : "The runner can't prepare anything right now.")));
+  else items.push(el("li", { className: "ready-blocked", attrs: { id: "ready-runner" } }, ...renderPieces(runnerLine(view.runner))));
+  const { dailyRunLimit, runsUsedToday } = view.budget;
+  if (runsUsedToday >= dailyRunLimit) {
+    items.push(el("li", { className: "ready-blocked", attrs: { id: "ready-runs" } }, ...renderPieces(`Today's run limit is reached: ${runsUsedToday} of ${dailyRunLimit} runs. Raise it in [Settings](/ui/settings), or prepare tomorrow.`)));
+  } else {
+    items.push(el("li", { className: "ready-ok", attrs: { id: "ready-runs" } }, ...renderPieces(`Runs today: ${runsUsedToday} of ${dailyRunLimit}. Each preparation uses one; the daily limit is in [Settings](/ui/settings).`)));
+  }
   if (view.details) items.push(el("li", { className: "ready-ok", attrs: { id: "ready-details" } }, "Documents will carry the name ", quote(view.details.name), "."));
   else items.push(el("li", { className: "ready-blocked", attrs: { id: "ready-details" } }, "Add your name below: every document carries it."));
   morphChildren($("ready-list"), items);
@@ -354,7 +391,17 @@ function renderReady(view) {
 
 let detailsTouched = false;
 
+/** The plain warning under the name field when the PDF can't draw part of the saved name or contact line (V16). */
+function renderNameNote(details) {
+  const node = $("details-name-note");
+  const missing = details?.pdfMissing ?? [];
+  const text = missing.length > 0 ? pdfWarning(missing) : "";
+  if (node.textContent !== text) node.textContent = text;
+  node.hidden = missing.length === 0;
+}
+
 function fillDetails(view) {
+  renderNameNote(view.details);
   if (detailsTouched || !view.details) return;
   const name = $("details-name");
   const contact = $("details-contact");
@@ -362,25 +409,39 @@ function fillDetails(view) {
   if (document.activeElement !== contact) contact.value = view.details.contact;
 }
 
+/** Whether the person chose a job in the picker: until then it follows the newest job whose details are extracted (V18). */
+let jobPicked = false;
+
 function renderJobPicker(view) {
   const select = $("prepare-job");
   const options = view.jobs.map((job) =>
     el("option", { text: job.extracted ? job.name : `${job.name} (details not extracted yet)`, attrs: { id: `job-option-${job.jobId}`, value: job.jobId } }),
   );
   morphChildren(select, options);
+  const extracted = view.jobs.find((job) => job.extracted);
+  if (!jobPicked && extracted && select.value !== extracted.jobId && document.activeElement !== select) select.value = extracted.jobId;
   $("prepare-form").hidden = view.jobs.length === 0;
   $("jobs-empty").hidden = view.jobs.length > 0;
 }
+
+$("prepare-job").addEventListener("change", () => {
+  jobPicked = true;
+});
 
 function isRunning(state) {
   return state?.status === "running";
 }
 
+/**
+ * The row's line. A parked preparation's line comes from its answers ("1 question left", "Ready to continue",
+ * "Waiting for the evidence you're adding"), and amber marks it only while a question is open (revision 1, V11).
+ */
 function rowStatus(entry) {
   const state = entry.state;
   if (state.status === "running") return el("p", { className: "app-status muted small", text: "Preparing now…" });
-  if (state.status === "parked") return el("p", { className: "app-status small" }, el("span", { className: "badge warn", text: "Needs your answer" }), " ", state.message);
-  if (state.status === "failed" || state.status === "interrupted") return el("p", { className: "app-status refused small" }, ...renderPieces(state.message));
+  if (state.status === "parked" && state.open > 0) return el("p", { className: "app-status small" }, el("span", { className: "badge warn", text: "Needs your answer" }), " ", state.message);
+  if (state.status === "parked") return el("p", { className: "app-status small", text: state.message });
+  if (state.status === "failed" || state.status === "interrupted") return el("p", { className: "app-status refused small" }, ...renderPieces(withPageLinks(state.message)));
   return null;
 }
 
@@ -414,24 +475,29 @@ function renderList() {
   });
 }
 
-async function loadList({ announceErrors = false } = {}) {
+/** Loads the list. Resolves true when it loaded, false (with the failure announced only on the first load) when it didn't. */
+async function loadList({ announceErrors = false, onError } = {}) {
   const seq = (listSeq += 1);
   let view;
   try {
     view = await getJson("/api/applications");
   } catch (error) {
-    if (!announceErrors) return;
+    onError?.(error);
+    if (!announceErrors) return false;
     keepInPlace(() => {
       morphChildren($("applications-list"), []);
       morphChildren($("ready-list"), []);
     });
+    unreachableShown = true;
     lastAction(error?.code === "unreachable" ? CANT_REACH : "Couldn't load your applications; reload the page to try again.", "refused");
-    return;
+    return false;
   }
-  if (seq < listShown) return;
+  if (seq < listShown) return true;
   listShown = seq;
   listView = view;
+  watchRunning(view);
   renderList();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,15 +533,17 @@ function renderQuestions(detail) {
     ),
   );
   const open = openQuestions(detail);
+  // Amber, and the heading that asks, only while a question is open (revision 1, V11).
   const children = [
-    el("h3", { text: "Needs your answer" }),
+    el("h3", { attrs: { id: "questions-heading" }, text: open > 0 ? "Needs your answer" : "Your answers" }),
     el("p", { className: "small", text: "No confirmed claim meets these requirements, so the model asked instead of guessing. Nothing was drafted yet." }),
     el("ol", { className: "questions" }, ...items),
   ];
-  if (open > 0) children.push(el("p", { className: "small muted", attrs: { id: "questions-next" }, text: `Answer ${open === 1 ? "the last question" : `all ${plural(open, "question")}`} to continue preparing.` }));
-  else if (needsEvidence(detail)) children.push(el("p", { className: "small", attrs: { id: "questions-next" } }, ...renderPieces("Add that evidence on the [Profile](/ui/profile) page and approve it, then prepare this job again.")));
+  const remaining = open === 1 ? "the last question" : open === 2 ? "both questions" : `all ${plural(open, "question")}`;
+  if (open > 0) children.push(el("p", { className: "small muted", attrs: { id: "questions-next" }, text: `Answer ${remaining} to continue preparing.` }));
+  else if (needsEvidence(detail)) children.push(el("p", { className: "small", attrs: { id: "questions-next" } }, ...renderPieces("Add that evidence on the [Onboarding](/ui/onboarding) page and approve it, then prepare this job again.")));
   else children.push(el("p", { className: "small", attrs: { id: "questions-next" }, text: "Every question is answered: continue preparing below." }));
-  return el("div", { className: "questions-block notice decision", attrs: { id: "detail-questions" } }, ...children);
+  return el("div", { className: `questions-block notice${open > 0 ? " decision" : " answered"}`, attrs: { id: "detail-questions" } }, ...children);
 }
 
 /** The open application's questions, while its preparation waits for answers. */
@@ -510,8 +578,11 @@ function coverageLine(detail, entry) {
   // The same words as the questions block: "Requirement N: “…”". A line set aside is never quoted back (a posting can hide an instruction there).
   const head = entry.requirementText === null ? [`Requirement ${entry.requirement}`] : [`Requirement ${entry.requirement}: `, quote(entry.requirementText)];
   switch (entry.status) {
-    case "covered":
-      return el("li", {}, ...head, el("span", { className: "muted" }, " — met by ", ...entry.labels.flatMap((label, index) => [index > 0 ? ", " : "", quote(claims.get(label) ?? "a confirmed claim")]).filter(Boolean)));
+    case "covered": {
+      // “A”, “B” and “C” (revision 1, V18).
+      const joiner = (index) => (index === 0 ? "" : index === entry.labels.length - 1 ? " and " : ", ");
+      return el("li", {}, ...head, el("span", { className: "muted" }, " — met by ", ...entry.labels.flatMap((label, index) => [joiner(index), quote(claims.get(label) ?? "a confirmed claim")]).filter(Boolean)));
+    }
     case "left_out":
       return el("li", {}, ...head, el("span", { className: "muted", text: " — left out, as you asked." }));
     case "not_a_requirement":
@@ -555,8 +626,10 @@ function renderChanges(detail, version) {
   const shown = version.changes.filter((change) => change.kind !== "unchanged");
   const unchanged = version.changes.length - shown.length;
   const items = shown.map(changeItem);
-  if (items.length === 0) items.push(el("li", { text: "Nothing changed in the wording." }));
-  else if (unchanged > 0) items.push(el("li", { className: "muted", text: `Unchanged: ${plural(unchanged, "sentence")}.` }));
+  // A re-export (revision 1, V8): the same sentences under a new name or contact line, in diff-v<n>.md's words.
+  if (version.sameDraftAs) items.unshift(el("li", { text: `Only the name and contact line at the top changed. Every sentence is the same as in version ${version.sameDraftAs}, and no model ran.` }));
+  else if (items.length === 0) items.push(el("li", { text: "Nothing changed in the wording." }));
+  if (shown.length > 0 && unchanged > 0) items.push(el("li", { className: "muted", text: `Unchanged: ${plural(unchanged, "sentence")}.` }));
   return [el("h5", { text: `Since version ${version.replaces}` }), el("ul", { className: "changes" }, ...items)];
 }
 
@@ -588,18 +661,36 @@ function renderStatements(detail, version) {
 function renderVersion(detail, version, latest) {
   const id = `changes-${detail.taskId}-${version.version}`;
   const open = isOpenNow(id);
-  const meta = `Prepared ${formatDate(version.createdAt)} from career profile version ${version.profileVersion} and job revision ${version.jobRevision}.${version.replaces ? ` It replaces version ${version.replaces}.` : ""}`;
+  const replaces = version.replaces ? ` It replaces version ${version.replaces}.` : "";
+  const meta = version.sameDraftAs
+    ? `Prepared ${formatDate(version.createdAt)} with your updated name and contact line: the same sentences as version ${version.sameDraftAs}.${replaces}`
+    : `Prepared ${formatDate(version.createdAt)} from career profile version ${version.profileVersion} and job revision ${version.jobRevision}.${replaces}`;
+  // What to prepare again for belongs to the latest version alone; an older one says which version replaced it (revision 1, V15).
   const notes = [];
-  if (latest && version.olderProfile) notes.push(el("p", { className: "version-note small", text: "Your career profile has changed since this version. Prepare again to use its current version." }));
-  if (version.noLongerConfirmed.length > 0) {
-    const n = version.noLongerConfirmed.length;
-    notes.push(el("p", { className: "version-note small", text: `It cites ${plural(n, "claim")} you have since excluded or changed. Prepare again for a version without ${n === 1 ? "it" : "them"}.` }));
+  if (latest) {
+    if (version.olderProfile) notes.push(el("p", { className: "version-note small", text: "Your career profile has changed since this version. Prepare again to use its current version." }));
+    if (version.olderDetails) notes.push(el("p", { className: "version-note small", text: "Your name or contact line has changed since this version. Prepare again to put it on your documents." }));
+    if (version.noLongerConfirmed.length > 0) {
+      const n = version.noLongerConfirmed.length;
+      notes.push(el("p", { className: "version-note small", text: `It cites ${plural(n, "claim")} you have since excluded or changed. Prepare again for a version without ${n === 1 ? "it" : "them"}.` }));
+    }
+  } else if (version.replacedBy) {
+    notes.push(el("p", { className: "version-note small", text: `Version ${version.replacedBy} replaces it.` }));
   }
+  // Each link names its version (V18) and downloads under the person's name, the document and the job (V14);
+  // a PDF that can't draw every character says so beside it, and which formats keep them (V16).
   const files = el(
     "ul",
     { className: "exports" },
     ...version.files.map((file) =>
-      el("li", {}, el("a", { attrs: { href: file.href, download: file.name } }, `${KIND_WORDS[file.kind] ?? "Document"} · ${FORMAT_WORDS[file.format] ?? file.format}`), " ", el("code", { text: file.name })),
+      el(
+        "li",
+        {},
+        el("a", { attrs: { href: file.href, download: file.download ?? file.name } }, `${KIND_WORDS[file.kind] ?? "Document"}, version ${version.version} · ${FORMAT_WORDS[file.format] ?? file.format}`),
+        " ",
+        el("code", { text: file.name }),
+        file.missing?.length > 0 ? el("p", { className: "export-note small", text: pdfWarning(file.missing) }) : null,
+      ),
     ),
   );
   const details = el(
@@ -624,7 +715,7 @@ function renderStatus(detail) {
   const state = detail.state;
   const lines = [el("p", { className: "detail-stage", attrs: { id: "detail-stage" } }, STAGE_WORDS[detail.stage] ?? "Saved", detail.versions.length > 0 ? ` · ${plural(detail.versions.length, "version")}` : "")];
   if (state.status === "running") lines.push(el("p", { className: "detail-state muted small", attrs: { id: "detail-state" }, text: state.message }));
-  else if (state.status === "failed" || state.status === "interrupted") lines.push(el("p", { className: "detail-state refused small", attrs: { id: "detail-state" } }, ...renderPieces(state.message)));
+  else if (state.status === "failed" || state.status === "interrupted") lines.push(el("p", { className: "detail-state refused small", attrs: { id: "detail-state" } }, ...renderPieces(withPageLinks(state.message))));
   return el("div", { className: "detail-status", attrs: { id: "detail-status" } }, ...lines);
 }
 
@@ -721,11 +812,46 @@ async function openApplication(taskId, { focus = true, detail: known } = {}) {
 // ---------------------------------------------------------------------------
 // Refreshing: every 2 s while a preparation runs, every 5 s otherwise, only
 // while the page is visible. Announces, once each, the results of the
-// preparations this page started.
+// preparations it watches: the ones this page started, and every one the
+// list showed running, so a reload or a revisit mid-preparation still hears
+// how it ended (revision 1, V13).
 // ---------------------------------------------------------------------------
 
-/** Preparations this page started: taskId → the job's name. */
+/** Watched preparations: taskId → the job's name. */
 const started = new Map();
+
+/** Watches every application the list shows running. */
+function watchRunning(view) {
+  for (const entry of view.applications) if (isRunning(entry.state) && !started.has(entry.taskId)) started.set(entry.taskId, entry.jobName);
+}
+
+/** Whether the "can't reach the runner" line is up: it is announced once per outage, and cleared by the next good refresh. */
+let unreachableShown = false;
+
+function lineText() {
+  return $("last-action").querySelector(".text").textContent;
+}
+
+/** A watched preparation couldn't be refreshed: say so once, however many refreshes fail after it. */
+function showUnreachable(error) {
+  if (unreachableShown || started.size === 0) return;
+  unreachableShown = true;
+  lastAction(error?.code === "unreachable" ? CANT_REACH : "Couldn't refresh your applications: the runner hit a problem.", "refused");
+}
+
+/** The first good refresh after an outage: the line stops saying the runner can't be reached, and says what is true now. */
+function clearUnreachable() {
+  if (!unreachableShown) return;
+  unreachableShown = false;
+  const text = lineText();
+  if (text !== CANT_REACH && text !== "Couldn't refresh your applications: the runner hit a problem." && text !== "Couldn't load your applications; reload the page to try again.") return;
+  const entries = [...started].map(([taskId, name]) => ({ name, entry: listView?.applications.find((application) => application.taskId === taskId) }));
+  const running = entries.find(({ entry }) => entry && isRunning(entry.state));
+  const settling = entries.some(({ entry }) => entry && !isRunning(entry.state));
+  if (running) lastAction(withName("Still preparing ", running.name, "…"), "working");
+  else if (!settling) lastAction("Reached the runner again.", "done");
+  // Otherwise announceSettled, next, says how the watched preparation ended.
+}
 
 function announceSettled() {
   for (const [taskId, name] of [...started]) {
@@ -758,8 +884,14 @@ async function refreshOnce(options) {
   clearTimeout(refreshTimer);
   refreshTimer = null;
   try {
-    await loadList(options);
+    let failure = null;
+    const loaded = await loadList({ ...options, onError: (error) => (failure = error) });
+    if (!loaded) {
+      if (!options.announceErrors) showUnreachable(failure);
+      return;
+    }
     await reloadDetail();
+    clearUnreachable();
     announceSettled();
   } finally {
     scheduleRefresh();
@@ -789,19 +921,27 @@ document.addEventListener("visibilitychange", () => {
 /** Refusals before anything runs, by the server's stable code: one short sentence each; the page's sections carry the detail. */
 const PREPARE_REFUSALS = {
   details_missing: "Not prepared: add your name for the documents first.",
-  not_extracted: "Not prepared: this job's details haven't been extracted yet.",
+  not_extracted: "Not prepared: extract this job's details on the [Jobs](/ui/jobs) page first.",
   not_ready: "Not prepared: preparation is locked until your profile is ready.",
-  profile_unreadable: "Not prepared: your career-profile.md has an edit the runner can't read.",
+  profile_unreadable: "Not prepared: your `career-profile.md` has an edit the runner can't read.",
+  application_unreadable: "Not prepared: a damaged application record may be this job's; see Applications below.",
   needs_answers: "Not prepared: answer the open questions first.",
-  needs_profile: "Not prepared: add the missing evidence to your profile first.",
+  needs_profile: "Not prepared: add the missing evidence on the [Onboarding](/ui/onboarding) page first.",
   runner_not_running: "Not prepared: the runner's agent isn't running.",
   no_model: "Not prepared: no model is set up.",
-  budget_paused: "Not prepared: the run budget is paused.",
+  budget_paused: "Not prepared: the run budget is paused; resume it in [Settings](/ui/settings).",
   snapshot_unreadable: "Not prepared: this job's saved posting can't be read.",
   job_not_found: "Not prepared: that job couldn't be found.",
   profile_busy: "Not prepared: your profile is busy; try again in a moment.",
   unreachable: CANT_REACH,
 };
+
+/** Moves focus to the name field and brings it clear of the line: where the person acts next. */
+function focusNameField() {
+  const field = $("details-name");
+  field.focus({ preventScroll: true });
+  keepClear(field);
+}
 
 /** Jobs whose prepare request is in flight: a refresh renders their action button aria-disabled until it answers. */
 const preparingJobs = new Set();
@@ -820,6 +960,8 @@ async function prepareJob(jobId, coverLetter, button) {
     button.setAttribute("aria-disabled", "false");
     detailKey = ""; // the next refresh renders the open application's button from its data again
     lastAction(PREPARE_REFUSALS[error?.code] ?? "Not prepared: the runner hit a problem; try again.", "refused");
+    // The name is what's missing: the name field is where to go next (revision 1, V18).
+    if (error?.code === "details_missing") focusNameField();
     await refresh().catch(() => undefined);
     return;
   }
@@ -829,6 +971,9 @@ async function prepareJob(jobId, coverLetter, button) {
   const detail = result.application;
   if (result.outcome === "already_prepared") {
     lastAction(withName("Already prepared: ", detail.jobName, ` matches version ${result.version}; nothing new.`), "done");
+  } else if (result.outcome === "reexported") {
+    // Only the name or contact line changed: the checked draft went out again under it, with no model turn (V8).
+    lastAction(withName("Re-exported ", detail.jobName, ` as version ${result.version}, with your new details.`), "done");
   } else if (result.outcome === "already_running") {
     lastAction(withName("Already preparing ", detail.jobName, "…"), "working");
     started.set(detail.taskId, detail.jobName);
@@ -912,16 +1057,14 @@ $("details-form").addEventListener("submit", async (event) => {
     const stayed = document.activeElement === field;
     setNameError("Enter your name as it should appear on your documents.");
     lastAction(stayed ? "Not saved: your name is empty." : "Not saved.", "refused");
-    if (!stayed) {
-      field.focus({ preventScroll: true });
-      keepClear(field);
-    }
+    if (!stayed) focusNameField();
     return;
   }
   button.setAttribute("aria-disabled", "true");
   workingAfterDelay("Saving…");
+  let result;
   try {
-    await postJson("/api/applications/details", { name, contact });
+    result = await postJson("/api/applications/details", { name, contact });
   } catch (error) {
     lastAction(error?.code === "unreachable" ? CANT_REACH : "Not saved: the runner hit a problem; try again.", "refused");
     return;
@@ -931,7 +1074,9 @@ $("details-form").addEventListener("submit", async (event) => {
   }
   detailsTouched = false;
   setNameError("");
-  lastAction("Saved: your documents will carry this name.", "done");
+  renderNameNote(result.details);
+  // What's true: documents already prepared keep the header they were made with until they're prepared again (V8).
+  lastAction(result.outdated > 0 ? "Saved. Prepare again to put it on your documents." : "Saved: your documents will carry this name.", "done");
   await refresh().catch(() => undefined);
 });
 

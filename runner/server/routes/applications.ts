@@ -6,20 +6,25 @@ import { postingText, requirementsDigest, reviewPreparation } from "../../agent/
 import { buildPreparationPrompt } from "../../agent/lib/prepare-prompt.ts";
 import { actionsOutsidePreparation, preparationCall, type PrepareApplicationOutput } from "../../agent/lib/prepare-schema.ts";
 import { presentationSummary, renderDiffMarkdown, statementDiffs, versionChanges, type SourceClaim, type StatementDiff } from "../../export/diff.ts";
-import { coverLetterModel, letterDate, resumeModel, type PersonHeader } from "../../export/document.ts";
+import { coverLetterModel, letterDate, resumeModel, type DocumentModel } from "../../export/document.ts";
 import { renderDocx } from "../../export/docx.ts";
+import { contentDisposition, downloadName } from "../../export/file-names.ts";
 import { renderMarkdown } from "../../export/markdown.ts";
-import { renderPdf } from "../../export/pdf.ts";
+import { pdfMissing, pdfUnsupported, renderPdf } from "../../export/pdf.ts";
 import { sha256Hex } from "../../lib/crypto.ts";
 import {
   ApplicationsStore,
+  documentsForVersion,
   GAP_ANSWERS,
   isDocumentFileName,
   personDetailsSchema,
+  versionFiles,
   type GapAnswer,
+  type PersonDetails,
   type PreparationProblem,
   type PreparationRecord,
   type PreparedClaim,
+  type UnreadableApplication,
   type VersionRecord,
 } from "../../store/applications.ts";
 import { getBudgetState } from "../../store/budget.ts";
@@ -46,15 +51,21 @@ import { runTurn, withRun, type TurnResult } from "../run-harness.ts";
  * 1. Refused up front, plainly, when it can't be done: no name for the
  *    documents' header yet, the job's details not extracted, the career
  *    profile not ready ("Preparation is locked: … The workflow will not
- *    guess."), or the runner unable to run a turn (eve, a model, the budget).
+ *    guess."), an application record that can't be read and may be this
+ *    job's (preparing would start a second one), or the runner unable to run
+ *    a turn (eve, a model, the budget).
  * 2. The idempotency key: the job and its revision, the profile's approved
- *    version, the options that change the output (the cover letter), and a
+ *    version, the options that change the output (the cover letter), a
  *    digest of every input the model reads (the confirmed claims, the
- *    profile's notes, the job's fields). Documents already carrying that key
+ *    profile's notes, the job's fields), and a digest of the documents'
+ *    header (the name and contact line). Documents already carrying that key
  *    mean "already prepared": nothing runs and nothing new is written. The
- *    digest is there because excluding a claim after approval keeps the
- *    profile's version (P03), and a document must never outlive a claim's
- *    exclusion unnoticed.
+ *    inputs digest is there because excluding a claim after approval keeps
+ *    the profile's version (P03), and a document must never outlive a
+ *    claim's exclusion unnoticed. When only the header changed, the latest
+ *    draft validated for the same inputs is exported again with the new
+ *    header, as a new version naming the old one: no model turn runs, and
+ *    no run is used.
  * 3. A preparation attempt (`applications/<taskId>/preparation.json`)
  *    records the labelled claims and the job revision, and the application's
  *    `processing` goes to `running`. Its stage never moves until documents
@@ -151,9 +162,31 @@ function inputsDigest(claims: readonly PreparedClaim[], profile: OnboardingProfi
   ).slice(0, 12);
 }
 
-/** `<jobId>@<revision>+profile@v<version>+<resume|resume+cover>+inputs@<digest>`: the walkthrough's key, plus the output options and the inputs digest. */
+/** A digest of the documents' header: a changed name or contact line is a new key (revision 1, V8). */
+export function detailsDigest(details: PersonDetails): string {
+  return sha256Hex(JSON.stringify({ name: details.name, contact: details.contact })).slice(0, 12);
+}
+
+/** `<jobId>@<revision>+profile@v<version>+<resume|resume+cover>+inputs@<digest>`: what the model's work depends on, the walkthrough's key plus the output options and the inputs digest. */
 export function preparationKey(jobId: string, jobRevision: number, profileVersion: number, coverLetter: boolean, digest: string): string {
   return `${jobId}@${jobRevision}+profile@v${profileVersion}+${coverLetter ? "resume+cover" : "resume"}+inputs@${digest}`;
+}
+
+/** The documents' key: the preparation key plus `+details@<digest>` of the header they carry. */
+export function documentsKey(content: string, details: PersonDetails): string {
+  return `${content}+details@${detailsDigest(details)}`;
+}
+
+const DETAILS_PART = /\+details@([0-9a-f]+)$/;
+
+/** A key without its `+details@…` part: the part a changed name or contact line leaves alone. */
+export function contentKey(key: string): string {
+  return key.replace(DETAILS_PART, "");
+}
+
+/** The header digest a key carries, if it carries one. */
+function detailsPartOf(key: string): string | undefined {
+  return DETAILS_PART.exec(key)?.[1];
 }
 
 function preparedClaims(profile: OnboardingProfile): PreparedClaim[] {
@@ -164,6 +197,14 @@ function preparedClaims(profile: OnboardingProfile): PreparedClaim[] {
 function lockedMessage(reasons: readonly string[]): string {
   const first = (reasons[0] ?? "the career profile isn't ready").replace(/^Not ready:\s*/, "").replace(/\.\s*$/, "");
   return `Preparation is locked: ${first}. ${LOCKED_SUFFIX}`;
+}
+
+/** Why a damaged record blocks preparing (revision 1, V7), naming each file. */
+function damagedMessage(damaged: readonly UnreadableApplication[]): string {
+  if (damaged.length === 1) {
+    return `The application record ${damaged[0]!.path} can't be read, and it may be this job's, so preparing now could start a second one. Fix or restore that file, then prepare again.`;
+  }
+  return `The application records ${damaged.map((entry) => entry.path).join(", ")} can't be read, and one may be this job's, so preparing now could start a second one. Fix or restore them, then prepare again.`;
 }
 
 // --- Starting a preparation --------------------------------------------------
@@ -180,6 +221,7 @@ export type PrepareStart =
   | { readonly outcome: "refused"; readonly status: 404 | 409; readonly code: string; readonly message: string }
   | { readonly outcome: "already_prepared"; readonly taskId: string; readonly version: number }
   | { readonly outcome: "already_running"; readonly taskId: string }
+  | { readonly outcome: "reexported"; readonly taskId: string; readonly version: number; readonly replaces: number }
   | { readonly outcome: "started"; readonly taskId: string };
 
 interface Plan {
@@ -207,16 +249,34 @@ async function runnerRefusal(ctx: RunnerContext): Promise<PrepareStart | undefin
   return undefined;
 }
 
-/** A previous attempt's answers carry over to the next attempt for the same key. */
+/** A previous attempt's answers carry over to the next attempt for the same inputs (whatever the header). */
 function carriedAnswers(previous: PreparationRecord | "unreadable" | undefined, key: string): PreparationRecord["answers"] {
-  if (!previous || previous === "unreadable" || previous.idempotencyKey !== key) return [];
+  if (!previous || previous === "unreadable" || contentKey(previous.idempotencyKey) !== contentKey(key)) return [];
   return previous.answers;
+}
+
+/** The document of the highest version among `documents`, if any. */
+function newestDocument(documents: readonly ApplicationDocument[]): ApplicationDocument | undefined {
+  return documents.reduce<ApplicationDocument | undefined>((newest, document) => (!newest || document.version > newest.version ? document : newest), undefined);
+}
+
+/** The newest document carrying `key`, if any: that version is already prepared. */
+function preparedWith(application: Application, key: string): ApplicationDocument | undefined {
+  return newestDocument(application.documents.filter((document) => document.idempotencyKey === key));
+}
+
+/** The newest attached version prepared from the same inputs as `content`: what a changed header re-exports (V8). */
+async function reexportSource(applications: ApplicationsStore, application: Application, content: string): Promise<VersionRecord | undefined> {
+  const attached = new Set(application.documents.map((document) => document.version));
+  const versions = await applications.listVersions(application.taskId);
+  return versions.filter((version) => attached.has(version.version) && contentKey(version.idempotencyKey) === content).at(-1);
 }
 
 /**
  * Starts preparing `request.jobId`'s latest revision, or says why not, or
  * that it is already prepared or already running. Resolves as soon as the
  * turn is queued; `waitForPreparationQueue` resolves once it has finished.
+ * A changed header alone re-exports before resolving, with no turn.
  */
 export async function startPreparation(ctx: RunnerContext, request: PrepareRequest): Promise<PrepareStart> {
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
@@ -241,15 +301,23 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
 
   const claims = preparedClaims(profile);
   const profileVersion = profile.approval.version;
-  const key = preparationKey(request.jobId, jobRevision, profileVersion, request.coverLetter, inputsDigest(claims, profile, snapshot.structured));
+  const content = preparationKey(request.jobId, jobRevision, profileVersion, request.coverLetter, inputsDigest(claims, profile, snapshot.structured));
+  const key = documentsKey(content, details);
+
+  // V7: a damaged record may be this job's; preparing now would start a second application for it.
+  const damaged = await applications.damagedForJob(request.jobId);
+  if (damaged.length > 0) return refused(409, "application_unreadable", damagedMessage(damaged));
 
   const existing = await applications.findByJob(request.jobId);
   if (existing) {
-    const done = existing.documents.find((document) => document.idempotencyKey === key);
+    const done = preparedWith(existing, key);
     if (done) return { outcome: "already_prepared", taskId: existing.taskId, version: done.version };
     if (IN_FLIGHT.has(flightKey(ctx, existing.taskId))) return { outcome: "already_running", taskId: existing.taskId };
+    // V8: the same inputs under another name or contact line: export the validated draft again, with no turn.
+    const source = await reexportSource(applications, existing, content);
+    if (source) return reexport(ctx, existing, source, key, details);
     const previous = await applications.readPreparation(existing.taskId);
-    if (previous && previous !== "unreadable" && previous.status === "parked" && previous.idempotencyKey === key) {
+    if (previous && previous !== "unreadable" && previous.status === "parked" && contentKey(previous.idempotencyKey) === content) {
       const answered = new Map(previous.answers.map((answer) => [answer.requirement, answer.answer]));
       const open = previous.questions.filter((question) => !answered.has(question.requirement));
       if (open.length > 0) return refused(409, "needs_answers", `Answer the ${plural(open.length, "open question")} first; preparation continues after that.`);
@@ -307,6 +375,33 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
   } catch (error) {
     IN_FLIGHT.delete(flight);
     throw error;
+  }
+}
+
+/**
+ * V8: exports `source`'s validated draft again under `details`, as a new version naming the one it replaces, and
+ * attaches it. No model turn and no run: nothing the model read has changed, so its checked work stands; only the
+ * header the runner adds at export is new.
+ */
+async function reexport(ctx: RunnerContext, application: Application, source: VersionRecord, key: string, details: PersonDetails): Promise<PrepareStart> {
+  const flight = flightKey(ctx, application.taskId);
+  if (IN_FLIGHT.has(flight)) return { outcome: "already_running", taskId: application.taskId };
+  IN_FLIGHT.add(flight);
+  try {
+    const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
+    const read = await new JobsStore(ctx.workspace).readSnapshot(application.jobId, source.jobRevision);
+    if (read.kind !== "ok") return refused(409, "snapshot_unreadable", "This job's latest revision can't be read, so it can't be prepared.");
+    const plan = { taskId: application.taskId, profileVersion: source.profileVersion, jobRevision: source.jobRevision, coverLetter: source.coverLetter, idempotencyKey: key };
+    const { version, documents } = await exportVersion(ctx, plan, source.draft, source.sources, read.snapshot, details, source.version);
+    await applications.update(application.taskId, (current) => ({
+      ...current,
+      documents: [...current.documents, ...documents],
+      stage: current.stage === "saved" || current.stage === "preparing" ? "ready" : current.stage,
+      processing: { status: "idle", ...(current.processing.runId ? { runId: current.processing.runId } : {}) },
+    }));
+    return { outcome: "reexported", taskId: application.taskId, version: version.version, replaces: version.replaces ?? source.version };
+  } finally {
+    IN_FLIGHT.delete(flight);
   }
 }
 
@@ -507,8 +602,8 @@ export async function preparePackage(ctx: RunnerContext, plan: Plan): Promise<{ 
   const live = await new ProfileStore(ctx.workspace, ctx.clock).load();
   const liveReadiness = profileReadiness(live.profile);
   const liveClaims = preparedClaims(live.profile);
-  const liveKey = live.profile.approval ? preparationKey(plan.jobId, plan.jobRevision, live.profile.approval.version, plan.coverLetter, inputsDigest(liveClaims, live.profile, read.snapshot.structured)) : undefined;
-  if (live.markdownError || !liveReadiness.ready || liveKey !== plan.idempotencyKey) {
+  const liveContent = live.profile.approval ? preparationKey(plan.jobId, plan.jobRevision, live.profile.approval.version, plan.coverLetter, inputsDigest(liveClaims, live.profile, read.snapshot.structured)) : undefined;
+  if (live.markdownError || !liveReadiness.ready || liveContent !== contentKey(plan.idempotencyKey)) {
     return fail([turn], "Your career profile changed while this was being prepared, so nothing was saved. Prepare it again.");
   }
   const draft: Draft = result.draft;
@@ -518,21 +613,42 @@ export async function preparePackage(ctx: RunnerContext, plan: Plan): Promise<{ 
     return fail([turn], "The draft didn't pass the runner's checks, so nothing was saved.", keptProblems(problems));
   }
 
+  // The header as it is now: the documents' key names the header they actually carry.
   const details = await applications.readDetails();
   if (!details) return fail([turn], "Add your name for the documents' header, then prepare again.");
-  const exported = await exportVersion(ctx, plan, draft, liveClaims, read.snapshot, details);
+  const exported = await exportVersion(ctx, { ...plan, idempotencyKey: documentsKey(liveContent, details) }, draft, liveClaims, read.snapshot, details);
   return { turns: [turn], outcome: { kind: "done", version: exported.version, documents: exported.documents, coverage: result.coverage } };
 }
 
 // --- Export -------------------------------------------------------------------
 
+interface ExportPlan {
+  readonly taskId: string;
+  readonly profileVersion: number;
+  readonly jobRevision: number;
+  readonly coverLetter: boolean;
+  readonly idempotencyKey: string;
+}
+
+async function render(format: ApplicationDocument["format"], model: DocumentModel): Promise<string | Uint8Array> {
+  if (format === "md") return renderMarkdown(model);
+  if (format === "docx") return renderDocx(model);
+  return renderPdf(model);
+}
+
+/**
+ * Writes one version: every document file, then the version record, last, so a record whose files are all
+ * there is a finished export (the start-up sweep relies on it). Returns the version and the documents to attach.
+ * `sameDraftAs` marks a re-export (V8) of that version's draft under a new header.
+ */
 async function exportVersion(
   ctx: RunnerContext,
-  plan: Plan,
+  plan: ExportPlan,
   draft: Draft,
   claims: readonly PreparedClaim[],
   snapshot: JobSnapshot,
-  person: PersonHeader,
+  person: PersonDetails,
+  sameDraftAs?: number,
 ): Promise<{ readonly version: VersionRecord; readonly documents: ApplicationDocument[] }> {
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
   const application = await applications.get(plan.taskId);
@@ -549,49 +665,28 @@ async function exportVersion(
   const statements: StatementDiff[] = statementDiffs(draft, sourceMap);
   const changes = previous ? versionChanges(previous.statements, statements, new Set(confirmed.map((claim) => claim.label))) : [];
 
-  const files: Array<{ readonly kind: ApplicationDocument["kind"]; readonly format: ApplicationDocument["format"]; readonly name: string; readonly data: string | Uint8Array }> = [];
-  const resume = resumeModel(draft, person);
-  files.push(
-    { kind: "resume", format: "md", name: `resume-v${number}.md`, data: await renderMarkdown(resume) },
-    { kind: "resume", format: "docx", name: `resume-v${number}.docx`, data: await renderDocx(resume) },
-    { kind: "resume", format: "pdf", name: `resume-v${number}.pdf`, data: await renderPdf(resume) },
-  );
-  if (plan.coverLetter) {
-    const letter = coverLetterModel(draft, person, snapshot.structured.company, at);
-    files.push(
-      { kind: "cover_letter", format: "md", name: `cover-v${number}.md`, data: await renderMarkdown(letter) },
-      { kind: "cover_letter", format: "docx", name: `cover-v${number}.docx`, data: await renderDocx(letter) },
-      { kind: "cover_letter", format: "pdf", name: `cover-v${number}.pdf`, data: await renderPdf(letter) },
-    );
-  }
-  files.push({
-    kind: "diff",
-    format: "md",
-    name: `diff-v${number}.md`,
-    data: renderDiffMarkdown({
-      version: number,
-      ...(previous ? { replaces: previous.version } : {}),
-      preparedOn: letterDate(at),
-      profileVersion: plan.profileVersion,
-      jobRevision: plan.jobRevision,
-      statements,
-      changes,
-    }),
+  const models: Partial<Record<ApplicationDocument["kind"], DocumentModel>> = { resume: resumeModel(draft, person) };
+  if (plan.coverLetter) models.cover_letter = coverLetterModel(draft, person, snapshot.structured.company, at);
+  const diff = renderDiffMarkdown({
+    version: number,
+    ...(previous ? { replaces: previous.version } : {}),
+    preparedOn: letterDate(at),
+    profileVersion: plan.profileVersion,
+    jobRevision: plan.jobRevision,
+    statements,
+    changes,
+    ...(sameDraftAs !== undefined ? { sameDraftAs } : {}),
   });
+  for (const file of versionFiles(number, plan.coverLetter)) {
+    const model = models[file.kind];
+    await applications.writeDocumentFile(plan.taskId, file.name, file.kind === "diff" || !model ? diff : await render(file.format, model));
+  }
 
-  const documents: ApplicationDocument[] = [];
-  for (const file of files) {
-    const documentPath = await applications.writeDocumentFile(plan.taskId, file.name, file.data);
-    documents.push({
-      kind: file.kind,
-      version: number,
-      format: file.format,
-      path: documentPath,
-      createdAt,
-      profileVersion: plan.profileVersion,
-      jobRevision: plan.jobRevision,
-      idempotencyKey: plan.idempotencyKey,
-    });
+  const missing: NonNullable<VersionRecord["pdfMissing"]> = {};
+  for (const kind of ["resume", "cover_letter"] as const) {
+    const model = models[kind];
+    const unsupported = model ? pdfMissing(model) : [];
+    if (unsupported.length > 0) missing[kind] = unsupported;
   }
   const version: VersionRecord = {
     version: number,
@@ -602,12 +697,15 @@ async function exportVersion(
     jobRevision: plan.jobRevision,
     coverLetter: plan.coverLetter,
     draft: { resume: { sections: draft.resume.sections.map((section) => ({ heading: section.heading, statements: [...section.statements] })) }, ...(draft.coverLetter ? { coverLetter: { paragraphs: draft.coverLetter.paragraphs.map((paragraph) => [...paragraph]) } } : {}) },
-    sources,
+    sources: [...sources],
     statements: statements.map((statement) => ({ ...statement, labels: [...statement.labels], sources: [...statement.sources], ops: statement.ops ? [...statement.ops] : null })),
     changes: changes.map(({ noLongerConfirmed, ...change }) => ({ ...change, labels: [...change.labels], ...(noLongerConfirmed ? { noLongerConfirmed: [...noLongerConfirmed] } : {}) })),
+    header: { name: person.name, contact: person.contact },
+    ...(sameDraftAs !== undefined ? { sameDraftAs } : {}),
+    ...(Object.keys(missing).length > 0 ? { pdfMissing: missing } : {}),
   };
   await applications.writeVersion(plan.taskId, version);
-  return { version, documents };
+  return { version, documents: documentsForVersion(plan.taskId, version) };
 }
 
 // --- Views ------------------------------------------------------------------
@@ -617,6 +715,20 @@ export type StateStatus = "idle" | "running" | "parked" | "failed" | "interrupte
 export interface StateView {
   readonly status: StateStatus;
   readonly message: string;
+  /** For `parked`: how many of its questions are still unanswered. Amber is for these alone. */
+  readonly open?: number;
+}
+
+/**
+ * A parked preparation's line, from its answers (revision 1, V11): questions still open, all answered and
+ * ready to continue, or waiting for evidence the person said they'd add to their profile.
+ */
+function parkedState(attempt: PreparationRecord): StateView {
+  const answered = new Map(attempt.answers.map((answer) => [answer.requirement, answer.answer]));
+  const open = attempt.questions.filter((question) => !answered.has(question.requirement)).length;
+  if (open > 0) return { status: "parked", message: `${plural(open, "question")} left.`, open };
+  const evidence = attempt.questions.some((question) => answered.get(question.requirement) === "add_evidence");
+  return { status: "parked", message: evidence ? "Waiting for the evidence you're adding." : "Ready to continue.", open: 0 };
 }
 
 /**
@@ -629,7 +741,7 @@ function stateOf(ctx: RunnerContext, application: Application, attempt: Preparat
   if (IN_FLIGHT.has(flightKey(ctx, application.taskId))) return { status: "running", message: "Preparing now. This can take a minute or two." };
   const known = attempt !== undefined && attempt !== "unreadable" ? attempt : undefined;
   if (known?.status === "running" || application.processing.status === "running") return { status: "interrupted", message: INTERRUPTED_MESSAGE };
-  if (known?.status === "parked") return { status: "parked", message: application.processing.error ?? "Waiting for your answers." };
+  if (known?.status === "parked") return parkedState(known);
   if (application.processing.status === "failed") return { status: "failed", message: application.processing.error ?? "The last preparation didn't finish." };
   return { status: "idle", message: "" };
 }
@@ -637,21 +749,49 @@ function stateOf(ctx: RunnerContext, application: Application, attempt: Preparat
 const FORMAT_LABELS: Readonly<Record<ApplicationDocument["format"], string>> = { md: "Markdown", docx: "Word", pdf: "PDF" };
 const KIND_LABELS: Readonly<Record<ApplicationDocument["kind"], string>> = { resume: "Resume", cover_letter: "Cover letter", diff: "What changed" };
 
-function fileView(taskId: string, document: ApplicationDocument) {
+interface NameSources {
+  /** The name on the version's documents. */
+  readonly person: string | undefined;
+  readonly job: JobStructured | undefined;
+  /** What the version's PDFs couldn't draw, by kind. */
+  readonly missing: VersionRecord["pdfMissing"];
+}
+
+function fileView(taskId: string, document: ApplicationDocument, names: NameSources) {
   const name = path.posix.basename(document.path);
-  return { kind: document.kind, format: document.format, name, label: `${KIND_LABELS[document.kind]} · ${FORMAT_LABELS[document.format]}`, href: `/api/applications/${taskId}/docs/${name}` };
+  const missing = document.format === "pdf" && document.kind !== "diff" ? (names.missing?.[document.kind] ?? []) : [];
+  return {
+    kind: document.kind,
+    format: document.format,
+    name,
+    label: `${KIND_LABELS[document.kind]} · ${FORMAT_LABELS[document.format]}`,
+    href: `/api/applications/${taskId}/docs/${name}`,
+    download: downloadName({ person: names.person, kind: document.kind, format: document.format, version: document.version, job: names.job }),
+    missing,
+  };
+}
+
+/** The latest moment anything happened to an application: a document written, or its preparation attempt updated. */
+function lastActivity(application: Application, attempt: PreparationRecord | "unreadable" | undefined): string {
+  const times = application.documents.map((document) => document.createdAt);
+  if (attempt && attempt !== "unreadable") times.push(attempt.updatedAt);
+  return times.reduce((latest, time) => (time > latest ? time : latest), "");
 }
 
 async function summaryView(ctx: RunnerContext, application: Application, jobs: JobsStore, applications: ApplicationsStore) {
   const latest = application.documents.reduce((max, document) => Math.max(max, document.version), 0);
   const snapshot = await latestSnapshot(jobs, application.jobId);
+  const attempt = await applications.readPreparation(application.taskId);
   return {
-    taskId: application.taskId,
-    jobId: application.jobId,
-    jobName: jobName(snapshot),
-    stage: application.stage,
-    latestVersion: latest > 0 ? latest : null,
-    state: stateOf(ctx, application, await applications.readPreparation(application.taskId)),
+    activity: lastActivity(application, attempt),
+    view: {
+      taskId: application.taskId,
+      jobId: application.jobId,
+      jobName: jobName(snapshot),
+      stage: application.stage,
+      latestVersion: latest > 0 ? latest : null,
+      state: stateOf(ctx, application, attempt),
+    },
   };
 }
 
@@ -664,6 +804,11 @@ async function latestSnapshot(jobs: JobsStore, jobId: string): Promise<JobSnapsh
   return undefined;
 }
 
+/** The person's header as the page shows it, with what the PDF can't draw in it (V16). */
+function detailsView(details: PersonDetails) {
+  return { name: details.name, contact: details.contact, pdfMissing: pdfUnsupported(`${details.name}\n${details.contact}`) };
+}
+
 async function listView(ctx: RunnerContext) {
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
   const jobs = new JobsStore(ctx.workspace);
@@ -673,14 +818,21 @@ async function listView(ctx: RunnerContext) {
   const byJob = new Map(listed.applications.map((application) => [application.jobId, application]));
   const summaries = await jobs.listJobs();
   const runnerProblem = await runnerRefusal(ctx);
+  const budget = await getBudgetState(ctx.workspace, ctx.clock);
+  const details = await applications.readDetails();
+  const rows = await Promise.all(listed.applications.map((application) => summaryView(ctx, application, jobs, applications)));
+  // Most recent activity first; the job's name breaks a tie, so the order never shuffles between refreshes.
+  rows.sort((a, b) => (a.activity === b.activity ? a.view.jobName.localeCompare(b.view.jobName) : a.activity > b.activity ? -1 : 1));
   return {
     readiness: {
       ready: readiness.ready && !loaded.markdownError,
+      code: loaded.markdownError ? "profile_unreadable" : readiness.ready ? null : "not_ready",
       message: loaded.markdownError ? "Your career-profile.md has an edit the runner can't read. Fix it on the Profile page first." : readiness.ready ? null : lockedMessage(readiness.reasons),
       profileVersion: loaded.profile.approval?.version ?? null,
     },
-    details: (await applications.readDetails()) ?? null,
+    details: details ? detailsView(details) : null,
     runner: runnerProblem && runnerProblem.outcome === "refused" ? { ready: false, code: runnerProblem.code, message: runnerProblem.message } : { ready: true, code: null, message: null },
+    budget: { dailyRunLimit: budget.dailyRunLimit, runsUsedToday: budget.runsUsedToday },
     jobs: summaries.map((summary) => ({
       jobId: summary.jobId,
       name: jobName(summary.newestReadable),
@@ -688,7 +840,7 @@ async function listView(ctx: RunnerContext) {
       extracted: summary.latest ? hasStructuredFields(summary.latest.structured) : false,
       taskId: byJob.get(summary.jobId)?.taskId ?? null,
     })),
-    applications: await Promise.all(listed.applications.map((application) => summaryView(ctx, application, jobs, applications))),
+    applications: rows.map((row) => row.view),
     unreadable: listed.unreadable.map((entry) => ({ path: entry.path })),
   };
 }
@@ -706,8 +858,15 @@ async function detailView(ctx: RunnerContext, taskId: string) {
   const loaded = await new ProfileStore(ctx.workspace, ctx.clock).load();
   const confirmedNow = new Set(preparedClaims(loaded.profile).filter((claim) => claim.status === "confirmed").map((claim) => claim.label));
   const currentVersion = loaded.profile.approval?.version ?? null;
+  const details = await applications.readDetails();
+  const currentDetails = details ? detailsDigest(details) : undefined;
   const versions = (await applications.listVersions(taskId)).reverse();
   const latest = await latestSnapshot(jobs, application.jobId);
+  const snapshots = new Map<number, JobSnapshot | undefined>();
+  const jobAt = async (revision: number) => {
+    if (!snapshots.has(revision)) snapshots.set(revision, await jobs.getSnapshot(application.jobId, revision));
+    return snapshots.get(revision)?.structured;
+  };
 
   return {
     taskId,
@@ -732,23 +891,33 @@ async function detailView(ctx: RunnerContext, taskId: string) {
           coverage: (known.coverage ?? []).map((entry) => ({ ...entry, requirementText: entry.status === "not_a_requirement" ? null : requirementText(entry.requirement) })),
         }
       : null,
-    versions: versions.map((version) => {
-      const stale = version.sources.map((source) => source.label).filter((label) => !confirmedNow.has(label));
-      return {
-        version: version.version,
-        replaces: version.replaces ?? null,
-        createdAt: version.createdAt,
-        profileVersion: version.profileVersion,
-        jobRevision: version.jobRevision,
-        coverLetter: version.coverLetter,
-        files: application.documents.filter((document) => document.version === version.version).map((document) => fileView(taskId, document)),
-        // Each sentence with its source claims and its presentation change, in the words diff-v<n>.md uses.
-        statements: version.statements.map((statement) => ({ ...statement, presentation: presentationSummary(statement) })),
-        changes: version.changes,
-        olderProfile: currentVersion !== null && version.profileVersion < currentVersion,
-        noLongerConfirmed: stale,
-      };
-    }),
+    versions: await Promise.all(
+      versions.map(async (version, index) => {
+        const stale = version.sources.map((source) => source.label).filter((label) => !confirmedNow.has(label));
+        const job = await jobAt(version.jobRevision);
+        const names: NameSources = { person: version.header?.name ?? details?.name, job, missing: version.pdfMissing };
+        const carried = detailsPartOf(version.idempotencyKey);
+        return {
+          version: version.version,
+          replaces: version.replaces ?? null,
+          /** For an older version, the one that replaced it (V15); null on the latest. */
+          replacedBy: index === 0 ? null : (versions.find((other) => other.replaces === version.version)?.version ?? versions[index - 1]!.version),
+          sameDraftAs: version.sameDraftAs ?? null,
+          createdAt: version.createdAt,
+          profileVersion: version.profileVersion,
+          jobRevision: version.jobRevision,
+          coverLetter: version.coverLetter,
+          files: application.documents.filter((document) => document.version === version.version).map((document) => fileView(taskId, document, names)),
+          // Each sentence with its source claims and its presentation change, in the words diff-v<n>.md uses.
+          statements: version.statements.map((statement) => ({ ...statement, presentation: presentationSummary(statement) })),
+          changes: version.changes,
+          olderProfile: currentVersion !== null && version.profileVersion < currentVersion,
+          /** The documents carry a name or contact line the person has since changed (V8). */
+          olderDetails: carried !== undefined && currentDetails !== undefined && carried !== currentDetails,
+          noLongerConfirmed: stale,
+        };
+      }),
+    ),
     latestJobRevision: latest?.revision ?? null,
   };
 }
@@ -777,22 +946,64 @@ async function answerQuestion(ctx: RunnerContext, taskId: string, requirement: n
   });
 }
 
+/** How many applications' newest documents carry a header other than `details`: what saving it leaves to prepare again (V8). */
+async function outdatedApplications(applications: ApplicationsStore, details: PersonDetails): Promise<number> {
+  const digest = detailsDigest(details);
+  let outdated = 0;
+  for (const application of (await applications.list()).applications) {
+    const newest = newestDocument(application.documents);
+    if (newest && detailsPartOf(newest.idempotencyKey) !== digest) outdated += 1;
+  }
+  return outdated;
+}
+
 /**
- * Marks every preparation a stopped runner left `running` as interrupted: nothing is working on it any more.
- * One exception: a runner that stopped between `finish`'s two writes had already attached the documents
- * (the application goes first), so an attempt whose key a document carries is recorded as the done one it was.
+ * nit c: a runner that stopped after a version's files and record were written, before the application listed
+ * them, left a complete version nothing points to. The record is written last, after every file, so a record
+ * whose files are all there is a finished export, validated before it was written: the application adopts it,
+ * as `finish` (or a re-export) would have, and a version number is never skipped.
+ */
+async function adoptCompleteVersions(applications: ApplicationsStore, application: Application): Promise<Application> {
+  const listed = new Set(application.documents.map((document) => document.version));
+  const complete: VersionRecord[] = [];
+  for (const version of await applications.listVersions(application.taskId)) {
+    if (listed.has(version.version)) continue;
+    let present = true;
+    for (const file of versionFiles(version.version, version.coverLetter)) present &&= await applications.hasDocumentFile(application.taskId, file.name);
+    if (present) complete.push(version);
+  }
+  if (complete.length === 0) return application;
+  return applications.update(application.taskId, (current) => {
+    const have = new Set(current.documents.map((document) => document.version));
+    const adopted = complete.filter((version) => !have.has(version.version)).flatMap((version) => documentsForVersion(current.taskId, version));
+    if (adopted.length === 0) return undefined;
+    return {
+      ...current,
+      documents: [...current.documents, ...adopted],
+      stage: current.stage === "saved" || current.stage === "preparing" ? "ready" : current.stage,
+      processing: current.processing.status === "running" ? { status: "idle", ...(current.processing.runId ? { runId: current.processing.runId } : {}) } : current.processing,
+    };
+  });
+}
+
+/**
+ * At start: adopts any complete version a stopped runner never attached, then marks every preparation a stopped
+ * runner left `running` as interrupted: nothing is working on it any more. One exception: a runner that stopped
+ * after attaching the documents (the application goes first) finished that attempt, so an attempt whose inputs
+ * a document carries is recorded as the done one it was.
  */
 async function sweepInterrupted(ctx: RunnerContext): Promise<void> {
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
-  for (const application of (await applications.list()).applications) {
+  for (const listed of (await applications.list()).applications) {
+    if (IN_FLIGHT.has(flightKey(ctx, listed.taskId))) continue;
+    const application = await adoptCompleteVersions(applications, listed);
     const attempt = await applications.readPreparation(application.taskId);
     const running = attempt !== undefined && attempt !== "unreadable" && attempt.status === "running";
     if (application.processing.status !== "running" && !running) continue;
-    if (IN_FLIGHT.has(flightKey(ctx, application.taskId))) continue;
     if (running) {
       const { owner: _owner, ...rest } = attempt;
       void _owner;
-      const attached = application.documents.find((document) => document.idempotencyKey === attempt.idempotencyKey);
+      const attached = newestDocument(application.documents.filter((document) => contentKey(document.idempotencyKey) === contentKey(attempt.idempotencyKey)));
       if (attached && application.processing.status !== "running") {
         await applications.writePreparation(application.taskId, { ...rest, status: "done", version: attached.version, questions: [], problems: [] });
         continue;
@@ -804,6 +1015,14 @@ async function sweepInterrupted(ctx: RunnerContext): Promise<void> {
       processing: { status: "failed", ...(current.processing.runId ? { runId: current.processing.runId } : {}), error: INTERRUPTED_MESSAGE },
     }));
   }
+}
+
+/** The name a document downloads under: the name on it, what it is, and the job (V14). */
+async function documentDownloadName(applications: ApplicationsStore, jobs: JobsStore, application: Application, document: ApplicationDocument): Promise<string> {
+  const version = await applications.readVersion(application.taskId, document.version);
+  const person = version?.header?.name ?? (await applications.readDetails())?.name;
+  const job = (await jobs.getSnapshot(application.jobId, document.jobRevision))?.structured;
+  return downloadName({ person, kind: document.kind, format: document.format, version: document.version, job });
 }
 
 export default defineRouteModule({
@@ -828,8 +1047,9 @@ export default defineRouteModule({
         if (!name) return errorResponse(400, "name_missing", "Enter your name as it should appear on your documents.");
         return validationErrorResponse(parsed.error);
       }
-      const details = await new ApplicationsStore(ctx.workspace, ctx.clock).writeDetails(parsed.data);
-      return c.json({ ok: true, details });
+      const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
+      const details = await applications.writeDetails(parsed.data);
+      return c.json({ ok: true, details: detailsView(details), outdated: await outdatedApplications(applications, details) });
     });
 
     router.post("/prepare", async (c) => {
@@ -839,7 +1059,9 @@ export default defineRouteModule({
       if (!parsed.success) return validationErrorResponse(parsed.error);
       const started = await startPreparation(ctx, { jobId: parsed.data.jobId, coverLetter: parsed.data.coverLetter });
       if (started.outcome === "refused") return errorResponse(started.status, started.code, started.message);
-      return c.json({ ok: true, outcome: started.outcome, ...(started.outcome === "already_prepared" ? { version: started.version } : {}), application: await detailView(ctx, started.taskId) });
+      const version = started.outcome === "already_prepared" || started.outcome === "reexported" ? { version: started.version } : {};
+      const replaces = started.outcome === "reexported" ? { replaces: started.replaces } : {};
+      return c.json({ ok: true, outcome: started.outcome, ...version, ...replaces, application: await detailView(ctx, started.taskId) });
     });
 
     router.get("/:taskId", async (c) => {
@@ -869,7 +1091,8 @@ export default defineRouteModule({
       if (!uuidSchema.safeParse(taskId).success || !isDocumentFileName(file)) return errorResponse(404, "not_found", "No such document.");
       const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
       const application = await applications.get(taskId);
-      if (!application || !application.documents.some((document) => path.posix.basename(document.path) === file)) return errorResponse(404, "not_found", "No such document.");
+      const document = application?.documents.find((entry) => path.posix.basename(entry.path) === file);
+      if (!application || !document) return errorResponse(404, "not_found", "No such document.");
       const data = await applications.readDocumentFile(taskId, file);
       if (!data) return errorResponse(404, "not_found", "That document's file is missing from the workspace.");
       const extension = file.slice(file.lastIndexOf(".") + 1);
@@ -877,7 +1100,7 @@ export default defineRouteModule({
         status: 200,
         headers: {
           "content-type": DOCUMENT_TYPES[extension] ?? "application/octet-stream",
-          "content-disposition": `attachment; filename="${file}"`,
+          "content-disposition": contentDisposition(await documentDownloadName(applications, new JobsStore(ctx.workspace), application, document)),
           "content-security-policy": "default-src 'none'; sandbox",
           "cache-control": "no-store",
         },

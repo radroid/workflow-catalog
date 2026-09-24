@@ -9,8 +9,6 @@ import type { CoverLetterModel, DocumentModel, ResumeModel } from "./document.ts
  * styles, so the file stays easy to restyle.
  */
 
-const CREATOR = "Job assistant runner";
-
 function title(model: DocumentModel): string {
   return `${model.kind === "resume" ? "Resume" : "Cover letter"} — ${model.person.name}`;
 }
@@ -34,10 +32,11 @@ function coverLetterParagraphs(model: CoverLetterModel): Paragraph[] {
   return out;
 }
 
+/** The document's author (Word's File › Info) is the person whose document it is, not the runner (revision 1, V18). */
 export async function renderDocx(model: DocumentModel): Promise<Buffer> {
   const document = new Document({
-    creator: CREATOR,
-    lastModifiedBy: CREATOR,
+    creator: model.person.name,
+    lastModifiedBy: model.person.name,
     title: title(model),
     sections: [{ children: model.kind === "resume" ? resumeParagraphs(model) : coverLetterParagraphs(model) }],
   });

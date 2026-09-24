@@ -295,6 +295,16 @@ describe("revision 1, V1: numbers the claims don't state", () => {
     expect(rules(resume(statement))).toEqual(["number"]);
   });
 
+  it("reads a thousands separator as part of one number: 1,200 is 1200, never 1 and 200 (the reviewer's M9)", () => {
+    const merchants: ValidationClaim = { label: "C10", id: "3d2c1b0a-9f8e-4d7c-8b6a-5f4e3d2c1b0a", kind: "metric", status: "confirmed", text: "Onboarded 1,200 merchants to the ledger service at Northwind Labs." };
+    const withMerchants = (statement: string) => validateDraft({ draft: resume(statement), claims: [...LABELLED, merchants], postingText: POSTING, coverLetterRequested: false }).refusals.map((refusal) => refusal.rule);
+    expect(withMerchants("Onboarded 1,200 merchants to the ledger service at Northwind Labs [C10].")).toEqual([]);
+    expect(withMerchants("Onboarded 1200 merchants to the ledger service at Northwind Labs [C10].")).toEqual([]);
+    // The claim's one number can't be split into two the sentence states.
+    expect(withMerchants("Onboarded 200 merchants to the ledger service at Northwind Labs in 1 quarter [C10].")).toEqual(["number"]);
+    expect(withMerchants("Onboarded 12 merchants to the ledger service at Northwind Labs [C10].")).toEqual(["number"]);
+  });
+
   it("reads digits of any script as the number they are, and keeps names that start with a letter as names", () => {
     expect(rules(resume("Shipped the on-call rotation tooling used by ٣ engineering teams [C3]."))).toEqual([]);
     expect(numbersIn("Runs on EC2, K8s, P99 and Q3 dashboards")).toEqual([]);

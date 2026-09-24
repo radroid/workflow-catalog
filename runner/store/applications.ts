@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   applicationSchema,
@@ -8,6 +8,7 @@ import {
   nonEmptyStringSchema,
   uuidSchema,
   type Application,
+  type ApplicationDocument,
 } from "@workflow-catalog/contracts";
 import { z } from "zod";
 import type { Clock } from "../lib/clock.ts";
@@ -25,7 +26,10 @@ import type { Workspace } from "./workspace.ts";
  *   docs/resume-v<n>.md|docx|pdf, cover-v<n>.*, diff-v<n>.md   the documents (§5)
  *   versions/v<n>.json     one prepared version: the validated draft (with its
  *                          citations), the claims it cites, the per-sentence
- *                          diff and the changes since the version before
+ *                          diff and the changes since the version before, the
+ *                          name and contact line its documents carry, and what
+ *                          its PDFs couldn't draw; written after every file,
+ *                          so a record whose files are all there is complete
  *   preparation.json       the latest preparation attempt: running, parked on
  *                          gap questions, failed (and why), or done
  *
@@ -41,6 +45,8 @@ import type { Workspace } from "./workspace.ts";
  *
  * Damaged files never throw out of a read: an application or preparation
  * file that can't be parsed reads as `unreadable`, by its workspace path.
+ * While a damaged application record may be a job's (`damagedForJob`),
+ * nothing creates another application for that job.
  */
 
 export const APPLICATIONS_DIR = "applications";
@@ -151,6 +157,17 @@ export const versionChangeSchema = z
   })
   .strict();
 
+export const personDetailsSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    contact: z.string().trim().max(160),
+  })
+  .strict();
+export type PersonDetails = z.infer<typeof personDetailsSchema>;
+
+/** Characters a version's PDFs couldn't draw, by document kind (revision 1, V16): the page warns beside each PDF. */
+const pdfMissingSchema = z.object({ resume: z.array(z.string()).optional(), cover_letter: z.array(z.string()).optional() }).strict();
+
 export const versionRecordSchema = z
   .object({
     version: z.number().int().positive(),
@@ -165,17 +182,14 @@ export const versionRecordSchema = z
     sources: z.array(preparedClaimSchema),
     statements: z.array(statementDiffSchema),
     changes: z.array(versionChangeSchema),
+    /** The name and contact line its documents carry (revision 1; absent on earlier versions). */
+    header: personDetailsSchema.optional(),
+    /** Set on a re-export (revision 1, V8): the version whose validated draft this one carries unchanged, with a new header. */
+    sameDraftAs: z.number().int().positive().optional(),
+    pdfMissing: pdfMissingSchema.optional(),
   })
   .strict();
 export type VersionRecord = z.infer<typeof versionRecordSchema>;
-
-export const personDetailsSchema = z
-  .object({
-    name: z.string().trim().min(1).max(80),
-    contact: z.string().trim().max(160),
-  })
-  .strict();
-export type PersonDetails = z.infer<typeof personDetailsSchema>;
 
 export type ApplicationRead = { readonly kind: "ok"; readonly application: Application } | { readonly kind: "missing" } | { readonly kind: "unreadable" };
 
@@ -204,6 +218,43 @@ export function documentPath(taskId: string, fileName: string): string {
 /** An application record's workspace-relative path. */
 export function applicationPath(taskId: string): string {
   return `${APPLICATIONS_DIR}/${taskId}.json`;
+}
+
+/** The files one version's export writes, in order: the resume, the cover letter when asked for, and the diff. */
+export function versionFiles(version: number, coverLetter: boolean): ReadonlyArray<{ readonly kind: ApplicationDocument["kind"]; readonly format: ApplicationDocument["format"]; readonly name: string }> {
+  const formats = ["md", "docx", "pdf"] as const;
+  return [
+    ...formats.map((format) => ({ kind: "resume" as const, format, name: `resume-v${version}.${format}` })),
+    ...(coverLetter ? formats.map((format) => ({ kind: "cover_letter" as const, format, name: `cover-v${version}.${format}` })) : []),
+    { kind: "diff" as const, format: "md" as const, name: `diff-v${version}.md` },
+  ];
+}
+
+/** The document entries an application record lists for `record`'s files, each carrying the version's key. */
+export function documentsForVersion(taskId: string, record: VersionRecord): ApplicationDocument[] {
+  return versionFiles(record.version, record.coverLetter).map((file) => ({
+    kind: file.kind,
+    version: record.version,
+    format: file.format,
+    path: documentPath(taskId, file.name),
+    createdAt: record.createdAt,
+    profileVersion: record.profileVersion,
+    jobRevision: record.jobRevision,
+    idempotencyKey: record.idempotencyKey,
+  }));
+}
+
+const UUID_IN_TEXT = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const JOB_ID_FIELD = /"jobId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i;
+
+/**
+ * Whether a damaged application record's raw text may belong to `jobId`: it names the job (in its `jobId`
+ * field, or a document's key), or it names no job at all, so whose it is can't be told (revision 1, V7).
+ */
+function mayBelongTo(raw: string, jobId: string): boolean {
+  const wanted = jobId.toLowerCase();
+  if ((raw.match(UUID_IN_TEXT) ?? []).some((id) => id.toLowerCase() === wanted)) return true;
+  return !JOB_ID_FIELD.test(raw);
 }
 
 function isTaskId(value: string): boolean {
@@ -266,12 +317,33 @@ export class ApplicationsStore {
     return (await this.list()).applications.find((application) => application.jobId === jobId);
   }
 
-  /** The application for `jobId`, created at stage `saved` if there is none yet. */
+  /**
+   * The damaged application records that may be `jobId`'s (revision 1, V7): those whose raw text names the job,
+   * and those that name no job, since whose they are can't be told. While any exists, nothing may start a
+   * second application for the job: the damaged one may be it.
+   */
+  async damagedForJob(jobId: string): Promise<UnreadableApplication[]> {
+    const damaged: UnreadableApplication[] = [];
+    for (const entry of (await this.list()).unreadable) {
+      let raw = "";
+      try {
+        raw = await readFile(await this.#workspace.resolveReal(APPLICATIONS_DIR, `${entry.taskId}.json`), "utf8");
+      } catch {
+        // unreadable bytes name no job either
+      }
+      if (mayBelongTo(raw, jobId)) damaged.push(entry);
+    }
+    return damaged;
+  }
+
+  /** The application for `jobId`, created at stage `saved` if there is none yet. Refuses while a damaged record may be the job's. */
   async ensureForJob(jobId: string): Promise<{ readonly application: Application; readonly created: boolean }> {
     if (!uuidSchema.safeParse(jobId).success) throw new ApplicationsStoreError("Not a job id.");
     return this.#serial(async () => {
       const existing = await this.findByJob(jobId);
       if (existing) return { application: existing, created: false };
+      const damaged = await this.damagedForJob(jobId);
+      if (damaged.length > 0) throw new ApplicationsStoreError(`${damaged.map((entry) => entry.path).join(", ")} can't be read, and may be this job's application.`);
       const application = applicationSchema.parse({
         taskId: newId(),
         jobId,
@@ -370,6 +442,16 @@ export class ApplicationsStore {
     await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     await writeFileAtomic(file, data);
     return documentPath(taskId, fileName);
+  }
+
+  /** Whether one exported document's file is there. */
+  async hasDocumentFile(taskId: string, fileName: string): Promise<boolean> {
+    if (!isTaskId(taskId) || !isDocumentFileName(fileName)) return false;
+    try {
+      return (await stat(await this.#workspace.resolveReal(APPLICATIONS_DIR, taskId, "docs", fileName))).isFile();
+    } catch {
+      return false;
+    }
   }
 
   /** One exported document's bytes, or undefined when it isn't there. */

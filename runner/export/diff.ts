@@ -186,6 +186,13 @@ export interface DiffDocumentInput {
   readonly jobRevision: number;
   readonly statements: readonly StatementDiff[];
   readonly changes: readonly VersionChange[];
+  /** A re-export (revision 1, V8): the version whose sentences this one carries unchanged, under a new name or contact line. */
+  readonly sameDraftAs?: number;
+}
+
+/** What a re-export changed, in the words the page and `diff-v<n>.md` both use. */
+export function headerOnlyChange(sameDraftAs: number): string {
+  return `Only the name and contact line at the top changed. Every sentence is the same as in version ${sameDraftAs}, and no model ran.`;
 }
 
 /** `diff-v<n>.md`: the changes since the version it replaces, then every sentence with the claim behind it. */
@@ -201,7 +208,8 @@ export function renderDiffMarkdown(input: DiffDocumentInput): string {
     lines.push(`## Since version ${input.replaces}`, "");
     const shown = input.changes.filter((change) => change.kind !== "unchanged");
     const unchanged = input.changes.length - shown.length;
-    if (shown.length === 0) lines.push("- Nothing changed in the wording.");
+    if (input.sameDraftAs !== undefined) lines.push(`- ${headerOnlyChange(input.sameDraftAs)}`);
+    else if (shown.length === 0) lines.push("- Nothing changed in the wording.");
     for (const change of shown) lines.push(changeLine(change));
     if (unchanged > 0 && shown.length > 0) lines.push(`- Unchanged: ${unchanged === 1 ? "1 sentence" : `${unchanged} sentences`}`);
     lines.push("");

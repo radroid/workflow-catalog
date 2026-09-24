@@ -1,11 +1,13 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import applicationsModule, { waitForPreparationQueue } from "../server/routes/applications.ts";
+import { pauseBudget } from "../store/budget.ts";
+import { JobsStore } from "../store/jobs.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { citedLabels } from "../validate/text.ts";
 import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
@@ -24,6 +26,7 @@ import {
   type ParsedPrompt,
   type Planner,
   type ScriptedInput,
+  type ScriptedModel,
   type SeedProfileOptions,
 } from "./preparation-helpers.ts";
 
@@ -256,7 +259,7 @@ const refusedOnly: Planner = () => ({
   ],
 });
 
-async function bridgeWith(planner: Planner, options: { profile?: SeedProfileOptions; details?: boolean } = {}): Promise<TestBridge> {
+async function bridgeAndModel(planner: Planner, options: { profile?: SeedProfileOptions; details?: boolean } = {}): Promise<{ bridge: TestBridge; model: ScriptedModel }> {
   const holder: { bridge?: TestBridge } = {};
   const model = scriptedModel(() => ({ workspace: holder.bridge!.workspace, clock: holder.bridge!.clock }), planner);
   const bridge = await makeBridge({ modules: MODULES, eve: model.eve });
@@ -264,7 +267,11 @@ async function bridgeWith(planner: Planner, options: { profile?: SeedProfileOpti
   bridges.push(bridge);
   await seedReadyProfile(bridge.workspace, bridge.clock, options.profile ?? {});
   if (options.details !== false) await seedDetails(bridge.workspace, bridge.clock);
-  return bridge;
+  return { bridge, model };
+}
+
+async function bridgeWith(planner: Planner, options: { profile?: SeedProfileOptions; details?: boolean } = {}): Promise<TestBridge> {
+  return (await bridgeAndModel(planner, options)).bridge;
 }
 
 /** Prepares `jobId` through the API, not the page (another tab, say), and waits for it to finish. */
@@ -315,8 +322,12 @@ describe("Applications page: first load", () => {
     expect(page.byId("detail-section").hidden).toBe(true);
     expect(page.byId("ready-profile").textContent).toBe("Your career profile, version 1, is approved.");
     expect(page.byId("ready-runner").textContent).toBe("The runner's agent is running.");
+    // The daily run limit, under "Before preparing" (revision 1, V18).
+    expect(page.byId("ready-runs").textContent).toBe("Runs today: 0 of 10. Each preparation uses one; the daily limit is in Settings.");
+    expect(page.byId("ready-runs").querySelector("a")?.getAttribute("href")).toBe("/ui/settings");
     expect(page.byId("ready-details").textContent).toBe("Documents will carry the name “Ada Quill”.");
     expect(page.byId("details-name").value).toBe("Ada Quill");
+    expect(page.byId("details-name-note").hidden).toBe(true);
     expect(page.lines).toEqual([]);
   });
 
@@ -324,7 +335,9 @@ describe("Applications page: first load", () => {
     const bridge = await bridgeWith(honest(PLATFORM_LEAD), { profile: { approve: false } });
     const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
     const page = await openPage(bridge);
-    expect(page.byId("ready-profile").textContent).toBe("Preparation is locked: the career profile has not been approved yet. The workflow will not guess. See the Profile page.");
+    // Approval lives on Onboarding, so that's where the line points; one pointer, not two (revision 1, V12, V17).
+    expect(page.byId("ready-profile").textContent).toBe("Preparation is locked: the career profile has not been approved yet. The workflow will not guess. Finish it on the Onboarding page.");
+    expect(all(page, "#ready-profile a").map((link) => link.getAttribute("href"))).toEqual(["/ui/onboarding"]);
     expect(page.byId("ready-profile").className).toContain("ready-blocked");
     pressPrepare(page, jobId);
     await until(() => page.outcomes().length > 0, "the refusal");
@@ -358,12 +371,17 @@ describe("Applications page: preparing", () => {
       "Requirement 3: “Open-source maintainership” — met by “Maintainer of Ledgerkit, an open-source ledger reconciliation library.”",
     ]);
 
+    // Each link names its version, and downloads under the person's name, the document and the job (revision 1, V14, V18).
     const links = all(page, ".exports a");
-    expect(links.map((link) => link.textContent)).toEqual(["Resume · Markdown", "Resume · Word", "Resume · PDF", "What changed and why · Markdown"]);
-    for (const link of links) {
-      expect(link.getAttribute("href")).toMatch(/^\/api\/applications\/[0-9a-f-]{36}\/docs\/(resume|diff)-v1\.(md|docx|pdf)$/);
-      expect(link.getAttribute("download")).toMatch(/^(resume|diff)-v1\.(md|docx|pdf)$/);
-    }
+    expect(links.map((link) => link.textContent)).toEqual(["Resume, version 1 · Markdown", "Resume, version 1 · Word", "Resume, version 1 · PDF", "What changed and why, version 1 · Markdown"]);
+    for (const link of links) expect(link.getAttribute("href")).toMatch(/^\/api\/applications\/[0-9a-f-]{36}\/docs\/(resume|diff)-v1\.(md|docx|pdf)$/);
+    expect(links.map((link) => link.getAttribute("download"))).toEqual([
+      "Ada Quill - Resume - Fernwood Platform Lead.md",
+      "Ada Quill - Resume - Fernwood Platform Lead.docx",
+      "Ada Quill - Resume - Fernwood Platform Lead.pdf",
+      "Ada Quill - What changed in version 1 - Fernwood Platform Lead.md",
+    ]);
+    expect(all(page, ".export-note")).toHaveLength(0);
     // Each sentence beside the claim it cites, and how its wording differs: the one place labels show, on purpose.
     const diff = page.document.querySelector(".changes-detail")!;
     expect(diff.querySelector("summary")?.textContent).toBe("What changed and why");
@@ -417,7 +435,29 @@ describe("Applications page: preparing", () => {
     await until(() => page.outcomes().length > 0, "the refusal");
     expect(page.outcomes()).toEqual(["Not prepared: add your name for the documents first."]);
     expect(page.byId("prepare-submit").getAttribute("aria-disabled")).toBe("false");
-    expect(page.document.activeElement?.id).toBe("prepare-submit");
+    // The name is what's missing, so focus goes to its field (revision 1, V18).
+    expect(page.document.activeElement?.id).toBe("details-name");
+  });
+
+  it("the picker starts on a job whose details are extracted, and a job that isn't says where to extract them (revision 1, V18)", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    bridge.clock.advance(60_000);
+    const unextracted = await new JobsStore(bridge.workspace).captureJob({ url: "https://jobs.example/postings/harbor-unextracted", text: "Harbor is hiring. Fictional posting for tests.", extractorVersion: "extractor@0.1.0", capturedAt: bridge.clock.now().toISOString() });
+    const page = await openPage(bridge);
+    expect(all(page, "#prepare-job option").map((option) => option.getAttribute("value"))).toContain(unextracted.jobId);
+    expect(page.byId("prepare-job").value).toBe(jobId);
+    page.byId("prepare-job").value = unextracted.jobId;
+    page.byId("prepare-job").dispatchEvent(new page.window.Event("change", { bubbles: true }));
+    page.byId("prepare-submit").focus();
+    page.submit("prepare-form");
+    await until(() => page.outcomes().length > 0, "the refusal");
+    expect(page.outcomes()).toEqual(["Not prepared: extract this job's details on the Jobs page first."]);
+    expect(page.byId("last-action").querySelector("a")?.getAttribute("href")).toBe("/ui/jobs");
+    // The person's own choice stays chosen through refreshes.
+    page.refreshNow();
+    await sleep(100);
+    expect(page.byId("prepare-job").value).toBe(unextracted.jobId);
   });
 
   it("opens an application from its row, moving focus to its heading", async () => {
@@ -449,7 +489,9 @@ describe("Applications page: gap questions", () => {
     expect(block.textContent).toContain("Requirement 1: “8+ years of backend engineering experience”");
     expect(block.textContent).toContain("How many years of backend engineering experience can you show?");
     expect(block.textContent).toContain("Requirement 3: “Strong distributed systems fundamentals”");
-    expect(page.byId("questions-next").textContent).toBe("Answer all 2 questions to continue preparing.");
+    expect(page.byId("questions-next").textContent).toBe("Answer both questions to continue preparing.");
+    expect(page.byId("questions-heading").textContent).toBe("Needs your answer");
+    expect(page.document.querySelector(".app-status")?.textContent).toBe("Needs your answer 2 questions left.");
     // The one action waits for the answers.
     expect(page.byId("detail-prepare").textContent).toBe("Continue preparing");
     expect(page.byId("detail-prepare").getAttribute("aria-disabled")).toBe("true");
@@ -466,10 +508,18 @@ describe("Applications page: gap questions", () => {
     expect(page.outcomes().at(-1)).toBe("Answered: requirement 1 will be left out.");
     expect(page.byId("questions-next").textContent).toBe("Answer the last question to continue preparing.");
     expect(page.byId("detail-prepare").getAttribute("aria-disabled")).toBe("true");
+    // The row's line follows the answers, not the count frozen when it parked (revision 1, V11).
+    await until(() => page.document.querySelector(".app-status")?.textContent === "Needs your answer 1 question left.", "the row to count one question");
 
     press(page, `answer-${taskId}-3-leave_out`);
     await until(() => page.byId("detail-prepare").getAttribute("aria-disabled") === "false", "Continue preparing to be enabled");
     expect(page.byId("questions-next").textContent).toBe("Every question is answered: continue preparing below.");
+    // Nothing waits on a decision now: no amber, no "Needs your answer", in the detail or the row.
+    await until(() => page.document.querySelector(".app-status")?.textContent === "Ready to continue.", "the row to say it can continue");
+    expect(page.byId("questions-heading").textContent).toBe("Your answers");
+    expect(all(page, ".decision")).toHaveLength(0);
+    expect(page.byId("detail-questions").className).toContain("answered");
+    expect(all(page, ".badge.warn")).toHaveLength(0);
 
     const cont = press(page, "detail-prepare");
     await until(() => page.lines.includes("Prepared “Staff Software Engineer · Fernwood”: version 1 is ready."), "the result", 10_000);
@@ -481,6 +531,11 @@ describe("Applications page: gap questions", () => {
     expect(all(page, ".badge.warn")).toHaveLength(0);
     expect(all(page, ".decision")).toHaveLength(0);
     expect(page.outcomes().filter((line) => line.startsWith("Prepared") || line.startsWith("Needs"))).toHaveLength(2);
+    // Two claims meeting one requirement are joined with "and" (revision 1, V18).
+    await until(() => page.document.querySelector(".coverage") !== null, "the coverage");
+    expect(all(page, ".coverage li")[1]?.textContent).toBe(
+      "Requirement 2: “Experience leading platform or infrastructure teams” — met by “Led the payments infrastructure team at Northwind Labs, redesigning the ledger service that powers Northwind Labs' billing.” and “Senior Platform Engineer at Northwind Labs.”",
+    );
   });
 
   it("an answer that the evidence belongs in the profile points there, and preparing again says to add it first", async () => {
@@ -493,11 +548,15 @@ describe("Applications page: gap questions", () => {
     press(page, `answer-${taskId}-1-add_evidence`);
     await until(() => page.outcomes().at(-1) === "Answered: add evidence for requirement 1 to your profile.", "the answer");
     press(page, `answer-${taskId}-3-leave_out`);
-    await until(() => page.byId("questions-next").textContent === "Add that evidence on the Profile page and approve it, then prepare this job again.", "the pointer");
-    expect(page.byId("questions-next").querySelector("a")?.getAttribute("href")).toBe("/ui/profile");
+    // Evidence is added on Onboarding, so that's where it points (revision 1, V12).
+    await until(() => page.byId("questions-next").textContent === "Add that evidence on the Onboarding page and approve it, then prepare this job again.", "the pointer");
+    expect(page.byId("questions-next").querySelector("a")?.getAttribute("href")).toBe("/ui/onboarding");
     expect(page.byId("detail-prepare").textContent).toBe("Prepare again");
+    await until(() => page.document.querySelector(".app-status")?.textContent === "Waiting for the evidence you're adding.", "the row's line");
+    expect(all(page, ".badge.warn")).toHaveLength(0);
     press(page, "detail-prepare");
-    await until(() => page.outcomes().at(-1) === "Not prepared: add the missing evidence to your profile first.", "the refusal");
+    await until(() => page.outcomes().at(-1) === "Not prepared: add the missing evidence on the Onboarding page first.", "the refusal");
+    expect(page.byId("last-action").querySelector("a")?.getAttribute("href")).toBe("/ui/onboarding");
     expect(page.document.activeElement?.id).toBe("detail-prepare");
   });
 });
@@ -544,7 +603,7 @@ describe("Applications page: a hostile posting", () => {
     press(page, "detail-prepare");
     await until(() => page.lines.includes("Prepared “Backend Engineer · Quill”: version 1 is ready."), "the result", 10_000);
     await until(() => page.document.querySelector(".version") !== null, "the version");
-    expect(all(page, ".exports a").map((link) => link.textContent)).toContain("Cover letter · Word");
+    expect(all(page, ".exports a").map((link) => link.textContent)).toContain("Cover letter, version 1 · Word");
     expect(all(page, `#coverage-${taskId} li`).map((node) => node.textContent)).toEqual([
       "Requirement 1: “4+ years of experience” — left out, as you asked.",
       "Requirement 2: “Node.js and TypeScript” — left out, as you asked.",
@@ -595,9 +654,12 @@ describe("Applications page: refreshing in place", () => {
     const summary = details.querySelector("summary")!;
     summary.focus();
 
-    // Elsewhere, the person excludes their degree and prepares again: version 2 replaces version 1.
+    // Elsewhere, the person excludes their degree: the latest version says it cites a claim no longer confirmed.
     const profiles = new ProfileStore(bridge.workspace, bridge.clock);
     await profiles.decideClaim((await profiles.read()).claims[5]!.id, "excluded");
+    page.refreshNow();
+    await until(() => visibleText(page).includes("It cites 1 claim you have since excluded or changed. Prepare again for a version without it."), "the note on version 1");
+    // They prepare again: version 2 replaces version 1, which now says so, and no longer asks to prepare again (revision 1, V15).
     await prepareElsewhere(bridge, jobId);
     page.refreshNow();
     await until(() => all(page, ".version").length === 2, "version 2");
@@ -606,8 +668,167 @@ describe("Applications page: refreshing in place", () => {
     expect(details.isConnected).toBe(true);
     expect(details.open).toBe(true);
     expect(page.document.activeElement).toBe(summary);
-    expect(visibleText(page)).toContain("It cites 1 claim you have since excluded or changed. Prepare again for a version without it.");
+    expect(visibleText(page)).not.toContain("It cites 1 claim");
+    expect(all(page, ".version-note").map((node) => node.textContent)).toEqual(["Version 2 replaces it."]);
     expect(page.lines).toEqual([]);
+  });
+});
+
+describe("Applications page: a changed name or contact line (revision 1, V8)", () => {
+  it("says the documents don't carry it yet, and Prepare again re-exports them with it as a new version, with no model turn", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    const page = await openPage(bridge);
+    page.document.querySelector(".app-open")!.click();
+    await until(() => page.document.querySelector(".version") !== null, "version 1");
+
+    page.type("details-name", "Ada Q. Quill");
+    page.byId("details-submit").focus();
+    page.submit("details-form");
+    await until(() => page.outcomes().length === 1, "the save");
+    expect(page.outcomes()).toEqual(["Saved. Prepare again to put it on your documents."]);
+    await until(() => visibleText(page).includes("Your name or contact line has changed since this version. Prepare again to put it on your documents."), "the version note");
+
+    const again = press(page, "detail-prepare");
+    await until(() => page.outcomes().length === 2, "the re-export");
+    expect(page.outcomes()[1]).toBe("Re-exported “Platform Lead · Fernwood” as version 2, with your new details.");
+    expect(model.prompts).toHaveLength(1);
+    await until(() => all(page, ".version").length === 2, "version 2");
+    expect(page.document.activeElement).toBe(again);
+    const [v2, v1] = all(page, ".version");
+    expect(v2!.querySelector("p.muted")?.textContent).toMatch(/^Prepared .+ with your updated name and contact line: the same sentences as version 1\. It replaces version 1\.$/);
+    expect(v2!.textContent).toContain("Only the name and contact line at the top changed. Every sentence is the same as in version 1, and no model ran.");
+    expect(v2!.querySelector(".exports a")?.getAttribute("download")).toBe("Ada Q. Quill - Resume - Fernwood Platform Lead.md");
+    expect(v1!.querySelector(".version-note")?.textContent).toBe("Version 2 replaces it.");
+    expect(visibleText(page)).not.toContain("Your name or contact line has changed");
+
+    // The same header again is already prepared.
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().length === 3, "the third outcome");
+    expect(page.outcomes()[2]).toBe("Already prepared: “Platform Lead · Fernwood” matches version 2; nothing new.");
+  });
+});
+
+describe("Applications page: characters the PDF can't draw (revision 1, V16)", () => {
+  it("warns at the name field and beside each PDF, naming the formats that keep them", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD), { details: false });
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const page = await openPage(bridge);
+    page.type("details-name", "Ada Quill 李");
+    page.byId("details-submit").focus();
+    page.submit("details-form");
+    const warning = "The PDF can't draw “李”, so it prints � in its place. The Markdown and Word files keep it.";
+    await until(() => !page.byId("details-name-note").hidden, "the note at the name field");
+    expect(page.byId("details-name-note").textContent).toBe(warning);
+    expect(page.byId("details-name").getAttribute("aria-describedby")).toBe("details-name-error details-name-note");
+
+    pressPrepare(page, jobId);
+    await until(() => page.lines.includes("Prepared “Platform Lead · Fernwood”: version 1 is ready."), "the result", 10_000);
+    await until(() => page.document.querySelector(".export-note") !== null, "the PDF note");
+    const noted = all(page, ".exports li").filter((item) => item.querySelector(".export-note") !== null);
+    expect(noted.map((item) => item.querySelector("a")?.textContent)).toEqual(["Resume, version 1 · PDF"]);
+    expect(noted[0]!.querySelector(".export-note")?.textContent).toBe(warning);
+    // A plain note, never amber.
+    expect(all(page, ".decision")).toHaveLength(0);
+    expect(all(page, ".badge.warn")).toHaveLength(0);
+  });
+});
+
+describe("Applications page: watching (revision 1, V13)", () => {
+  it("a page opened mid-preparation watches it and announces how it ended, once", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    model.beforeTurn = () => held;
+    const response = await bridge.request("/api/applications/prepare", { method: "POST", headers: SAME_ORIGIN, body: JSON.stringify({ jobId, coverLetter: false }) });
+    expect(response.status).toBe(200);
+
+    const page = await openPage(bridge);
+    expect(page.document.querySelector(".app-status")?.textContent).toBe("Preparing now…");
+    release();
+    await waitForPreparationQueue(bridge.workspace.root);
+    page.refreshNow();
+    await until(() => page.outcomes().length > 0, "the outcome", 10_000);
+    expect(page.outcomes()).toEqual(["Prepared “Platform Lead · Fernwood”: version 1 is ready."]);
+    page.refreshNow();
+    await sleep(300);
+    expect(page.outcomes()).toHaveLength(1);
+  });
+
+  it("while a watched preparation can't be refreshed, says once that the runner can't be reached, and clears that on the next good refresh", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    model.beforeTurn = () => held;
+    let down = false;
+    const page = await openPage(bridge, { intercept: (input) => (down && input.startsWith("/api/") ? Promise.reject(new TypeError("Failed to fetch")) : undefined) });
+    pressPrepare(page, jobId);
+    await until(() => page.lines.includes("Preparing “Platform Lead · Fernwood”…"), "the start");
+
+    down = true;
+    page.refreshNow();
+    await until(() => page.lines.at(-1) === "Can't reach the runner. Is it still running?", "the notice");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      page.refreshNow();
+      await sleep(300);
+    }
+    expect(page.lines.filter((line) => line === "Can't reach the runner. Is it still running?")).toHaveLength(1);
+    expect(page.byId("last-action").className).toContain("refused");
+
+    down = false;
+    page.refreshNow();
+    await until(() => page.lines.at(-1) === "Still preparing “Platform Lead · Fernwood”…", "the notice to clear");
+    release();
+    await waitForPreparationQueue(bridge.workspace.root);
+    page.refreshNow();
+    await until(() => page.lines.at(-1) === "Prepared “Platform Lead · Fernwood”: version 1 is ready.", "the outcome", 10_000);
+    expect(page.outcomes().filter((line) => line.startsWith("Prepared"))).toHaveLength(1);
+  });
+});
+
+describe("Applications page: readiness in its own words (revision 1, V17, V18)", () => {
+  it("an unreadable career-profile.md is named as code, once, with the Profile page to fix it", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const profile = await new ProfileStore(bridge.workspace, bridge.clock).read();
+    const md = bridge.workspace.resolve("career-profile.md");
+    await writeFile(md, (await readFile(md, "utf8")).replace(` \`[${profile.boundaries[0]!.id}]\``, ""));
+    const page = await openPage(bridge);
+    const line = page.byId("ready-profile");
+    expect(line.textContent).toBe("Your career-profile.md has an edit the runner can't read. Fix it on the Profile page first.");
+    expect(line.querySelector("code")?.textContent).toBe("career-profile.md");
+    expect(all(page, "#ready-profile a").map((link) => link.getAttribute("href"))).toEqual(["/ui/profile"]);
+    pressPrepare(page, jobId);
+    await until(() => page.outcomes().length > 0, "the refusal");
+    expect(page.outcomes()).toEqual(["Not prepared: your career-profile.md has an edit the runner can't read."]);
+    expect(page.byId("last-action").querySelector("code")?.textContent).toBe("career-profile.md");
+  });
+
+  it("a paused budget says so in its own words, with Settings and Runs as links", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    await pauseBudget(bridge.workspace, bridge.clock, "paused for this test");
+    const page = await openPage(bridge);
+    expect(page.byId("ready-runner").textContent).toBe("The run budget is paused, so nothing can be prepared. Resume it in Settings; the Runs page shows why it paused.");
+    expect(all(page, "#ready-runner a").map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+      ["Settings", "/ui/settings"],
+      ["Runs", "/ui/runs"],
+    ]);
+  });
+
+  it("a damaged application record that may be the job's refuses in one line that points to the file (revision 1, V7)", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    const [name] = (await readdir(bridge.workspace.resolve("applications"))).filter((entry) => entry.endsWith(".json") && entry !== "details.json");
+    await writeFile(bridge.workspace.resolve("applications", name!), "{ not json");
+    const page = await openPage(bridge);
+    expect(page.byId("app-unreadable").textContent).toContain(`applications/${name}`);
+    pressPrepare(page, jobId);
+    await until(() => page.outcomes().length > 0, "the refusal");
+    expect(page.outcomes()).toEqual(["Not prepared: a damaged application record may be this job's; see Applications below."]);
   });
 });
 

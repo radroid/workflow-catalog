@@ -253,6 +253,10 @@ main code {
   padding: 0.75rem 1rem;
   margin: 0.5rem 0 1rem;
 }
+/* Every question answered: nothing waits on the person's decision, so no amber (revision 1, V11). */
+.questions-block.answered {
+  border-left-color: var(--border);
+}
 .questions {
   margin: 0 0 0.75rem;
   padding-left: 1.2rem;
@@ -341,6 +345,14 @@ main code {
   border-left: 3px solid var(--border);
   padding-left: 0.6rem;
 }
+/* What the PDF can't draw (revision 1, V16): a plain note, never amber, at the name field and beside a PDF. */
+.field-note,
+.export-note {
+  border-left: 3px solid var(--border);
+  padding-left: 0.6rem;
+  margin: 0.4rem 0 0;
+  overflow-wrap: anywhere;
+}
 .exports {
   list-style: none;
   margin: 0 0 0.5rem;
@@ -354,6 +366,8 @@ main code {
 }
 .exports code {
   color: var(--muted-foreground);
+  /* A file name wraps as a whole, never mid-name (polish 9). */
+  white-space: nowrap;
 }
 .changes-detail h5 {
   font-size: 0.85rem;

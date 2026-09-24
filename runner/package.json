@@ -19,6 +19,7 @@
     "test": "vitest run && node --import ./lib/register-ts.mjs cli/eval.ts"
   },
   "dependencies": {
+    "@expo-google-fonts/noto-sans": "0.4.2",
     "@hono/node-server": "2.1.1",
     "@workflow-catalog/contracts": "workspace:*",
     "@workflow-catalog/job-assistant-eve": "workspace:*",
