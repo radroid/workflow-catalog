@@ -1,4 +1,5 @@
 import { jobSnapshotSchema, jobStructuredSchema, type JobSnapshot, type JobStructured } from "@workflow-catalog/contracts";
+import { z } from "zod";
 import { sha256Hex, newId } from "../lib/crypto.ts";
 import { serialise } from "./profile-writes.ts";
 import type { Workspace } from "./workspace.ts";
@@ -58,6 +59,43 @@ export interface JobSummary {
   readonly revisionCount: number;
 }
 
+/**
+ * Extraction status, kept beside a revision's snapshot rather than inside it
+ * (`jobs/<jobId>/extraction-<rev>.json`) — round-1 review decision L5: the
+ * contract's `jobSnapshotSchema` is `.strict()`, and adding a field to it is
+ * outside this packet's `Owns` (`packages/contracts`), so this is P04's own
+ * side-channel file, not part of the contract. `waiting`/`running` describe
+ * a queued or in-flight extraction; `done` means the snapshot's `structured`
+ * reflects a successful turn; `not_run` means no turn was even attempted
+ * (`reason` says why: `runner_not_running`, `no_model`, `budget_paused`);
+ * `failed` means a turn ran but didn't produce fields for this exact
+ * revision (`reason`: `timed_out`, `turn_failed`, `no_fields_found`, or
+ * `interrupted` — a `running` state a crashed earlier process left behind,
+ * which `describeExtractionState` in `captures.ts` derives at read time by
+ * checking its own in-process "currently running" set; never stored as
+ * `interrupted` on disk, since the next real attempt overwrites it anyway).
+ * These are stable string codes, not sentences: `runner/ui/assets/jobs.js`
+ * owns the wording (never a raw server string in Jobs page UI text, the
+ * same rule its `FRIENDLY_ERRORS` map already follows for capture errors).
+ */
+/** Reasons `captures.ts`'s `extractionPreflight` sets a revision straight to `not_run` without ever queuing a turn. */
+export const EXTRACTION_NOT_RUN_REASONS = ["runner_not_running", "no_model", "budget_paused"] as const;
+export type ExtractionNotRunReason = (typeof EXTRACTION_NOT_RUN_REASONS)[number];
+
+/** Reasons a queued turn still ends in `failed` (`interrupted`: a `running` state a crashed earlier process left behind — `captures.ts`'s `describeExtractionState` derives this at read time; never written by `setExtractionState` itself). */
+export const EXTRACTION_FAILURE_REASONS = ["timed_out", "turn_failed", "no_fields_found", "interrupted"] as const;
+export type ExtractionFailureReason = (typeof EXTRACTION_FAILURE_REASONS)[number];
+
+export const extractionStateSchema = z
+  .object({
+    status: z.enum(["waiting", "running", "done", "not_run", "failed"]),
+    reason: z.enum([...EXTRACTION_NOT_RUN_REASONS, ...EXTRACTION_FAILURE_REASONS]).optional(),
+    updatedAt: z.string(),
+  })
+  .strict();
+
+export type ExtractionState = z.infer<typeof extractionStateSchema>;
+
 export class JobsStore {
   readonly #workspace: Workspace;
 
@@ -67,6 +105,21 @@ export class JobsStore {
 
   #path(jobId: string, revision: number): string[] {
     return [JOBS_DIR, jobId, `snapshot-${revision}.json`];
+  }
+
+  #extractionPath(jobId: string, revision: number): string[] {
+    return [JOBS_DIR, jobId, `extraction-${revision}.json`];
+  }
+
+  /** The extraction state beside `jobId`/`revision`'s snapshot, or `undefined` when none was ever recorded (a revision seeded or captured before any extraction attempt). */
+  async getExtractionState(jobId: string, revision: number): Promise<ExtractionState | undefined> {
+    const raw = await this.#workspace.readJson(...this.#extractionPath(jobId, revision));
+    return raw === undefined ? undefined : extractionStateSchema.parse(raw);
+  }
+
+  /** Overwrites `jobId`/`revision`'s extraction state — the queue in `captures.ts` calls this at every transition (waiting → running → done/failed, or straight to not_run when a turn was never attempted). Not run under `serialise`: only one background task ever owns a given jobId/revision's state at a time (the queue itself is one-at-a-time per workspace), and a state read is never used to decide whether to write here. */
+  async setExtractionState(jobId: string, revision: number, state: ExtractionState): Promise<void> {
+    await this.#workspace.writeJson(this.#extractionPath(jobId, revision), extractionStateSchema.parse(state));
   }
 
   /** Revision numbers present for `jobId`, ascending. Empty when the job does not exist. */

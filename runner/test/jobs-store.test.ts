@@ -152,6 +152,33 @@ describe("JobsStore.recordStructured", () => {
   });
 });
 
+describe("JobsStore extraction state (round-1 review decision L5: a state beside the snapshot, not inside the contract's strict schema)", () => {
+  it("is undefined for a revision that never had an extraction attempt", async () => {
+    const store = await newStore();
+    const { jobId, revision } = await store.captureJob({ url: FERNWOOD_URL, text: "Posting text.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    expect(await store.getExtractionState(jobId, revision)).toBeUndefined();
+  });
+
+  it("round-trips every status and an optional reason", async () => {
+    const store = await newStore();
+    const { jobId, revision } = await store.captureJob({ url: FERNWOOD_URL, text: "Posting text.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await store.setExtractionState(jobId, revision, { status: "waiting", updatedAt: "2026-09-22T09:00:01.000Z" });
+    expect(await store.getExtractionState(jobId, revision)).toEqual({ status: "waiting", updatedAt: "2026-09-22T09:00:01.000Z" });
+    await store.setExtractionState(jobId, revision, { status: "failed", reason: "timed_out", updatedAt: "2026-09-22T09:01:00.000Z" });
+    expect(await store.getExtractionState(jobId, revision)).toEqual({ status: "failed", reason: "timed_out", updatedAt: "2026-09-22T09:01:00.000Z" });
+  });
+
+  it("each revision of the same job keeps its own extraction state", async () => {
+    const store = await newStore();
+    const first = await store.captureJob({ url: FERNWOOD_URL, text: "Text A", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    const second = await store.captureJob({ url: FERNWOOD_URL, text: "Text B", extractorVersion: "t", capturedAt: "2026-09-23T09:00:00.000Z" });
+    await store.setExtractionState(first.jobId, 1, { status: "done", updatedAt: "2026-09-22T09:00:01.000Z" });
+    await store.setExtractionState(second.jobId, 2, { status: "failed", reason: "turn_failed", updatedAt: "2026-09-23T09:00:01.000Z" });
+    expect(await store.getExtractionState(first.jobId, 1)).toMatchObject({ status: "done" });
+    expect(await store.getExtractionState(first.jobId, 2)).toMatchObject({ status: "failed", reason: "turn_failed" });
+  });
+});
+
 describe("JobsStore.captureJob: concurrency (no lost or duplicated job for one URL)", () => {
   it("two concurrent captures of the same brand-new URL and same text produce exactly one job, one revision", async () => {
     const store = await newStore();

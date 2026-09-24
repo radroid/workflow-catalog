@@ -44,6 +44,35 @@ function friendlyMessage(code) {
   return (code && FRIENDLY_ERRORS[code]) ?? DEFAULT_ERROR;
 }
 
+// Round-1 review L5/L12: extraction now runs in the background, so a capture
+// or retry response carries only the *current* extraction state
+// (`{status, reason?}`, server/routes/captures.ts's `ExtractionState`), never
+// a finished outcome sentence. This maps that state to a plain sentence the
+// same way FRIENDLY_ERRORS maps a server error code — never a raw server
+// string. Interim wording: L12 finalizes this with next-step guidance
+// (`npm run runner` in `<code>`, "set up a model in Settings", "try again").
+const EXTRACTION_REASON_MESSAGES = {
+  runner_not_running: "The runner isn't running, so this can't be extracted right now.",
+  no_model: "No model is set up yet, so this can't be extracted.",
+  budget_paused: "Extraction is paused right now.",
+  timed_out: "Extraction timed out.",
+  turn_failed: "Extraction didn't finish.",
+  no_fields_found: "The runner didn't find any structured fields.",
+  interrupted: "Extraction was interrupted.",
+};
+
+/** "" (never a sentence) when `extraction` is undefined — an unchanged duplicate capture, or a revision from before this queue existed, says nothing extra rather than a misleading "not extracted yet" about a job that may already carry fields from an earlier revision. */
+function extractionMessage(extraction) {
+  if (!extraction) return "";
+  if (extraction.status === "waiting" || extraction.status === "running") return "Extraction is running in the background.";
+  if (extraction.status === "done") return "Extraction finished.";
+  return EXTRACTION_REASON_MESSAGES[extraction.reason] ?? "Extraction didn't run.";
+}
+
+function extractionFailed(extraction) {
+  return extraction?.status === "not_run" || extraction?.status === "failed";
+}
+
 async function api(method, path, body) {
   let response;
   try {
@@ -315,7 +344,7 @@ async function retryExtraction(jobId, revision, button) {
     const result = await postJson(`/api/captures/${jobId}/${revision}/extract`);
     await reloadDetail(jobId, { moveFocus: true });
     await loadJobs(); // extraction can fill in the title/company the list row shows
-    announce(result.message, result.ok ? "success" : "error");
+    announce(extractionMessage(result.extraction), extractionFailed(result.extraction) ? "error" : "success");
   } catch (error) {
     button.setAttribute("aria-disabled", "false");
     announce(messageOf(error), "error");
@@ -409,7 +438,8 @@ $("paste-form").addEventListener("submit", async (event) => {
     $("paste-text").value = "";
     await loadJobs();
     await reloadDetail(result.job.jobId);
-    announce(result.message, "success");
+    const extra = extractionMessage(result.extraction);
+    announce(extra ? `${result.message} ${extra}` : result.message, "success");
   } catch (error) {
     announce(messageOf(error), "error");
   } finally {
@@ -428,7 +458,8 @@ $("url-form").addEventListener("submit", async (event) => {
     $("url-input").value = "";
     await loadJobs();
     await reloadDetail(result.job.jobId);
-    announce(result.message, "success");
+    const extra = extractionMessage(result.extraction);
+    announce(extra ? `${result.message} ${extra}` : result.message, "success");
   } catch (error) {
     announce(messageOf(error), "error");
   } finally {

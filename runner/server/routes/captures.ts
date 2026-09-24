@@ -5,7 +5,9 @@ import { extractJobOutputSchema } from "../../agent/lib/extract-job-schema.ts";
 import { randomSecret } from "../../lib/crypto.ts";
 import { extractReadableText } from "../../lib/readable-text.ts";
 import { safeFetch, type SafeFetchRejectionReason } from "../../lib/safe-fetch.ts";
-import { JobsStore, type CaptureJobResult } from "../../store/jobs.ts";
+import { getBudgetState } from "../../store/budget.ts";
+import { JobsStore, type CaptureJobResult, type ExtractionFailureReason, type ExtractionNotRunReason, type ExtractionState } from "../../store/jobs.ts";
+import { serialise } from "../../store/profile-writes.ts";
 import type { RunnerContext } from "../context.ts";
 import { errorResponse, readBoundedJson, validationErrorResponse } from "../http.ts";
 import { defineRouteModule } from "../route-modules.ts";
@@ -31,12 +33,18 @@ import { runTurn } from "../run-harness.ts";
  * Only the URL-fetch path (`POST /url`) goes out to the network, through
  * `../../lib/safe-fetch.ts`, https only, with every SSRF rule.
  *
- * Extraction runs through P08-A's `runTurn` (decision: no second turn
- * classifier), for every path whose capture actually changed the content —
- * capturing the same content twice does not re-run a model call for no new
- * information. A turn that isn't `ok`, or has no successful `extract_job`
- * call, records no fields and says so plainly; nothing here retries a model
- * call.
+ * Extraction (round-1 review L5, revising the original inline design):
+ * a capture responds as soon as its snapshot is saved; extraction for a
+ * capture that actually changed the content is *queued*, then runs
+ * afterward in the background, one turn at a time per workspace
+ * (`EXTRACTION_CHAINS`, reusing `store/profile-writes.ts`'s `serialise`
+ * primitive so it is never queued behind, or ahead of, a job-store write).
+ * `store/jobs.ts`'s `ExtractionState` (a side-channel file beside the
+ * snapshot, `waiting`/`running`/`done`/`not_run`/`failed`) is how a caller —
+ * this route's own JSON responses, or a later GET — learns what happened,
+ * or is still happening. A turn that isn't `ok`, or has no successful
+ * `extract_job` call, records no fields and a plain reason code; nothing
+ * here retries a model call.
  */
 
 const MAX_PASTE_BODY_BYTES = 256 * 1024;
@@ -106,25 +114,155 @@ export type ExtractionStatus = "extracted" | "not_extracted";
 
 export interface ExtractionOutcome {
   readonly status: ExtractionStatus;
-  readonly message: string;
+  /** Present only for `status: "extracted"` — the tool's own persisted-fields message. */
+  readonly message?: string;
+  /** Present only for `status: "not_extracted"` — a stable reason code (`store/jobs.ts`'s `ExtractionFailureReason`); UI wording is `runner/ui/assets/jobs.js`'s job, never a raw server string. */
+  readonly reason?: ExtractionFailureReason;
 }
-
-const NOT_EXTRACTED_MESSAGE = "Structured fields were not extracted yet.";
 
 /**
  * Runs the extraction turn and reports what happened, plainly. Never throws:
  * a turn that isn't `ok`, or that never made a successful `extract_job` call
- * for this exact jobId/revision, records no fields (the decision above) —
- * covering eve not running, a timeout, a provider limit, or the model simply
- * not calling the tool, all the same way.
+ * for this exact jobId/revision, records no fields — covering eve not
+ * running, a timeout, a provider limit, or the model simply not calling the
+ * tool, each with its own reason code.
  */
 export async function runExtraction(ctx: RunnerContext, jobId: string, revision: number, text: string): Promise<ExtractionOutcome> {
   const result = await runTurn(ctx, { message: buildJobExtractionPrompt(jobId, revision, text), timeoutMs: EXTRACTION_TIMEOUT_MS, collectEvents: true });
-  if (result.status !== "ok") return { status: "not_extracted", message: NOT_EXTRACTED_MESSAGE };
+  if (result.status === "timeout") return { status: "not_extracted", reason: "timed_out" };
+  if (result.status !== "ok") return { status: "not_extracted", reason: "turn_failed" };
   const persisted = persistedJobExtraction(result.events ?? [], jobId, revision);
-  if (!persisted) return { status: "not_extracted", message: NOT_EXTRACTED_MESSAGE };
+  if (!persisted) return { status: "not_extracted", reason: "no_fields_found" };
   return { status: "extracted", message: persisted.message };
 }
+
+// --- Extraction queue (round-1 review L5) ---------------------------------
+
+/**
+ * One extraction turn at a time per workspace — this module's own map (like
+ * `store/jobs.ts`'s `JOB_CHAINS` and `store/profile-writes.ts`'s
+ * `PROCESS_CHAINS`), so an extraction turn is never queued behind, or ahead
+ * of, an unrelated job-store write, and two captures in quick succession
+ * never start two concurrent model turns against the same workspace.
+ */
+const EXTRACTION_CHAINS = new Map<string, Promise<unknown>>();
+
+/**
+ * `jobId:revision` keys with a turn actually in flight *in this process*,
+ * right now. A revision whose on-disk extraction state is `running` but
+ * whose key is absent from this set was left behind by a process that
+ * crashed mid-turn — this process's own set starts empty, so anything it did
+ * not itself begin reads that way, including its own past lives before a
+ * restart. `describeExtractionState` below reports that combination as
+ * `failed`/`interrupted` without ever rewriting the stale `running` record on
+ * disk; the next real attempt (a changed capture, or a manual retry)
+ * overwrites it normally.
+ */
+const ACTIVE_EXTRACTIONS = new Set<string>();
+
+function activeKey(jobId: string, revision: number): string {
+  return `${jobId}:${revision}`;
+}
+
+/**
+ * Whether an extraction turn can even be attempted right now. Checked
+ * synchronously before queueing (never inside the queued work itself), so a
+ * `not_run` state — and its reason — is visible the moment the capture
+ * responds, rather than only after waiting in line behind another
+ * workspace's turn: `waiting` is reserved for "an attempt will actually be
+ * made, once the current turn (if any) finishes."
+ */
+async function extractionPreflight(ctx: RunnerContext): Promise<ExtractionNotRunReason | undefined> {
+  if (!ctx.eve) return "runner_not_running";
+  if (!ctx.model) return "no_model";
+  const budget = await getBudgetState(ctx.workspace, ctx.clock);
+  if (budget.paused) return "budget_paused";
+  return undefined;
+}
+
+/**
+ * The extraction state to actually show for `jobId`/`revision`: the raw
+ * on-disk state and reason, with a persisted `running` reinterpreted as
+ * `failed`/`interrupted` whenever this process is not the one running it
+ * (see `ACTIVE_EXTRACTIONS`'s own comment). `undefined` when no extraction
+ * was ever recorded for this revision (seeded, or captured, before any
+ * extraction attempt).
+ */
+export async function describeExtractionState(ctx: RunnerContext, jobId: string, revision: number): Promise<ExtractionState | undefined> {
+  const store = new JobsStore(ctx.workspace);
+  const state = await store.getExtractionState(jobId, revision);
+  if (state?.status === "running" && !ACTIVE_EXTRACTIONS.has(activeKey(jobId, revision))) {
+    return { status: "failed", reason: "interrupted", updatedAt: state.updatedAt };
+  }
+  return state;
+}
+
+/**
+ * Runs one extraction turn for `jobId`/`revision` and records the outcome.
+ * Always called as `EXTRACTION_CHAINS`'s queued work (one turn at a time per
+ * workspace): marks itself `running` — and this process's own
+ * `ACTIVE_EXTRACTIONS` — the moment it actually starts, not when it is
+ * merely queued, so a revision waiting behind another one's turn still
+ * reads `waiting` for exactly as long as that remains true.
+ */
+async function runQueuedExtraction(ctx: RunnerContext, jobId: string, revision: number, text: string): Promise<void> {
+  const store = new JobsStore(ctx.workspace);
+  const key = activeKey(jobId, revision);
+  ACTIVE_EXTRACTIONS.add(key);
+  try {
+    await store.setExtractionState(jobId, revision, { status: "running", updatedAt: ctx.clock.now().toISOString() });
+    const outcome = await runExtraction(ctx, jobId, revision, text);
+    const updatedAt = ctx.clock.now().toISOString();
+    if (outcome.status === "extracted") await store.setExtractionState(jobId, revision, { status: "done", updatedAt });
+    else await store.setExtractionState(jobId, revision, { status: "failed", reason: outcome.reason, updatedAt });
+  } catch {
+    // runTurn is documented to never reject (server/run-harness.ts); this is a last-resort net so an unexpected
+    // throw here still leaves a terminal, honest state instead of "running" forever (which would otherwise only
+    // ever resolve to "interrupted", and only after this process itself restarts).
+    await store.setExtractionState(jobId, revision, { status: "failed", reason: "turn_failed", updatedAt: ctx.clock.now().toISOString() }).catch(() => undefined);
+  } finally {
+    ACTIVE_EXTRACTIONS.delete(key);
+  }
+}
+
+/**
+ * Queues an extraction turn and returns the state to report right away.
+ * Preflight runs first, synchronously with respect to the caller (before
+ * this function resolves) — a `not_run` state is on disk, and returned,
+ * before this ever touches `EXTRACTION_CHAINS`. Otherwise records `waiting`
+ * and fires the queued turn *without waiting for it*: the caller (a route or
+ * event handler) responds as soon as this resolves, well before the turn
+ * itself finishes (round-1 review L5's central requirement).
+ */
+async function queueExtraction(ctx: RunnerContext, jobId: string, revision: number, text: string): Promise<ExtractionState> {
+  const store = new JobsStore(ctx.workspace);
+  const notRunReason = await extractionPreflight(ctx);
+  if (notRunReason) {
+    const state: ExtractionState = { status: "not_run", reason: notRunReason, updatedAt: ctx.clock.now().toISOString() };
+    await store.setExtractionState(jobId, revision, state);
+    return state;
+  }
+  const state: ExtractionState = { status: "waiting", updatedAt: ctx.clock.now().toISOString() };
+  await store.setExtractionState(jobId, revision, state);
+  void serialise(EXTRACTION_CHAINS, ctx.workspace.root, () => runQueuedExtraction(ctx, jobId, revision, text));
+  return state;
+}
+
+/**
+ * Test-only: resolves once every extraction queued so far for this workspace
+ * has settled. A queued turn runs on a real promise chain
+ * (`EXTRACTION_CHAINS`), never a timer, so a test that wants to assert on the
+ * resulting snapshot or extraction state awaits this right after the
+ * capture/retry call that queued it — exactly as a person re-opening the
+ * Jobs page a moment later would see the finished result. A no-op (resolves
+ * immediately) when nothing was ever queued for this workspace, or the last
+ * queued item already finished and cleaned itself up.
+ */
+export async function waitForExtractionQueue(workspaceRoot: string): Promise<void> {
+  await (EXTRACTION_CHAINS.get(workspaceRoot) ?? Promise.resolve());
+}
+
+// --- Capture ---------------------------------------------------------------
 
 export interface CaptureAndExtractInput {
   readonly url: string;
@@ -135,34 +273,30 @@ export interface CaptureAndExtractInput {
 
 export interface CaptureAndExtractResult {
   readonly capture: CaptureJobResult;
-  /** Present only when the capture actually changed the content — an unchanged capture never re-runs extraction. */
-  readonly extraction?: ExtractionOutcome;
+  /**
+   * Present only when the capture actually changed the content — an
+   * unchanged capture never queues extraction. The state *at response time*:
+   * `not_run` (a reason already known, synchronously) or `waiting` (queued).
+   * Never `done`/`failed`/`running` here — those only ever apply once the
+   * queue has actually started or finished the turn, which happens after
+   * this has already resolved.
+   */
+  readonly extraction?: ExtractionState;
 }
 
-/** The one path every capture (extension event, paste, URL fetch) goes through, so the three produce identical snapshot records for the same text (F6 acceptance). */
+/** The one path every capture (extension event, paste, URL fetch) goes through, so the three produce identical snapshot records for the same text (F6 acceptance). Responds once the snapshot is saved; extraction (when the content changed) is queued, not awaited. */
 export async function captureAndExtract(ctx: RunnerContext, input: CaptureAndExtractInput): Promise<CaptureAndExtractResult> {
   const store = new JobsStore(ctx.workspace);
   const capture = await store.captureJob(input);
   if (!capture.contentChanged) return { capture };
-  const extraction = await runExtraction(ctx, capture.jobId, capture.revision, input.text);
-  // `runExtraction` persists structured fields onto this exact jobId/revision's
-  // snapshot on disk (via the extract_job tool's own store instance) when it
-  // succeeds; `capture.snapshot` above was read before that write, so it must
-  // be re-read here rather than returned stale — otherwise every caller
-  // (the job_capture event, paste, and url routes) would report `structured: {}`
-  // even on a successful extraction (F6 acceptance: identical snapshot records
-  // across all three capture paths).
-  if (extraction.status === "extracted") {
-    const updated = await store.getSnapshot(capture.jobId, capture.revision);
-    if (updated) return { capture: { ...capture, snapshot: updated }, extraction };
-  }
+  const extraction = await queueExtraction(ctx, capture.jobId, capture.revision, input.text);
   return { capture, extraction };
 }
 
 function captureResponseBody(result: CaptureAndExtractResult) {
   const { capture, extraction } = result;
-  const base = !capture.contentChanged ? "This posting hasn't changed since it was last saved." : capture.isNewJob ? "Saved a new job." : `Saved as revision ${capture.revision}.`;
-  return { ok: true, message: extraction ? `${base} ${extraction.message}` : base, job: capture.snapshot };
+  const message = !capture.contentChanged ? "This posting hasn't changed since it was last saved." : capture.isNewJob ? "Saved a new job." : `Saved as revision ${capture.revision}.`;
+  return { ok: true, message, contentChanged: capture.contentChanged, extraction, job: capture.snapshot };
 }
 
 function fetchStatusFor(reason: SafeFetchRejectionReason): number {
@@ -200,7 +334,7 @@ export default defineRouteModule({
         extractorVersion: event.extractorVersion,
         capturedAt: event.occurredAt,
       });
-      return { jobId: result.capture.jobId, revision: result.capture.revision, contentChanged: result.capture.contentChanged };
+      return { jobId: result.capture.jobId, revision: result.capture.revision, contentChanged: result.capture.contentChanged, extraction: result.extraction };
     },
   },
 
@@ -213,9 +347,14 @@ export default defineRouteModule({
     router.get("/:jobId", async (c) => {
       const jobId = uuidSchema.safeParse(c.req.param("jobId"));
       if (!jobId.success) return errorResponse(404, "not_found", "No such job.");
-      const revisions = await new JobsStore(ctx.workspace).getJobRevisions(jobId.data);
+      const store = new JobsStore(ctx.workspace);
+      const revisions = await store.getJobRevisions(jobId.data);
       if (!revisions) return errorResponse(404, "not_found", "No such job.");
-      return c.json({ jobId: jobId.data, revisions });
+      // Parallel to `revisions`, same order and length; a JSON `undefined` entry serializes to `null` ("no
+      // extraction ever recorded for this revision"), which is exactly the distinction `describeExtractionState`
+      // draws (`store/jobs.ts`'s own doc comment).
+      const extraction = await Promise.all(revisions.map((revision) => describeExtractionState(ctx, jobId.data, revision.revision)));
+      return c.json({ jobId: jobId.data, revisions, extraction });
     });
 
     router.post("/paste", async (c) => {
@@ -264,7 +403,9 @@ export default defineRouteModule({
     });
 
     // A revision saved before eve was running (or whose turn didn't finish)
-    // has no structured fields yet; this lets the Jobs page try again.
+    // has no structured fields yet; this lets the Jobs page try again. Like
+    // every other path, this responds once the retry is queued, not once it
+    // finishes — the current state is enough to know what a click just did.
     router.post("/:jobId/:revision/extract", async (c) => {
       const jobId = uuidSchema.safeParse(c.req.param("jobId"));
       const revision = revisionParamSchema.safeParse(c.req.param("revision"));
@@ -272,9 +413,10 @@ export default defineRouteModule({
       const store = new JobsStore(ctx.workspace);
       const snapshot = await store.getSnapshot(jobId.data, revision.data);
       if (!snapshot) return errorResponse(404, "not_found", "No such job.");
-      const extraction = await runExtraction(ctx, jobId.data, revision.data, snapshot.text);
-      const updated = await store.getSnapshot(jobId.data, revision.data);
-      return c.json({ ok: extraction.status === "extracted", message: extraction.message, job: updated });
+      const current = await describeExtractionState(ctx, jobId.data, revision.data);
+      // Already mid-flight: report it as-is rather than queuing a second, redundant turn behind it.
+      const extraction = current?.status === "waiting" || current?.status === "running" ? current : await queueExtraction(ctx, jobId.data, revision.data, snapshot.text);
+      return c.json({ ok: true, extraction, job: snapshot });
     });
   },
 });

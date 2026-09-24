@@ -38,10 +38,16 @@ async function newStoresSharingAWorkspace(): Promise<{ jobsStore: JobsStore; pro
   return { jobsStore: new JobsStore(workspace), profileStore: new ProfileStore(workspace, clock), workspace };
 }
 
+/** The precondition `persistExtractedJob` now checks (round-1 review L5: "the tool validates and the route writes") — the queue in `captures.ts` sets this before running the turn that could call `extract_job` for this exact revision. */
+async function markRunning(store: JobsStore, jobId: string, revision: number): Promise<void> {
+  await store.setExtractionState(jobId, revision, { status: "running", updatedAt: "2026-09-22T09:00:00.500Z" });
+}
+
 describe("persistExtractedJob", () => {
-  it("persists structured fields onto the named snapshot and reports success", async () => {
+  it("persists structured fields onto the named snapshot and reports success, while the revision is marked running", async () => {
     const store = await newStore();
     const { jobId, revision } = await store.captureJob({ url: "https://jobs.example/northwind-labs/staff-platform-engineer", text: "Staff Platform Engineer at Northwind Labs.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await markRunning(store, jobId, revision);
 
     const output = await persistExtractedJob({ jobId, revision, structured: { title: "Staff Platform Engineer", company: "Northwind Labs" } }, store);
     expect(output).toEqual({ jobId, revision, persisted: true, message: "Saved the extracted fields." });
@@ -52,14 +58,17 @@ describe("persistExtractedJob", () => {
 
   it("reports persisted: false for an id that names no real snapshot — never invents one", async () => {
     const store = await newStore();
+    // No capture, so no extraction state either: refused for the same reason a real-but-idle revision is (below),
+    // one message that is equally true of both — "not currently being extracted" covers "there is no such job" too.
     const output = await persistExtractedJob({ jobId: "00000000-0000-4000-8000-000000000000", revision: 1, structured: { title: "Ghost role" } }, store);
     expect(output.persisted).toBe(false);
-    expect(output.message).toMatch(/no snapshot/i);
+    expect(output.message).toMatch(/isn't currently being extracted/i);
   });
 
   it("is safe to call twice with the same fields (idempotent overwrite, not an error)", async () => {
     const store = await newStore();
     const { jobId, revision } = await store.captureJob({ url: "https://jobs.example/harbor/platform-engineer", text: "Platform Engineer at Harbor.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await markRunning(store, jobId, revision);
     const structured = { title: "Platform Engineer", company: "Harbor" };
     const first = await persistExtractedJob({ jobId, revision, structured }, store);
     const second = await persistExtractedJob({ jobId, revision, structured }, store);
@@ -76,6 +85,7 @@ describe("persistExtractedJob", () => {
       extractorVersion: "t",
       capturedAt: "2026-09-22T09:00:00.000Z",
     });
+    await markRunning(jobsStore, jobId, revision);
     const before = ProfileStore.markdownHash(renderProfileMarkdown((await profileStore.load()).profile));
 
     // What a hostile posting could plausibly get a model to draft: the
@@ -89,5 +99,25 @@ describe("persistExtractedJob", () => {
 
     const after = ProfileStore.markdownHash(renderProfileMarkdown((await profileStore.load()).profile));
     expect(after).toBe(before);
+  });
+
+  it("refuses to write a revision that isn't currently being extracted — round-1 review L5 (\"extract_job can't write a revision that isn't being extracted\")", async () => {
+    const store = await newStore();
+    const { jobId, revision } = await store.captureJob({ url: "https://jobs.example/fernwood/support-engineer", text: "Support Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    // No markRunning here: nothing has asked for this revision to be extracted right now.
+    const output = await persistExtractedJob({ jobId, revision, structured: { title: "Support Engineer" } }, store);
+    expect(output.persisted).toBe(false);
+    expect(output.message).toMatch(/isn't currently being extracted/i);
+    expect((await store.getSnapshot(jobId, revision))?.structured).toEqual({});
+  });
+
+  it("refuses a call for a revision whose extraction already finished (done) — a stale tool call from an earlier turn must not overwrite a later result", async () => {
+    const store = await newStore();
+    const { jobId, revision } = await store.captureJob({ url: "https://jobs.example/fernwood/support-engineer-2", text: "Support Engineer at Fernwood.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    await store.recordStructured(jobId, revision, { title: "The real, already-finished result" });
+    await store.setExtractionState(jobId, revision, { status: "done", updatedAt: "2026-09-22T09:00:02.000Z" });
+    const output = await persistExtractedJob({ jobId, revision, structured: { title: "A stale call trying to overwrite it" } }, store);
+    expect(output.persisted).toBe(false);
+    expect((await store.getSnapshot(jobId, revision))?.structured).toEqual({ title: "The real, already-finished result" });
   });
 });

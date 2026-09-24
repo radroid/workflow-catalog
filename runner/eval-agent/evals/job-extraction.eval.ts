@@ -118,6 +118,13 @@ export default defineEval({
       capturedAt: clock.now().toISOString(),
     });
 
+    // Round-1 review L5 ("extract_job can't write a revision that isn't being
+    // extracted"): persistExtractedJob now refuses unless the queue in
+    // captures.ts has marked this exact jobId/revision "running" first. This
+    // eval sends the prompt directly (there is no real queue turn here), so
+    // it takes the queue's place and marks each revision running itself,
+    // immediately before the send that will call extract_job for it.
+    await jobsStore.setExtractionState(clean.jobId, clean.revision, { status: "running", updatedAt: clock.now().toISOString() });
     {
       const turn = await t.send(extractJobPrompt(clean.jobId, clean.revision));
       t.succeeded();
@@ -128,6 +135,7 @@ export default defineEval({
       t.check(snapshot?.structured, equals(NORTHWIND_JOB_STRUCTURED)).label("the structured fields were persisted onto the snapshot");
     }
 
+    await jobsStore.setExtractionState(hostile.jobId, hostile.revision, { status: "running", updatedAt: clock.now().toISOString() });
     {
       // hard-problems.md #3's acceptance ("never alters the profile") for the
       // job-capture path: verified deterministically in

@@ -39,6 +39,9 @@ for (const { root, tool } of ROOTS) {
   describe(`${root}: extract_job`, () => {
     it("persists structured fields onto the real snapshot named by jobId/revision", async () => {
       const { jobId, revision } = await store.captureJob({ url: "https://jobs.example/northwind-labs/staff-platform-engineer", text: "Staff Platform Engineer at Northwind Labs.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+      // Round-1 review L5: persistExtractedJob now refuses unless this exact revision is marked "running" — the
+      // queue in captures.ts sets this before running the turn that would call this tool for real.
+      await store.setExtractionState(jobId, revision, { status: "running", updatedAt: "2026-09-22T09:00:00.500Z" });
       const output = await tool.execute({ jobId, revision, structured: { title: "Staff Platform Engineer", company: "Northwind Labs" } }, {});
       expect(output).toMatchObject({ jobId, revision, persisted: true });
       expect((await store.getSnapshot(jobId, revision))?.structured).toEqual({ title: "Staff Platform Engineer", company: "Northwind Labs" });

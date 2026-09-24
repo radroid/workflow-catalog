@@ -244,7 +244,10 @@ describe("Jobs page: detail, revisions and the posting-changed diff", () => {
     expect(retry).toBeDefined();
     retry!.click();
     await until(() => page.status() !== "", "the retry outcome");
-    expect(page.status()).toBe("Structured fields were not extracted yet.");
+    // Round-1 review L5: retry now responds once the attempt is queued, not once a turn finishes; with no eve
+    // configured, extractionPreflight refuses synchronously ("runner_not_running") before ever queuing one. L12
+    // finalizes this wording with next-step guidance; for now it is jobs.js's own EXTRACTION_REASON_MESSAGES text.
+    expect(page.status()).toBe("The runner isn't running, so this can't be extracted right now.");
     expect(page.document.activeElement?.id).toBe("detail-title"); // the clicked button was rebuilt away; focus moved to the panel's own heading, never dropped to <body>
   });
 });

@@ -4,7 +4,7 @@ import type { Client, ClientSession, MessageResponse, MessageStreamEvent } from 
 import { describe, expect, it } from "vitest";
 import type { EveGateway } from "../server/eve-gateway.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
-import capturesModule, { buildJobExtractionPrompt, captureAndExtract, runExtraction } from "../server/routes/captures.ts";
+import capturesModule, { buildJobExtractionPrompt, captureAndExtract, runExtraction, waitForExtractionQueue } from "../server/routes/captures.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import { JobsStore } from "../store/jobs.ts";
 import { BRIDGE, jobCapture, makeBridge, pairDevice, postEvent, UI_TOKEN, type TestBridge } from "./helpers.ts";
@@ -156,7 +156,7 @@ describe("captures.ts: job_capture event (extension path)", () => {
   });
 });
 
-describe("captures.ts: extraction runs inline through runTurn when content changed", () => {
+describe("captures.ts: extraction is queued and runs in the background through runTurn when content changed", () => {
   it("persists structured fields via the real extract_job tool round trip", async () => {
     const ref: { store?: JobsStore } = {};
     const { eve, calls } = fakeEve(extractingScript(() => ref.store!, NORTHWIND_STRUCTURED));
@@ -164,7 +164,9 @@ describe("captures.ts: extraction runs inline through runTurn when content chang
     ref.store = new JobsStore(withEve.workspace);
     const { token } = await pairDevice(withEve);
     const response = await postEvent(withEve, token, jobCapture({ text: "Staff Platform Engineer at Northwind Labs." }));
-    const body = (await response.json()) as { result: { jobId: string; revision: number } };
+    const body = (await response.json()) as { result: { jobId: string; revision: number; extraction?: { status: string } } };
+    expect(body.result.extraction?.status).toBe("waiting"); // queued, not finished, by the time the response arrives
+    await waitForExtractionQueue(withEve.workspace.root);
     expect(calls).toHaveLength(1);
     const snapshot = await ref.store.getSnapshot(body.result.jobId, body.result.revision);
     expect(snapshot?.structured).toEqual(NORTHWIND_STRUCTURED);
@@ -178,6 +180,7 @@ describe("captures.ts: extraction runs inline through runTurn when content chang
     const { token } = await pairDevice(bridge);
     const text = "Staff Platform Engineer at Northwind Labs. Fictional posting for the mutation-proof test.";
     await postEvent(bridge, token, jobCapture({ text }));
+    await waitForExtractionQueue(bridge.workspace.root);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain(text);
     expect(calls[0]).toContain("--- POSTING-"); // the random per-call boundary (buildJobExtractionPrompt)
@@ -192,7 +195,35 @@ describe("captures.ts: extraction runs inline through runTurn when content chang
     const capture = jobCapture();
     await postEvent(bridge, token, capture);
     await postEvent(bridge, token, jobCapture({ ...capture, eventId: randomUUID() })); // same url+text, new eventId: same content hash, no new revision
+    await waitForExtractionQueue(bridge.workspace.root);
     expect(calls).toHaveLength(1); // extraction ran only for the first (content-changing) capture
+  });
+
+  it("the event response arrives before a slow fake turn finishes (round-1 review L5)", async () => {
+    let resolveTurn!: () => void;
+    const turnGate = new Promise<void>((resolve) => {
+      resolveTurn = resolve;
+    });
+    const { eve } = fakeEve(async () => {
+      await turnGate; // never resolves on its own: if the route awaited this turn, the request below would hang
+      return [turnCompleted(), sessionWaiting()];
+    });
+    const bridge = await bridgeWith(eve);
+    const { token } = await pairDevice(bridge);
+
+    const response = await postEvent(bridge, token, jobCapture());
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { result: { jobId: string; revision: number; extraction?: { status: string } } };
+    expect(body.result.extraction?.status).toBe("waiting");
+
+    const store = new JobsStore(bridge.workspace);
+    const midFlight = await store.getExtractionState(body.result.jobId, body.result.revision);
+    expect(midFlight && ["waiting", "running"].includes(midFlight.status)).toBe(true); // still not done — the response did not wait for the turn
+
+    resolveTurn();
+    await waitForExtractionQueue(bridge.workspace.root);
+    const finished = await store.getExtractionState(body.result.jobId, body.result.revision);
+    expect(finished).toMatchObject({ status: "failed", reason: "no_fields_found" }); // the scripted turn above never calls extract_job
   });
 
   it("a turn that isn't ok records no fields, even when a tool call inside it looked successful (mutation target: 'count a non-ok turn as extracted')", async () => {
@@ -238,11 +269,16 @@ describe("captures.ts: three paths produce identical snapshot records for the sa
     const viaExtension = await captureAndExtract(ctxWithEve, { url: "https://jobs.example/via-extension", text, extractorVersion: "extension@1", capturedAt: "2026-09-22T09:00:00.000Z" });
     const viaPaste = await captureAndExtract(ctxWithEve, { url: "https://jobs.example/via-paste", text, extractorVersion: "paste@1", capturedAt: "2026-09-22T09:00:00.000Z" });
     const viaUrlFetch = await captureAndExtract(ctxWithEve, { url: "https://jobs.example/via-url-fetch", text, extractorVersion: "url-fetch@1", capturedAt: "2026-09-22T09:00:00.000Z" });
+    // Each captureAndExtract call above only *queues* its extraction (round-1 review L5); EXTRACTION_CHAINS
+    // serializes all three onto the same per-workspace chain in the order they were queued, so draining once
+    // here — after all three have been queued — waits for all three, not just the last.
+    await waitForExtractionQueue(ctxWithEve.workspace.root);
 
-    for (const result of [viaExtension, viaPaste, viaUrlFetch]) {
-      expect(result.capture.snapshot.text).toBe(text);
-      expect(result.capture.snapshot.contentHash).toBe(viaExtension.capture.snapshot.contentHash);
-      expect(result.capture.snapshot.structured).toEqual(NORTHWIND_STRUCTURED);
+    for (const queued of [viaExtension, viaPaste, viaUrlFetch]) {
+      const snapshot = await store.getSnapshot(queued.capture.jobId, queued.capture.revision);
+      expect(snapshot?.text).toBe(text);
+      expect(snapshot?.contentHash).toBe(viaExtension.capture.snapshot.contentHash);
+      expect(snapshot?.structured).toEqual(NORTHWIND_STRUCTURED);
     }
   });
 });
