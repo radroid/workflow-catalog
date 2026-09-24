@@ -1,15 +1,22 @@
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { SOURCE_CATEGORIES } from "@workflow-catalog/contracts";
+import { SOURCE_CATEGORIES, type SourceCategory } from "@workflow-catalog/contracts";
 import type { Client, InputRequest, MessageStreamEvent } from "eve/client";
-import { describe, expect, it } from "vitest";
-import { verifyAndPersistExtractedClaims } from "../agent/lib/extract-claims-logic.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { verifyExtractedClaims } from "../agent/lib/extract-claims-logic.ts";
 import type { ExtractClaimsInput } from "../agent/lib/extract-claims-schema.ts";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import type { EveGateway } from "../server/eve-gateway.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
-import { buildExtractionPrompt, EXTRACTION_STOPPED, EXTRACTION_TIMEOUT_MS, MARKDOWN_UNREADABLE_EXTRACT_REFUSAL, MARKDOWN_UNREADABLE_REFUSAL } from "../server/routes/onboarding.ts";
+import {
+  buildExtractionPrompt,
+  EXTRACTION_STOPPED,
+  EXTRACTION_TIMEOUT_MS,
+  extractionTiming,
+  MARKDOWN_UNREADABLE_EXTRACT_REFUSAL,
+  MARKDOWN_UNREADABLE_REFUSAL,
+} from "../server/routes/onboarding.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { SOURCE_CATEGORY_LABELS } from "../store/profile-types.ts";
 import { PROFILE_BUSY_MESSAGE } from "../store/profile-writes.ts";
@@ -29,17 +36,27 @@ const COOKIE = `${UI_COOKIE}=${UI_TOKEN}`;
 const SAME_ORIGIN = { cookie: COOKIE, origin: BRIDGE, "content-type": "application/json", "sec-fetch-site": "same-origin" };
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
+// The R3 timeout case shortens the deadline to reach it without waiting 90 s; restored so it never leaks
+// into another test (mirrors test/onboarding-extract-timeout.test.ts's own afterEach).
+afterEach(() => {
+  extractionTiming.timeoutMs = EXTRACTION_TIMEOUT_MS;
+});
+
 interface FakeTurnResult {
+  /** Which boundary event ends the stream (eve-runtime §8 item 15): `classifyTurn` (run-harness.ts) derives the turn's own status purely from the events below, never from a trusted side channel, so this only shapes the stream. */
   readonly status: "completed" | "failed" | "waiting";
   readonly events?: readonly MessageStreamEvent[];
   readonly inputRequests?: readonly InputRequest[];
-  readonly message?: string;
-  /** Scripts an extract_claims call: the fake runs the real verify-then-persist helper against the bridge's workspace, as the tool step would, and puts its output in an `action.result` event. */
+  /** Scripts an extract_claims call: the fake runs the real verify-only helper against the bridge's workspace, as the tool step would, and puts its output in an `action.result` event. The route — not this fixture, and not the tool — persists what verifies, after an ok turn (deliverable 5). */
   readonly extract?: ExtractClaimsInput["claims"];
   /** Makes `sessions.create` reject with this error instead of answering. */
   readonly reject?: Error;
   /** Leaves out the terminal `session.*` event every finished turn ends with (eve-runtime §8 item 15). */
   readonly noBoundary?: boolean;
+  /** The response never yields an event; `next()` only settles when `classifyTurn`'s own `AbortSignal.timeout` fires, the way a real hung stream would (R3 timeout). `status`/`events`/`extract`/`noBoundary` are ignored. */
+  readonly hang?: boolean;
+  /** Simulates a concurrent write landing while this turn is "in flight" (D8): unmarks the category right after the tool verifies, before the turn ends, so the route's own persist call (after the ok turn) reaches a store that has since refused it. */
+  readonly unmarkDuringTurn?: SourceCategory;
 }
 
 function boundaryEvent(status: FakeTurnResult["status"]): MessageStreamEvent {
@@ -63,10 +80,38 @@ function actionResult(output: unknown, toolName = "extract_claims"): MessageStre
   } as MessageStreamEvent;
 }
 
+/** An async-iterable of the given events — everything `classifyTurn`'s `for await (const event of created.response)` needs (P03.2 deliverable 1). */
+function eventStream(events: readonly MessageStreamEvent[]): AsyncIterable<MessageStreamEvent> {
+  return {
+    [Symbol.asyncIterator]() {
+      let i = 0;
+      return { next: async () => (i < events.length ? { done: false as const, value: events[i++]! } : { done: true as const, value: undefined }) };
+    },
+  };
+}
+
+/** Never yields; its one pending `next()` only settles once `signal` fires, exactly like a real hung stream open/read (eve-runtime §8 item 15). */
+function hangingStream(signal: AbortSignal | undefined): AsyncIterable<MessageStreamEvent> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: () =>
+          new Promise<IteratorResult<MessageStreamEvent>>((_resolve, reject) => {
+            if (signal?.aborted) return reject(signal.reason);
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      };
+    },
+  };
+}
+
 /**
  * A fake eve gateway: `client.sessions.create` answers with one scripted
  * turn per call (the last repeats). Cast through `Client` the same way
- * `test/local-ui.test.ts` casts a partial `EveGateway`.
+ * `test/local-ui.test.ts` casts a partial `EveGateway`. `response` is an
+ * async-iterable of events, never a `.result()` promise: `run-harness.ts`'s
+ * `classifyTurn` is the one place that turns those events into a status
+ * (P03.2 deliverable 1), so this fixture asserts nothing about status itself.
  */
 function fakeExtraction(results: readonly FakeTurnResult[]): FakeExtraction {
   const calls = { count: 0, cancelCount: 0, lastSignal: undefined as AbortSignal | undefined };
@@ -78,28 +123,34 @@ function fakeExtraction(results: readonly FakeTurnResult[]): FakeExtraction {
         calls.lastSignal = input.signal;
         const chosen = results[Math.min(calls.count - 1, results.length - 1)]!;
         if (chosen.reject) throw chosen.reject;
-        const events = [...(chosen.events ?? [])];
+        const session = {
+          cancel: async () => {
+            calls.cancelCount += 1;
+            return { status: "accepted" } as never;
+          },
+        } as never;
+        if (chosen.hang) return { session, response: { sessionId: "fake-session", ...hangingStream(input.signal) } as never };
+        const events: MessageStreamEvent[] = [...(chosen.events ?? [])];
         if (chosen.extract) {
           const category = /sourceCategory: "(\w+)"/.exec(input.message)?.[1] as ExtractClaimsInput["sourceCategory"];
-          const output = await verifyAndPersistExtractedClaims({ sourceCategory: category, claims: chosen.extract }, new ProfileStore(bridge!.workspace, bridge!.clock));
+          const output = await verifyExtractedClaims({ sourceCategory: category, claims: chosen.extract }, new ProfileStore(bridge!.workspace, bridge!.clock));
           events.push(actionResult(output));
+        }
+        if (chosen.unmarkDuringTurn) {
+          await new ProfileStore(bridge!.workspace, bridge!.clock).accountSource(chosen.unmarkDuringTurn, "unavailable", "Reconsidered while extraction was running.");
+        }
+        if (chosen.inputRequests && chosen.inputRequests.length > 0) {
+          events.push({
+            type: "input.requested",
+            data: { requests: chosen.inputRequests, sequence: events.length + 1, stepIndex: 0, turnId: "turn-1" },
+            meta: { at: "2026-09-22T09:00:00.500Z", id: "evt-input" },
+          } as MessageStreamEvent);
         }
         if (!chosen.noBoundary) events.push(boundaryEvent(chosen.status));
         return {
           // eve-runtime §8 item 15: the route cancels through the session, never MessageResponse.cancel().
-          session: {
-            cancel: async () => {
-              calls.cancelCount += 1;
-              return { status: "accepted" } as never;
-            },
-          } as never,
-          response: {
-            sessionId: "fake-session",
-            cancel: async () => {
-              throw new Error("MessageResponse.cancel() sends nothing once a turn is parked; cancel through the session.");
-            },
-            result: async () => ({ data: undefined, message: chosen.message, events, inputRequests: chosen.inputRequests ?? [], sessionId: "fake-session", status: chosen.status }),
-          } as never,
+          session,
+          response: { sessionId: "fake-session", ...eventStream(events) } as never,
         };
       },
     },
@@ -230,7 +281,7 @@ describe("D13: source text, uploads and path confinement", () => {
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const first = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
-    expect(first).toMatchObject({ ok: true, status: "completed" });
+    expect(first).toMatchObject({ ok: true, status: "ok" });
     expect(fake.calls.count).toBe(1);
 
     const saved = await getJson<{ text: string; uploads: string[] }>(bridge, "/sources/resume/content");
@@ -344,11 +395,14 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const response = await post(bridge, "/sources/resume/extract");
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean; status: string; message: string };
-    expect(body).toMatchObject({ ok: false, status: "waiting", message: "The extraction failed: The model call failed (model_error)." });
+    // P03.2 (deliverable 1): classifyTurn (run-harness.ts) checks for a failure event before it trusts any
+    // boundary, so a turn.failed here is "failed", never the "waiting" boundary that follows it — the same
+    // scenario R3 always meant to catch, now named the way TurnResult.status names it everywhere else.
+    expect(body).toMatchObject({ ok: false, status: "failed", message: "The extraction failed: model_error: The model call failed." });
   });
 
   it("a session.failed status is not ok", async () => {
-    const bridge = await realBridge(fakeExtraction([{ status: "failed", message: "internal error" }]));
+    const bridge = await realBridge(fakeExtraction([{ status: "failed" }]));
     await provideResume(bridge);
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
     expect(body).toMatchObject({ ok: false, status: "failed" });
@@ -360,44 +414,51 @@ describe("/api/onboarding/sources/:category/extract: R3, a turn is only reported
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
-    expect(body).toMatchObject({ ok: false, status: "waiting" });
+    // TurnResult.status names a park "parked", not eve's own "waiting" (deliverable 1).
+    expect(body).toMatchObject({ ok: false, status: "parked" });
     expect(fake.calls.cancelCount).toBe(1);
   });
 
-  it("a clean turn whose extract_claims call persisted is ok, with the tool's own count in the message", async () => {
-    const fake = fakeExtraction([{ status: "completed", message: "Done.", extract: [LED_CLAIM, { ...LED_CLAIM, text: "Founded Quill.", evidenceQuote: "Founded Quill" }] }]);
+  it("a clean turn whose extract_claims call persisted is ok, with the store's own count in the message", async () => {
+    const fake = fakeExtraction([{ status: "completed", extract: [LED_CLAIM, { ...LED_CLAIM, text: "Founded Quill.", evidenceQuote: "Founded Quill" }] }]);
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: Array<{ text: string }> };
     expect(body.ok).toBe(true);
-    expect(body.status).toBe("completed");
+    expect(body.status).toBe("ok"); // TurnResult's own vocabulary (deliverable 1), in place of eve's raw "completed"/"waiting"
     expect(body.message).toBe("1 candidate claim extracted from Resume; 1 had no matching quote.");
     expect(body.claims.map((claim) => claim.text)).toEqual(["Led the payments team at Northwind Labs."]);
   });
 
-  it("R3 timeout: passes a live AbortSignal to eve, and a timeout is a 504 with a plain message", async () => {
-    const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
-    const fake = fakeExtraction([{ status: "completed", reject: timeout }]);
+  it("R3 timeout: the route's own deadline reaches classifyTurn, which cancels the session and reports a timeout", async () => {
+    // P03.2 (deliverable 1): classifyTurn (run-harness.ts) owns the one AbortSignal.timeout now, built from
+    // the timeoutMs runTurn is called with, so this only proves the route still wires extractionTiming.timeoutMs
+    // through and renders the resulting TurnResult; a real hung stream, over the real eve@0.63.0 client, is
+    // covered in test/onboarding-extract-timeout.test.ts (the packet's real-Client timeout case).
+    const fake = fakeExtraction([{ status: "completed", hang: true }]);
     const bridge = await realBridge(fake);
     await provideResume(bridge);
+    extractionTiming.timeoutMs = 50;
     const response = await post(bridge, "/sources/resume/extract");
     expect(fake.calls.lastSignal).toBeInstanceOf(AbortSignal);
-    expect(fake.calls.lastSignal?.aborted).toBe(false);
-    expect(EXTRACTION_TIMEOUT_MS).toBe(90_000);
-    expect(response.status).toBe(504);
-    expect(((await response.json()) as { error: { code: string; message: string } }).error).toEqual({
-      code: "extraction_timed_out",
-      message: "No answer from the model within 90 s, so the extraction was stopped. Try again.",
-    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean; status: string; message: string; claims: unknown[] };
+    expect(body).toMatchObject({ ok: false, status: "timeout", message: "No answer from the model within 50 ms, so the extraction was stopped. Try again.", claims: [] });
+    expect(fake.calls.cancelCount).toBe(1);
   });
 
-  it("a 'completed' turn with no terminal session event never finished: not ok, no hash, and the session is cancelled (eve-runtime §8 item 15)", async () => {
+  it("a 'completed' turn with no terminal session event never finished: not ok, no hash (eve-runtime §8 item 15)", async () => {
     const fake = fakeExtraction([{ status: "completed", extract: [LED_CLAIM], noBoundary: true }]);
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; message: string };
-    expect(body).toMatchObject({ ok: false, message: "The extraction ended before the model finished. Try again." });
-    expect(fake.calls.cancelCount).toBe(1);
+    expect(body).toMatchObject({ ok: false, message: "The extraction failed: The turn ended without a result." });
+    // classifyTurn cancels a no-boundary end only when it actually saw the abort fire (the signal.aborted
+    // branch); a stream that simply ends with no boundary and no abort, as this fixture scripts, is not
+    // something a real eve@0.63.0 client does on its own (eve-runtime.md §8 item 15) — the quiet-abort case
+    // it does produce is covered against the real client in onboarding-extract-timeout.test.ts, where
+    // classifyTurn does cancel.
+    expect(fake.calls.cancelCount).toBe(0);
     await post(bridge, "/sources/resume/extract");
     expect(fake.calls.count).toBe(2); // no hash was recorded, so the same text runs again
   });
@@ -439,19 +500,19 @@ describe("/api/onboarding/sources/:category/extract: R7 and D14, idempotent per 
     await provideResume(bridge);
     expect(((await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean }).ok).toBe(false);
     const second = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
-    expect(second).toMatchObject({ ok: true, status: "completed" });
+    expect(second).toMatchObject({ ok: true, status: "ok" });
     expect(fake.calls.count).toBe(2);
   });
 
   it("D14 (VN6): a turn that never called extract_claims records no hash, says nothing was saved, and the next attempt runs again", async () => {
-    const fake = fakeExtraction([{ status: "completed", message: "All done!" }, { status: "completed", extract: [LED_CLAIM] }]);
+    const fake = fakeExtraction([{ status: "completed" }, { status: "completed", extract: [LED_CLAIM] }]);
     const bridge = await realBridge(fake);
     await provideResume(bridge);
     const first = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string };
-    expect(first).toEqual({ ok: false, status: "completed", message: "The model finished without saving any claims. Try again.", claims: [] });
+    expect(first).toEqual({ ok: false, status: "ok", message: "The model finished without saving any claims. Try again.", claims: [] });
     expect(await readdir(path.join(bridge.workspace.root, ".runner", "onboarding")).catch(() => [])).not.toContain("resume.json");
     const second = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string };
-    expect(second).toMatchObject({ ok: true, status: "completed" });
+    expect(second).toMatchObject({ ok: true, status: "ok" });
     expect(fake.calls.count).toBe(2);
   });
 
@@ -462,6 +523,21 @@ describe("/api/onboarding/sources/:category/extract: R7 and D14, idempotent per 
     expect(((await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean }).ok).toBe(false);
     await post(bridge, "/sources/resume/extract");
     expect(fake.calls.count).toBe(2);
+  });
+
+  it("D14, via the route (moved from extract-claims-logic.test.ts, deliverable 5): the store refusing the persist — a race unmarks the source while the turn is in flight — is not ok, surfaces the store's own refusal, and saves nothing, even though the turn itself ended ok and the tool verified a real claim", async () => {
+    const fake = fakeExtraction([{ status: "completed", extract: [LED_CLAIM], unmarkDuringTurn: "resume" }]);
+    const bridge = await realBridge(fake);
+    await provideResume(bridge);
+    const body = (await (await post(bridge, "/sources/resume/extract")).json()) as { ok: boolean; status: string; message: string; claims: unknown[] };
+    // The turn itself finished ok (classifyTurn's job); the store's own extractClaims refused the persist
+    // (profile-reducer.ts's "extractClaims" case, the same refusal accountSource/decideClaim/etc. all share) —
+    // a distinct, later reason the route surfaces verbatim, not a re-derived classification of its own.
+    expect(body).toMatchObject({ ok: false, status: "ok", message: "Nothing to extract: Resume is not marked provided." });
+    expect(body.claims).toEqual([]);
+    const store = new ProfileStore(bridge.workspace, bridge.clock);
+    expect((await store.read()).claims).toEqual([]);
+    expect(await store.isSourceContentUnchanged("resume", RESUME_TEXT)).toBe(false); // no hash recorded either
   });
 
   it("VN3: refuses to extract when everything saved for a category adds up to more than 2 MiB", async () => {
