@@ -106,7 +106,9 @@ afterEach(async () => {
   while (pages.length > 0) {
     const page = pages.pop()!;
     page.setVisibility("hidden");
-    await sleep(50);
+    // A refresh already under way still reads the workspace, and every read takes the profile's lock file; the
+    // workspace is removed next, so let it finish first (on a loaded machine, removing it mid-read failed with ENOTEMPTY).
+    await page.quiet();
     await page.window.happyDOM.close();
   }
   for (const name of GLOBALS) (globalThis as Record<string, unknown>)[name] = saved.get(name);
@@ -129,6 +131,8 @@ interface Page {
   submit(formId: string): void;
   setVisibility(state: "visible" | "hidden"): void;
   refreshNow(): void;
+  /** Resolves once none of the page's requests has been in flight for 100 ms (at most 10 s). */
+  quiet(): Promise<void>;
 }
 
 async function until(check: () => boolean, what: string, timeoutMs = 8_000): Promise<void> {
@@ -164,11 +168,13 @@ async function openPage(bridge: TestBridge, options: { intercept?: Intercept } =
   g.requestAnimationFrame = (callback: (time: number) => void) => window.requestAnimationFrame(callback);
   g.setTimeout = (callback: () => void, ms?: number) => window.setTimeout(callback, ms);
   g.clearTimeout = (handle: unknown) => window.clearTimeout(handle);
+  let inFlight = 0;
   g.fetch = (input: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) => {
     requests.push(`${init.method ?? "GET"} ${input}`);
     const stubbed = options.intercept?.(input, init);
-    if (stubbed) return stubbed;
-    return bridge.request(input, { method: init.method, body: init.body, headers: { ...init.headers, cookie: COOKIE, origin: BRIDGE, "sec-fetch-site": "same-origin" } });
+    inFlight += 1;
+    const response = stubbed ?? bridge.request(input, { method: init.method, body: init.body, headers: { ...init.headers, cookie: COOKIE, origin: BRIDGE, "sec-fetch-site": "same-origin" } });
+    return response.finally(() => (inFlight -= 1));
   };
   const document = window.document;
   const byId = (id: string) => {
@@ -208,6 +214,15 @@ async function openPage(bridge: TestBridge, options: { intercept?: Intercept } =
       document.dispatchEvent(new window.Event("visibilitychange"));
     },
     refreshNow: () => page.setVisibility("visible"),
+    quiet: async () => {
+      const deadline = Date.now() + 10_000;
+      let busyAt = Date.now();
+      while (Date.now() < deadline) {
+        if (inFlight > 0) busyAt = Date.now();
+        else if (Date.now() - busyAt >= 100) return;
+        await sleep(10);
+      }
+    },
   };
   pages.push(page);
   vi.resetModules();
@@ -572,6 +587,63 @@ describe("Applications page: gap questions", () => {
     await until(() => page.outcomes().at(-1) === "Not prepared: add the missing evidence on the Onboarding page first.", "the refusal");
     expect(page.byId("last-action").querySelector("a")?.getAttribute("href")).toBe("/ui/onboarding");
     expect(page.document.activeElement?.id).toBe("detail-prepare");
+  });
+
+  /**
+   * The list can see a parked preparation later than its detail does (a list read that spans the preparation's
+   * finish reads it running). CI's runner hit this: the person had answered, and then the line announced
+   * "Needs your answers". These hold the list back on purpose until the questions have been answered.
+   */
+  function laggingList(bridge: TestBridge, lagging: () => boolean): Intercept {
+    return (input, init) => {
+      if (input !== "/api/applications" || (init.method ?? "GET") !== "GET" || !lagging()) return undefined;
+      return bridge.request(input, { headers: { cookie: COOKIE, origin: BRIDGE, "sec-fetch-site": "same-origin" } }).then(async (response) => {
+        const view = (await response.json()) as { applications: Array<Record<string, unknown>> };
+        const running = { status: "running", message: "Preparing now. This can take a minute or two." };
+        const body = JSON.stringify({ ...view, applications: view.applications.map((entry) => ({ ...entry, state: running })) });
+        return new Response(body, { status: response.status, headers: { "content-type": "application/json" } });
+      });
+    };
+  }
+
+  /** Prepares Fernwood's job with the list held back, until the questions show from the detail alone; the page then refreshes only when told. */
+  async function questionsBeforeTheList() {
+    const bridge = await bridgeWith(honest(FERNWOOD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, fixtureJob(FERNWOOD_JOB));
+    const lag = { on: true };
+    const page = await openPage(bridge, { intercept: laggingList(bridge, () => lag.on) });
+    pressPrepare(page, jobId);
+    await until(() => page.document.getElementById("detail-questions") !== null, "the questions block", 10_000);
+    page.setVisibility("hidden");
+    await page.quiet();
+    // The list hasn't seen it parked, so nothing was announced yet.
+    expect(page.outcomes()).toEqual(["Preparing “Staff Software Engineer · Fernwood”…"]);
+    lag.on = false;
+    return { bridge, page, taskId: taskIdOf(page) };
+  }
+
+  it("once the person answers a question, a list that sees the preparation parked only afterwards announces nothing more", async () => {
+    const { page, taskId } = await questionsBeforeTheList();
+    press(page, `answer-${taskId}-1-leave_out`);
+    await until(() => page.outcomes().includes("Answered: requirement 1 will be left out."), "the answer");
+    await page.quiet(); // the answer's own refresh: the list sees it parked now
+    expect(page.document.querySelector(".app-status")?.textContent).toBe("Needs your answer 1 question left.");
+    page.refreshNow();
+    await page.quiet();
+    expect(page.outcomes()).toEqual(["Preparing “Staff Software Engineer · Fernwood”…", "Answered: requirement 1 will be left out."]);
+  });
+
+  it("a watched preparation whose questions were all answered elsewhere is never announced as needing answers", async () => {
+    const { bridge, page, taskId } = await questionsBeforeTheList();
+    // Another tab answers both.
+    for (const requirement of [1, 3]) {
+      const answered = await bridge.request(`/api/applications/${taskId}/answers`, { method: "POST", headers: SAME_ORIGIN, body: JSON.stringify({ requirement, answer: "leave_out" }) });
+      expect(answered.status).toBe(200);
+    }
+    page.refreshNow();
+    await until(() => page.document.querySelector(".app-status")?.textContent === "Ready to continue.", "the list to see it answered");
+    await page.quiet();
+    expect(page.outcomes()).toEqual(["Preparing “Staff Software Engineer · Fernwood”…"]);
   });
 });
 

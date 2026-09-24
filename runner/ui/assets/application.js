@@ -868,9 +868,14 @@ function announceSettled() {
     if (!entry) continue;
     if (isRunning(entry.state)) continue;
     started.delete(taskId);
-    if (entry.state.status === "parked") lastAction(withName("Needs your answers: ", name, "."), "done");
-    else if (entry.state.status === "idle" && entry.latestVersion) lastAction(withName("Prepared ", name, `: version ${entry.latestVersion} is ready.`), "done");
-    else lastAction(withName("Couldn't prepare ", name, "; its details say why."), "refused");
+    if (entry.state.status === "parked") {
+      // Only while a question is open: once every one is answered (in another tab, say), the row says what is next.
+      if (entry.state.open > 0) lastAction(withName("Needs your answers: ", name, "."), "done");
+    } else if (entry.state.status === "idle" && entry.latestVersion) {
+      lastAction(withName("Prepared ", name, `: version ${entry.latestVersion} is ready.`), "done");
+    } else {
+      lastAction(withName("Couldn't prepare ", name, "; its details say why."), "refused");
+    }
   }
 }
 
@@ -1021,6 +1026,8 @@ async function answerQuestion(taskId, requirement, answer, button) {
   }
   stopWorking();
   button.setAttribute("aria-disabled", "false");
+  // The person is answering its questions, so they know it parked: a refresh that sees it only now says nothing more.
+  started.delete(taskId);
   lastAction(answer === "leave_out" ? `Answered: requirement ${requirement} will be left out.` : `Answered: add evidence for requirement ${requirement} to your profile.`, "done");
   if (openTaskId === taskId) {
     detailSeq += 1;
