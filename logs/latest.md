@@ -4,7 +4,7 @@ Running now:
 - **P04 revision 2** (PR #14): a fresh Opus escalation on `packet/P04` from f3cdec8, harness port 4330. Its prompt is `logs/handoff/P04-escalation-prompt.md`.
   - Round 2 was REVISE 6 and UI REVISE 9. The work list is T1–T21 in `logs/handoff/P04-round-2-review.md`.
   - Later REVISEs go back to this escalation. Round 3 is narrow, by the same reviewer (its worktree is kept) and the same UI critic.
-- **P02.2** (new, runner workspace precedence): **PR #15** (head db8cbf9, CI 35959588048 green) is in round 1 with one Opus reviewer and no UI critic (CLI only). The Sonnet implementer's worktree is kept for a REVISE.
+- **P02.2** (new, runner workspace precedence): **PR #15**, revision 1 by the same Sonnet implementer. Round 1 was REVISE 3: setup adopts the ambient value, doctor compares strings, and forget offers the environment's workspace. Decisions W1–W8 are in `logs/handoff/P02.2-round-1-review.md`. The W3 ruling: forget removes only what `.env.local` records. Round 2 is narrow, by the same reviewer; its worktree is kept.
 - After P04 merges: P05 (Opus) ∥ P03.2 (Sonnet), from their prompts in `logs/handoff/`.
 - **Then:**
   - after P04: P05 (Opus) ∥ P03.2 (Sonnet), which needs P04's turn events. P03.1 follows P03.2, because they share files.
