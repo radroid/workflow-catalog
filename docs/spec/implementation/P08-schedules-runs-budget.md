@@ -41,6 +41,7 @@ Findings are in `logs/handoff/P08-A-round-3-review.md`.
 - **Extraction turns and the budget** (P04 round-1 reviewer). P03's onboarding extraction and P04's background job extraction run outside `withRun`, so the daily run limit doesn't see them. P04's extraction already refuses to start while the budget is paused. Decide whether these turns count against the daily limit, or get a limit of their own, and record the choice. P03.2 decides the provider-limit pause for interactive turns; keep the two consistent.
 - **An authorization request with no webhook counts as ok** (P05 round-1 reviewer, iter 007). `classifyTurn` treats `authorization.required` without a `webhookUrl` as an ok turn; in the reviewer's probe, a preparation saved its documents. Nothing adds an eve connection yet, but eve item 15 says a pending authorization is waiting on the person. Classify it as parked, with a real-`Client` test. `run-harness.ts` is granted for this.
 - **A parked preparation is not a failure for schedules** (P05 round-1 reviewer, iter 007). P05 records a preparation parked on gap questions as a run-log `failure`. Schedules and catch-up must not treat it as one: no retry, no failure count, no backoff. P06 adds a waiting state for it.
+- **A stale comment** (from P03.2's round-3 reviewer). `run-harness.ts:12` still says no real route calls the classifier; since P03.2, the onboarding extraction, the model check, P04's capture extraction and P05's preparation all do. Fix it with the run-harness grant above.
 
 ## Report
 

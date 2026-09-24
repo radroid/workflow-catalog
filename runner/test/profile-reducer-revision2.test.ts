@@ -277,7 +277,7 @@ describe("D15 (VN7): an edit that adds an always-ask item re-opens the question"
     expect(reopened.status).toBe("disputed");
     expect(reopened.question).toBeDefined();
     expect(profile.approval).toBeNull();
-    expect(accept.message).toBe("Accepted; “Maintainer of Ledgerkit.” needs your answer, so approval is withdrawn.");
+    expect(accept.message).toBe("Accepted. Approval withdrawn: “Maintainer of Ledgerkit.” needs your answer.");
     // The other pending revision was applied with the withdrawal (D11).
     expect(profile.claims.find((c) => c.id === harbor!.id)?.text).toBe("Rebuilt the Harbor deployment pipeline.");
     expect(pendingRevisions(profile)).toEqual([]);

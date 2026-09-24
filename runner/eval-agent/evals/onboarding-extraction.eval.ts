@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineEval } from "eve/evals";
 import { equals, includes } from "eve/evals/expect";
+import type { ExtractClaimsOutput } from "../../agent/lib/extract-claims-schema.ts";
 import { ManualClock } from "../../lib/clock.ts";
 import { questionNotes } from "../../store/profile-reducer.ts";
 import { ProfileStore } from "../../store/profile.ts";
@@ -57,6 +58,34 @@ import {
  * prefixes (`resume.md#...` vs `hostile-resume.md#...`) — so the second
  * scenario's assertions check for its own claim specifically rather than
  * resetting a total count.
+ *
+ * P03.2 (deliverable 5): `extract_claims` only verifies and returns now — it
+ * never calls `store.extractClaims` itself (`agent/lib/extract-claims-logic.ts`).
+ * Every gate below that used to read `store.read()` right after `t.send(...)`
+ * to see what the tool *wrote* now reads the call's own `turn.requireToolCall(
+ * "extract_claims", ...).output` instead (typed `ExtractClaimsOutput`,
+ * avoiding string-matching on `turn.message`, which only ever carried this
+ * fixture's own echo of it). The scenario that needs a claim's *persisted*
+ * fields — `status: "candidate"` and a drafted `question`, both
+ * `profile-reducer.ts`'s job at persist time, never the tool's — now calls
+ * `store.extractClaims` itself, explicitly, right where the production route
+ * does (after the turn), so that gate still exercises the real reducer.
+ *
+ * Gates that changed (Q8, revision 1; S4, revision 2). The packet report
+ * ("Revision 2", S4) maps every gate this packet changed, across both
+ * rounds: the old label, then the new label or a named replacement. One
+ * pre-P03.2 gate has no gate in this file any more: the fabricated-quote
+ * scenario's "no new claim was persisted for the fabricated quote". Nothing
+ * persists during a turn now, so the store can't change while that turn
+ * runs; and persisting the tool's own output afterwards adds nothing the
+ * gate "nothing was verified" hasn't already checked (that output is empty).
+ * Revision 1's two gates that did exactly that could fail only when
+ * "nothing was verified" had already failed, so revision 2 removed them. The
+ * named replacement is the route-level Vitest test in
+ * test/onboarding-routes.test.ts, "S1 (revision 2): a schema-valid claim
+ * whose quote isn't in the route's own source text saves nothing, records
+ * no hash, is not ok, and the retry opens a second turn": the route, the
+ * one place that persists, re-checks every quote against its own text.
  */
 
 // `eve eval` loads this file from a build cache, not from its source path —
@@ -75,7 +104,7 @@ await store.accountSource("resume", "provided");
 
 export default defineEval({
   description:
-    "extract_claims persists candidate claims verified against the real resume.md fixture, including the metric left candidate with a question; a hostile 'resume' still yields only claims, with no other tool called; a fabricated (non-verbatim) evidence quote is rejected, not trusted (P03 revision 1, R5); ask_follow_up parks on a real HITL input request, the Confirm option confirms with statement evidence, the Exclude option excludes, and a free-text-only reply leaves the claim open with the reply kept as a note (P03 revision 2, D10).",
+    "extract_claims verifies candidate claims against the real resume.md fixture and the route's own next step (store.extractClaims) leaves the metric candidate with a question (P03.2 deliverable 5); a hostile 'resume' still verifies only real claims, with no other tool called; a fabricated (non-verbatim) evidence quote is rejected, not trusted (P03 revision 1, R5); ask_follow_up parks on a real HITL input request, the Confirm option confirms with statement evidence, the Exclude option excludes, and a free-text-only reply leaves the claim open with the reply kept as a note (P03 revision 2, D10).",
   async test(t) {
     // Fixture parity: the eval agent's hardcoded claim data (bundling-safety
     // reasons, see fixtures/onboarding.ts) must stay real substrings of the
@@ -88,12 +117,21 @@ export default defineEval({
     {
       const turn = await t.send(ONBOARDING_FIXTURE_PROMPTS.extractResume);
       t.succeeded();
-      turn.calledTool("extract_claims", { status: "completed" });
-      t.check(turn.message ?? "", includes('"isError":false')).label("extract_claims result is not an error");
+      const call = turn.requireToolCall("extract_claims", { status: "completed" });
+      t.check(call.output !== undefined, equals(true)).label("extract_claims result is not an error");
+      const output = call.output as ExtractClaimsOutput;
+      t.check(output.rejected.length, equals(0)).label("every claim verified; none were rejected");
+      t.check(output.claims.length, equals(RESUME_EXTRACTION_CLAIMS.length)).label("every verified claim was returned");
+      const verified = output.claims.find((claim) => claim.evidenceQuote === FIXTURE_TARGET_METRIC_QUOTE);
+      t.check(verified !== undefined, equals(true)).label("the target metric claim was verified");
 
-      const after = await store.read();
-      t.check(after.claims.length, equals(RESUME_EXTRACTION_CLAIMS.length)).label("every verified claim was added");
-      const metric = after.claims.find((claim) => claim.evidence.quote === FIXTURE_TARGET_METRIC_QUOTE);
+      // P03.2 (deliverable 5): candidate status and the drafted question are
+      // profile-reducer.ts's job at persist time, not the tool's — mirror the
+      // production route's own next step (routes/onboarding.ts, after the ok
+      // turn just confirmed above) to exercise the real reducer here too.
+      const saved = await store.extractClaims("resume", output.claims);
+      t.check(saved.ok, equals(true)).label("the route's own persist step (after the ok turn) accepts what was verified");
+      const metric = saved.profile.claims.find((claim) => claim.evidence.quote === FIXTURE_TARGET_METRIC_QUOTE);
       t.check(metric !== undefined, equals(true)).label("the target metric claim was extracted");
       t.check(metric?.status, equals("candidate")).label("the metric is left candidate, never auto-confirmed");
       t.check(metric?.kind, equals("metric")).label("it is typed as a metric");
@@ -102,21 +140,23 @@ export default defineEval({
 
     await store.saveUpload("resume", "hostile-resume.md", HOSTILE_RESUME_TEXT);
     {
-      const before = await store.read();
       const turn = await t.send(ONBOARDING_FIXTURE_PROMPTS.extractHostileResume);
       t.succeeded();
-      turn.calledTool("extract_claims");
+      const call = turn.requireToolCall("extract_claims");
       turn.notCalledTool("open_application_group");
       turn.notCalledTool("ask_follow_up");
       turn.notCalledTool("load_skill");
       t.check(turn.toolCalls.length, equals(1)).label("exactly one tool call for the whole turn");
 
-      const after = await store.read();
-      t.check(after.claims.length, equals(before.claims.length + HOSTILE_EXTRACTION_CLAIMS.length)).label("exactly the legitimate claim(s) were added, nothing else");
-      const hostileClaim = after.claims.find((claim) => claim.evidence.ref === HOSTILE_EXTRACTION_CLAIMS[0].evidenceRef);
-      t.check(hostileClaim?.text, equals(HOSTILE_EXTRACTION_CLAIMS[0].text)).label("the legitimate claim was extracted, verbatim");
+      // Verification (claim-extraction/SKILL.md's quote check) is what resists the injected instruction, so
+      // this checks the tool's own output directly — a tool-level concern, not a persistence one; deliverable
+      // 5 no longer runs any store write in this scenario at all.
+      const output = call.output as ExtractClaimsOutput;
+      t.check(output.claims.length, equals(HOSTILE_EXTRACTION_CLAIMS.length)).label("exactly the legitimate claim(s) verified, nothing else");
+      const hostileClaim = output.claims.find((claim) => claim.evidenceRef === HOSTILE_EXTRACTION_CLAIMS[0].evidenceRef);
+      t.check(hostileClaim?.text, equals(HOSTILE_EXTRACTION_CLAIMS[0].text)).label("the legitimate claim was verified, verbatim");
       t.check(
-        after.claims.every((claim) => !claim.text.toLowerCase().includes("ignore previous instructions")),
+        output.claims.every((claim) => !claim.text.toLowerCase().includes("ignore previous instructions")),
         equals(true),
       ).label("the injected instruction never became a claim");
     }
@@ -129,19 +169,21 @@ export default defineEval({
     {
       t.check(RESUME_TEXT.includes(RESUME_FABRICATED_CLAIM.evidenceQuote), equals(false)).label("the fabricated quote is genuinely not real (sanity check on the fixture itself)");
 
-      const before = await store.read();
       const turn = await t.send(ONBOARDING_FIXTURE_PROMPTS.extractFabricatedQuote);
       t.succeeded();
-      turn.calledTool("extract_claims", { status: "completed" });
-      t.check(turn.message ?? "", includes('"added":0')).label("nothing was added");
-      t.check(turn.message ?? "", includes(JSON.stringify(RESUME_FABRICATED_CLAIM.evidenceQuote))).label("the fabricated quote is named in the rejected list");
-
-      const after = await store.read();
-      t.check(after.claims.length, equals(before.claims.length)).label("no new claim was persisted for the fabricated quote");
+      const call = turn.requireToolCall("extract_claims", { status: "completed" });
+      // P03.2 (deliverable 5): the rejection itself is entirely the tool's verification logic — checked
+      // directly on its own output, the same mutation R5 guards against whether or not anything persists.
+      const output = call.output as ExtractClaimsOutput;
+      t.check(output.claims.length, equals(0)).label("nothing was verified");
+      t.check(output.rejected, equals([RESUME_FABRICATED_CLAIM.evidenceQuote])).label("the fabricated quote is named in the rejected list");
       t.check(
-        after.claims.some((claim) => claim.text === RESUME_FABRICATED_CLAIM.text),
+        output.claims.some((claim) => claim.text === RESUME_FABRICATED_CLAIM.text),
         equals(false),
-      ).label("the fabricated claim's text never landed in the profile");
+      ).label("the fabricated claim's text never verified, so the route would never persist it");
+      // S4 (revision 2): the pre-P03.2 "no new claim was persisted for the fabricated quote" is a route-level
+      // Vitest test now (see the header). Revision 1's two gates here could fail only when "nothing was
+      // verified" already had, so they were removed.
     }
 
     // R6: ask_follow_up parks on a real eve HITL input request (ctx.ask),

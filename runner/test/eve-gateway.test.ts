@@ -1,27 +1,101 @@
-import type { MessageResult } from "eve/client";
+import type { MessageStreamEvent } from "eve/client";
 import { describe, expect, it } from "vitest";
 import { interpretModelCheck } from "../server/eve-gateway.ts";
+import type { TurnResult } from "../server/run-harness.ts";
 
-type Outcome = Parameters<typeof interpretModelCheck>[0];
+/**
+ * P03.2 (deliverable 1): `interpretModelCheck` is now a thin adapter over
+ * `classifyTurn`'s own `TurnResult` (run-harness.ts) — it does no turn
+ * classification of its own, so this file no longer scripts a raw
+ * `MessageResult`/event stream and re-derives ok/failed/parked from it (that
+ * is `classifyTurn`'s job, covered end to end against the real eve@0.63.0
+ * `Client` in `eve-gateway-real-client.test.ts`). It checks the adapter's own
+ * decisions: every non-ok outcome is phrased here for a person (Q3) — never
+ * the raw code/status a `TurnResult.detail` can carry, which the round-1
+ * reviewer found this file's own "failed" case had degenerated into asserting
+ * as a pass-through, proving nothing about the wording actually shown; and an
+ * "ok" turn is accepted only when its reply text includes "ok".
+ *
+ * Revision 2: S5 dropped the "The model check failed: " prefix (the Status
+ * page and doctor already say the check failed before the detail), and S8
+ * phrases "cancelled", "parked" and "timeout" here too, where revision 1
+ * passed `classifyTurn`'s own "turn"/"run" sentences through. Every detail is
+ * a lower-case clause that follows "The check failed: ". What the model
+ * route returns, whole, is asserted in `model-check-route.test.ts`.
+ */
 
-function turn(overrides: Partial<Outcome> = {}): Outcome {
-  return { status: "waiting", events: [], message: "ok", inputRequests: [], ...overrides };
+const ZERO = { input: 0, output: 0 };
+
+function messageCompleted(message: string): MessageStreamEvent {
+  return { type: "message.completed", data: { finishReason: "stop", message, sequence: 0, stepIndex: 0, turnId: "t1" }, meta: { at: "2026-09-22T09:00:00.000Z", id: "evt-0" } } as MessageStreamEvent;
 }
 
-describe("model check through eve", () => {
-  it("accepts a completed turn: the session parks, waiting for the next message", () => {
-    expect(interpretModelCheck(turn())).toEqual({ ok: true });
-    expect(interpretModelCheck(turn({ status: "completed", message: "OK." }))).toEqual({ ok: true });
+function ok(reply: string): TurnResult {
+  return { status: "ok", tokens: ZERO, events: [messageCompleted(reply)] };
+}
+
+describe("interpretModelCheck: a thin adapter over classifyTurn's TurnResult", () => {
+  it("accepts an 'ok' turn whose reply includes ok, whatever eve's own boundary was (classifyTurn already normalised that)", () => {
+    expect(interpretModelCheck(ok("ok"))).toEqual({ ok: true });
+    expect(interpretModelCheck(ok("OK."))).toEqual({ ok: true }); // case and trailing punctuation don't matter
   });
 
-  it("reports a failed model call with its code and message", () => {
-    const events = [{ type: "turn.failed", data: { code: "MODEL_ERROR", message: "HTTP 400: model not supported", sequence: 1, turnId: "t" } }] as unknown as MessageResult["events"];
-    expect(interpretModelCheck(turn({ events, message: undefined }))).toEqual({ ok: false, detail: "MODEL_ERROR: HTTP 400: model not supported" });
-    expect(interpretModelCheck(turn({ status: "failed", message: undefined }))).toEqual({ ok: false, detail: 'The turn ended as "failed".' });
+  it("S8 (revision 2): cancelled and timeout are phrased here, without classifyTurn's own words 'turn' and 'run' (parked: see below)", () => {
+    expect(interpretModelCheck({ status: "cancelled", detail: "The turn was cancelled before it finished." })).toEqual({
+      ok: false,
+      detail: "it was cancelled before the model answered.",
+    });
+    // The deadline the check was given, not classifyTurn's own detail: 90 s by default, and whatever the caller chose.
+    expect(interpretModelCheck({ status: "timeout", detail: "No answer within 90 s." })).toEqual({ ok: false, detail: "no answer from the model within 90 s." });
+    expect(interpretModelCheck({ status: "timeout", detail: "No answer within 0.3 s." }, 300)).toEqual({ ok: false, detail: "no answer from the model within 300 ms." });
   });
 
-  it("does not count an unexpected answer or a request for input", () => {
-    expect(interpretModelCheck(turn({ message: "pong" })).ok).toBe(false);
-    expect(interpretModelCheck(turn({ inputRequests: [{}] as unknown as MessageResult["inputRequests"] })).ok).toBe(false);
+  it("Q3 (revision 1, critic 3): 'failed' is phrased for a person, with no code, status or HTTP number — never a pass-through of TurnResult.detail", () => {
+    // A real failure event happened (the model itself answered with a problem): "the model's error", whatever
+    // classifyTurn's own detail says (a raw eve code:message here, exactly what must not reach the page).
+    // S5 (revision 2): no "The model check failed: " prefix -- the Status page already reads "The check failed: ".
+    expect(
+      interpretModelCheck({
+        status: "failed",
+        detail: "MODEL_ERROR: HTTP 400: model not supported",
+        events: [{ type: "session.failed", data: { code: "MODEL_ERROR", message: "model not supported", sessionId: "s1" } } as never],
+      }),
+    ).toEqual({ ok: false, detail: "the model had a problem answering." });
+    // No failure event at all (a thrown, non-abort error from sessions.create, or a quiet no-boundary end):
+    // "eve or the network didn't answer" — genuinely not a claim the model itself said anything.
+    expect(interpretModelCheck({ status: "failed", detail: "fetch failed", events: [] })).toEqual({
+      ok: false,
+      detail: "eve or the network didn't answer.",
+    });
+    expect(interpretModelCheck({ status: "failed", detail: "The turn ended without a result." })).toEqual({
+      ok: false,
+      detail: "eve or the network didn't answer.",
+    });
+    // A provider limit: reported as such, not folded into "the model's error" — pausing the budget stays
+    // runTurn's decision, not this adapter's; checkModel calls classifyTurn directly, so it never pauses at all.
+    expect(
+      interpretModelCheck({
+        status: "failed",
+        providerLimit: true,
+        detail: "provider limit (rate limited)",
+        events: [{ type: "session.failed", data: { code: "rate_limited", message: "rate limited", sessionId: "s1" } } as never],
+      }),
+    ).toEqual({ ok: false, detail: "the model's provider is rate-limited right now. Try again later." });
+  });
+
+  it("does not count an unexpected answer or a park as ok", () => {
+    expect(interpretModelCheck(ok("pong")).ok).toBe(false);
+    expect(interpretModelCheck(ok("pong"))).toEqual({ ok: false, detail: "the model answered, but not with the expected reply." });
+    // A non-empty input.requested parks the turn (eve-runtime.md §8 item 15): classifyTurn reports "parked", never "ok".
+    // S8 (revision 2): phrased here, not classifyTurn's own "…instead of finishing the run."
+    expect(interpretModelCheck({ status: "parked", detail: "The model asked for input instead of finishing the run." })).toEqual({
+      ok: false,
+      detail: "the model asked a question instead of replying.",
+    });
+  });
+
+  it("an 'ok' turn with no message.completed event (defensive) reads as no reply, so it fails the same way", () => {
+    expect(interpretModelCheck({ status: "ok", events: [] })).toEqual({ ok: false, detail: "the model answered, but not with the expected reply." });
+    expect(interpretModelCheck({ status: "ok" })).toEqual({ ok: false, detail: "the model answered, but not with the expected reply." });
   });
 });

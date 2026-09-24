@@ -655,7 +655,10 @@ export function reduce(profile: OnboardingProfile, action: Action): ReduceResult
         const claimEdit = decodeClaimEditSummary(revision.summary)!;
         let next = markRevision(applied.profile, revision.id, "accepted", action.now);
         next = withdrawApproval(next, action.now, action.newId, { kind: "claim", claimId: claimEdit.claimId, change: "reopened" });
-        return ok(next, `Accepted; ${named(claimEdit.text)} needs your answer, so approval is withdrawn.`);
+        // P03.2 (round-4 UI critic polish 2): consequence first ("Approval withdrawn") right after the
+        // fact, not trailing the sentence, where the two-line clamp at 640px used to cut it off (measured
+        // at 97 characters with a near-40-character claim name).
+        return ok(next, `Accepted. Approval withdrawn: ${named(claimEdit.text)} needs your answer.`);
       }
 
       const version = highestVersionUsed(profile) + 1;

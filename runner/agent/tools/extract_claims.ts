@@ -1,5 +1,5 @@
 import { defineWorkflowTool } from "eve/tools";
-import { verifyAndPersistExtractedClaims } from "../lib/extract-claims-logic.ts";
+import { verifyExtractedClaims } from "../lib/extract-claims-logic.ts";
 import { type ExtractClaimsInput, extractClaimsInputSchema, extractClaimsOutputSchema, type ExtractClaimsOutput, extractClaimsToolDescription } from "../lib/extract-claims-schema.ts";
 import { openStore } from "../lib/onboarding-store.ts";
 
@@ -14,8 +14,13 @@ import { openStore } from "../lib/onboarding-store.ts";
  * onboarding bridge route hands it that text). The tool checks the model's
  * work instead of trusting it: every `evidenceQuote` must appear verbatim in
  * the workspace's source text for that category, or the claim is dropped
- * (claim-extraction/SKILL.md). Durable (`defineWorkflowTool`) and idempotent
- * per `(category, evidence ref, evidence quote)`.
+ * (claim-extraction/SKILL.md). Durable (`defineWorkflowTool`).
+ *
+ * P03.2 (deliverable 5): verify-only. It returns the claims that verified,
+ * never writes them — `runner/server/routes/onboarding.ts`'s extraction
+ * route persists them (idempotent per `(category, evidence ref, evidence
+ * quote)`, `profile-reducer.ts`'s `extractClaims` action) only after the
+ * whole turn is confirmed "ok".
  *
  * The logic lives in `../lib/extract-claims-logic.ts` and the schemas in
  * `../lib/extract-claims-schema.ts`, shared with
@@ -28,9 +33,9 @@ import { openStore } from "../lib/onboarding-store.ts";
  * wrapper, and the logic is written and tested once.
  */
 
-async function persistExtractedClaims(input: ExtractClaimsInput): Promise<ExtractClaimsOutput> {
+async function verifyExtraction(input: ExtractClaimsInput): Promise<ExtractClaimsOutput> {
   "use step";
-  return verifyAndPersistExtractedClaims(input, await openStore());
+  return verifyExtractedClaims(input, await openStore());
 }
 
 export default defineWorkflowTool({
@@ -39,6 +44,6 @@ export default defineWorkflowTool({
   outputSchema: extractClaimsOutputSchema,
   async execute(input) {
     "use workflow";
-    return persistExtractedClaims(input);
+    return verifyExtraction(input);
   },
 });

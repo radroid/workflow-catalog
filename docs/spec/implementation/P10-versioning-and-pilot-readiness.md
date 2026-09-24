@@ -22,9 +22,13 @@ An instance stays on its package version until the person accepts an upgrade, an
 ## Out of scope
 Anything new. This packet closes the MVP.
 
+## Carried into part A (from P05's round-2 review, iter 007)
+- **`docs/pilot/known-limitations.md`, the PDF's characters.** The PDF embeds Noto Sans, which covers Latin (with its extensions), Greek, Cyrillic and Vietnamese. Complex scripts inside its coverage, such as Devanagari's joined letter forms, were not checked. Other scripts (CJK, Arabic, Hebrew, emoji) print "�", and the page warns at the name field and beside the PDF. The Markdown and Word files keep every character.
+
 ## Carried into part B (from P02.2's round-2 review, iter 006)
 Findings are in `logs/blocks.md`, "P02.2 peer review, round 2". These small edits are granted to part B, on top of its Owns: the lines named below, and new tests.
 - **R2-N1.** `runner/README.md:143-147` says setup's default is "always `~/JobAssistant`" and that "`--yes` without `--workspace` always fails". Both are true only on a first run: on a re-run, the default is the recorded workspace. Say "on a first run", and drop "revision 1" (`:144`, `:170`), which is review jargon.
 - **R2-N2.** Doctor's case-only match rests on `fs.realpathSync.native`. Add a test that a case-only difference doesn't warn, so the JS `realpathSync` can't slip back in.
 - **R2-N5.** `runner/lib/eve-env.ts:22` takes the rest of `PATH` from the global `process.env`, not its `processEnv` option. Use the option. This behaves identically in production.
+- **`doctor --live`'s failure line** (from P03.2's round-3 reviews). `cli/doctor.ts:58` prints "The model check failed: The model answered, …", with a capital after the colon, and may pass raw provider text through. Match the Status page's wording: one prefix, then a lower-case plain clause. `cli/doctor.ts` and `lib/live-check.ts` are granted for this line.
 - **Dropped as trivial:** R2-N3 (a test comment), R2-N4 (`forget.ts:79`'s note wording for an unset source, which no production caller builds) and R2-N6 (the order of P02.2's report sections).

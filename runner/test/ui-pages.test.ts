@@ -1,13 +1,15 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SOURCE_CATEGORIES } from "@workflow-catalog/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
 import { MARKDOWN_UNREADABLE_REFUSAL } from "../server/routes/onboarding.ts";
 import { ProfileStore } from "../store/profile.ts";
+import { PROFILE_BUSY_MESSAGE } from "../store/profile-writes.ts";
 import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
 
 /**
@@ -55,10 +57,16 @@ interface DomDocument {
   querySelectorAll(selector: string): ArrayLike<DomNode>;
   addEventListener(type: string, listener: (event: { readonly target: DomNode }) => void, capture?: boolean): void;
 }
+/** P03.2 (round-4 reviewer nit 4): just enough of MutationObserver to count how many times a node's text is written. */
+interface DomMutationObserver {
+  observe(target: DomNode, options: { readonly childList?: boolean; readonly characterData?: boolean; readonly subtree?: boolean }): void;
+  disconnect(): void;
+}
 interface DomWindow {
   readonly document: DomDocument;
   readonly HTMLElement: unknown;
   readonly ResizeObserver: unknown;
+  readonly MutationObserver: new (callback: () => void) => DomMutationObserver;
   readonly Event: new (type: string, init?: { bubbles?: boolean; cancelable?: boolean }) => unknown;
   requestAnimationFrame(callback: (time: number) => void): unknown;
   readonly happyDOM: { close(): Promise<void> };
@@ -94,6 +102,25 @@ async function until(check: () => boolean, what: string, timeoutMs = 5_000): Pro
     if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+/**
+ * P03.2 (round-4 reviewer nit 4): counts how many separate times `#last-action
+ * .text` is written — one MutationObserver callback per synchronous DOM
+ * batch, which is what an aria-live region announces on (a same-tick clear
+ * and refill inside one `lastAction()` call is one batch; `lastAction()`'s
+ * own next-frame clear-then-refill, for repeating the same message, is a
+ * second, deliberate one — outside what this counts, since every outcome
+ * used below produces a message distinct from whatever was there before).
+ */
+function announcementCounter(page: Page): { count(): number } {
+  const target = page.byId("last-action").querySelector(".text")!;
+  let count = 0;
+  const observer = new page.window.MutationObserver(() => {
+    count += 1;
+  });
+  observer.observe(target, { childList: true, characterData: true, subtree: true });
+  return { count: () => count };
 }
 
 /** Loads a page's HTML into a fresh DOM and runs its module against the bridge, as the browser would. */
@@ -168,12 +195,14 @@ describe("J4: the focused control is never replaced", () => {
     const button = page.byId("source-status-resume-provided");
     button.focus();
     page.document.addEventListener("focusin", (event) => focusins.push(event.target.id), true);
+    const announced = announcementCounter(page); // round-4 reviewer nit 4: this outcome is announced once
     button.click();
     await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the outcome");
     await until(() => page.document.getElementById("source-text-resume")?.getAttribute("aria-busy") === null, "the saved text to load");
     expect(page.document.activeElement).toBe(button);
     expect(button.isConnected).toBe(true);
     expect(focusins).toEqual([]);
+    expect(announced.count()).toBe(1);
   });
 
   it("Confirm on a metric moves focus straight to its answer box, with the Confirm button still on the page, and the line says only that an answer is needed", async () => {
@@ -202,6 +231,51 @@ describe("J4: the focused control is never replaced", () => {
   });
 });
 
+describe("Q9 (revision 1, critic 1 and 4): the tag and the message are separated for assistive tech, on load and after every action", () => {
+  it("onboarding: the whole live region reads 'Last action: Nothing yet.' on load, and reads separately after an action", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+    // page.line() reads only .text; the whole node (tag + the visually-hidden ": " + text) is what a screen
+    // reader announces, and happy-dom's textContent concatenates it exactly that way regardless of CSS.
+    expect(page.byId("last-action").textContent).toBe("Last action: Nothing yet.");
+    const button = page.byId("source-status-resume-provided");
+    button.click();
+    await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the outcome");
+    expect(page.byId("last-action").textContent).toBe("Last action: Resume marked provided: add its text, then extract claims.");
+  });
+
+  it("profile: the whole live region reads 'Last action: Nothing yet.' on load", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("profile", bridge);
+    expect(page.byId("last-action").textContent).toBe("Last action: Nothing yet.");
+  });
+});
+
+describe("Q10 (revision 1, critic polish, \"outside this round\" note): a Confirm that opens a question keeps the server's edits note", () => {
+  it("a hand edit reconciled by the same write that opens a question still shows its own edits note first", async () => {
+    const bridge = await realBridge();
+    const store = new ProfileStore(bridge.ctx.workspace, bridge.ctx.clock);
+    await store.accountSource("resume", "provided");
+    const extracted = await store.extractClaims("resume", [{ text: "Cut report processing time by 30%.", kind: "metric", evidenceRef: "sources/resume/pasted.txt#L3", evidenceQuote: "Cut report processing time by 30%." }]);
+    const id = extracted.profile.claims[0]!.id;
+    const boundary = (await store.load()).profile.boundaries[0]!;
+    const page = await openPage("onboarding", bridge);
+    // The hand edit is made *after* the page's own initial load (which would otherwise reconcile, and
+    // write, it first) -- the Confirm click below must be the write that discovers and reconciles it.
+    const md = path.join(bridge.workspace.root, "career-profile.md");
+    const text = await readFile(md, "utf8");
+    expect(text).toContain(`- ${boundary.text}`);
+    await writeFile(md, text.replace(`- ${boundary.text}`, "- Never invent a metric, a credential or a responsibility."));
+
+    page.byId(`claim-confirm-${id}`).click();
+    await until(() => page.document.activeElement?.id === `claim-answer-${id}`, "focus on the answer box");
+    // Q10: the server's own message was "“Cut report...” needs your answer first: it's a metric claim.
+    // 1 edit saved." (the note after the consequence, this same revision) -- opening a question replaces
+    // only the reducer's own clause, keeping the trailing edits note.
+    expect(page.line()).toBe("An answer is needed. 1 edit saved.");
+  });
+});
+
 describe("J3 and J6.3: refusals and field errors", () => {
   it("while career-profile.md can't be read, a refused write is the one short line: no field error, no aria-invalid, focus and typed text stay", async () => {
     const bridge = await realBridge();
@@ -225,7 +299,9 @@ describe("J3 and J6.3: refusals and field errors", () => {
     const input = page.byId("statement-input-preference");
     input.focus();
     page.submit("statement-form-preference");
-    await until(() => page.line() === "Not added.", "the refusal");
+    // P03.2 (round-4 UI critic polish 1): the input still has focus, so the line carries the short reason
+    // too, not just "Not added." -- see the dedicated describe block below for that behaviour on its own.
+    await until(() => page.line() === "Not added: type a preference first.", "the refusal");
     expect(page.describedBy("statement-input-preference")).toContain("Type a preference first, then add it.");
     expect(page.errors()).toEqual({ fieldErrors: 1, invalid: 1 });
     expect(page.document.activeElement).toBe(input);
@@ -288,5 +364,130 @@ describe("J3 on the Profile page", () => {
     await until(() => page.line() === "File edits discarded; your unsaved text in the box is kept.", "the discard");
     expect(editor.value).toBe(typed);
     expect(save.hidden).toBe(false);
+  });
+});
+
+describe("P03.2 (round-4 reviewer nit 2): a stale editor error does not survive an unrelated action", () => {
+  it("Accept on a pending revision clears a red editor left by an earlier failed save", async () => {
+    const bridge = await realBridge();
+    const store = new ProfileStore(bridge.ctx.workspace, bridge.ctx.clock);
+    // One pending revision to accept: approve, then a hand edit becomes a proposed revision (D9, D11).
+    await store.accountSource("resume", "provided");
+    const claimId = (await store.extractClaims("resume", [{ text: "Worked on the Harbor deployment pipeline.", kind: "fact", evidenceRef: "resume.md#harbor", evidenceQuote: "Harbor" }])).profile.claims[0]!.id;
+    await store.decideClaim(claimId, "confirmed");
+    for (const category of SOURCE_CATEGORIES) if (category !== "resume") await store.accountSource(category, "not_applicable");
+    expect((await store.approve()).ok).toBe(true);
+    const md = path.join(bridge.workspace.root, "career-profile.md");
+    await writeFile(md, (await readFile(md, "utf8")).replace("Worked on the Harbor deployment pipeline.", "Rebuilt the Harbor deployment pipeline."));
+
+    const page = await openPage("profile", bridge);
+    await until(() => page.document.querySelectorAll(".revision").length === 1, "the pending revision to render");
+
+    // Break a save first (the marker for the confirmed claim goes missing from the submitted text), so
+    // editorError is set: the editor shows red, described by the field error (J4).
+    const editor = page.byId("markdown-editor");
+    page.type("markdown-editor", editor.value.replace(` \`[${claimId}]\``, ""));
+    page.byId("save-markdown").click();
+    await until(() => page.errors().invalid > 0, "the field error to appear");
+    expect(page.errors()).toEqual({ fieldErrors: 1, invalid: 1 });
+
+    // An unrelated action — Accept the pending revision — must not leave that stale red state up.
+    const revision = page.document.querySelectorAll(".revision")[0]!;
+    const accept = revision.querySelector(".revision-actions button")!;
+    accept.click();
+    await until(() => page.document.querySelectorAll(".revision").length === 0, "the revision to be accepted");
+    expect(page.errors()).toEqual({ fieldErrors: 0, invalid: 0 });
+    expect(page.byId("markdown-editor-error").hidden).toBe(true);
+  });
+});
+
+describe("P03.2 (round-4 UI critic polish 1): a refused control that still has focus gets a short reason in the line", () => {
+  it("an upload with the wrong extension is not just \"Not uploaded.\" while the file input still has focus", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+    page.byId("source-status-resume-provided").click();
+    await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the source to open its panel");
+
+    const input = page.byId("source-file-resume");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    // A plain object stands in for a picked File: onboarding.js's upload() only reads .name before this
+    // refusal, and happy-dom's own File/FileList support is untested surface this repo doesn't otherwise
+    // need. Direct property assignment, not dispatchEvent: .files is a real input's own read-only property,
+    // and onchange is called the same way a real "change" event would invoke it.
+    Object.defineProperty(input, "files", { value: [{ name: "resume.pdf" }], configurable: true });
+    (input as unknown as { onchange(event: { currentTarget: DomNode }): void }).onchange({ currentTarget: input });
+
+    await until(() => page.line() === "Not uploaded: only .txt or .md files can be uploaded.", "the short reason");
+    expect(page.document.activeElement).toBe(input); // focus never moved, so the line had to carry the reason
+    // The fuller reason (with the file's name) still sits next to the field, for anyone who does move to it.
+    expect(page.describedBy("source-file-resume")).toContain("“resume.pdf” is not a .txt or .md file");
+  });
+
+  it("Enter in an empty statement input is not just \"Not added.\" while the input still has focus", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+
+    const input = page.byId("statement-input-boundary");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    page.submit("statement-form-boundary"); // a form's native Enter-submits-itself behaviour, scripted directly
+
+    await until(() => page.line() === "Not added: type a boundary first.", "the short reason");
+    expect(page.document.activeElement).toBe(input);
+    expect(page.describedBy("statement-input-boundary")).toContain("Type a boundary first, then add it.");
+  });
+});
+
+describe("Q7 (revision 1, reviewer 6 and critic 2): a server refusal also carries its reason while the field still has focus", () => {
+  it("an upload the server 413s for size is not just \"Not uploaded.\" while the file input still has focus", async () => {
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+    page.byId("source-status-resume-provided").click();
+    await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the source to open its panel");
+
+    const input = page.byId("source-file-resume");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    // Over the real 512 KB source-content cap (server/routes/onboarding.ts's boundedSourceBody), so the
+    // server -- not upload()'s own client-side checks above it -- is what refuses this one, with a real 413.
+    Object.defineProperty(input, "files", { value: [{ name: "resume.txt", text: async () => "x".repeat(513 * 1024) }], configurable: true });
+    (input as unknown as { onchange(event: { currentTarget: DomNode }): void }).onchange({ currentTarget: input });
+
+    // S8 (revision 2): after the line's own colon, the server's sentence starts in lower case; the field's
+    // own error, where the sentence stands alone, keeps it as the server wrote it.
+    await until(() => page.line() === "Not uploaded: that's over 512 KB. Paste less text, or upload a smaller file.", "the short reason");
+    expect(page.document.activeElement).toBe(input); // focus never moved, so the line had to carry the reason
+    expect(page.describedBy("source-file-resume")).toContain("That's over 512 KB. Paste less text, or upload a smaller file.");
+  });
+
+  it("S8 (revision 2): a statement the server refuses (the profile lock's 503) is not just \"Not added.\" while the input still has focus", async () => {
+    // Revision 1 used an 8 KiB statement, which the page can't send (the input's maxlength is 600). The
+    // profile lock is a refusal the page does meet: another process (eve's ask_follow_up tool, say) holds
+    // .runner/profile.lock past the route's 5 s wait, and the route answers 503 with PROFILE_BUSY_MESSAGE.
+    const bridge = await realBridge();
+    const page = await openPage("onboarding", bridge);
+    const lock = path.join(bridge.workspace.root, ".runner", "profile.lock");
+    await writeFile(lock, `${JSON.stringify({ token: "another-process", pid: 999999, acquiredAt: new Date().toISOString() })}\n`);
+    // The other process lets go once the page's request has been refused, so the page's own reload in
+    // refused() doesn't wait the lock out a second time (that 5 s is P03's, carried to P03.1).
+    const pageFetch = (globalThis as unknown as { fetch: (input: string, init?: object) => Promise<Response> }).fetch;
+    (globalThis as Record<string, unknown>).fetch = async (input: string, init?: object) => {
+      const response = await pageFetch(input, init);
+      if (input.startsWith("/api/onboarding/statements/")) await unlink(lock);
+      return response;
+    };
+
+    const input = page.byId("statement-input-preference");
+    input.focus();
+    expect(page.document.activeElement).toBe(input);
+    page.type("statement-input-preference", "Remote-first roles.");
+    page.submit("statement-form-preference");
+
+    await until(() => page.line() === "Not added: the profile is busy. Try again in a moment.", "the short reason", 15_000);
+    expect(page.document.activeElement).toBe(input); // focus never moved, so the line had to carry the reason
+    expect(input.isConnected).toBe(true);
+    expect(input.value).toBe("Remote-first roles."); // the typed text stays for the retry
+    expect(page.describedBy("statement-input-preference")).toContain(PROFILE_BUSY_MESSAGE);
   });
 });

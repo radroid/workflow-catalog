@@ -1,15 +1,16 @@
-import { isCurrentTurnBoundaryEvent, isTurnFailureEvent, type CreatedClientSession, type MessageResult, type MessageStreamEvent } from "eve/client";
+import { isTurnFailureEvent, type MessageStreamEvent } from "eve/client";
 import { SOURCE_CATEGORIES, sourceStatusSchema, uuidSchema, type SourceCategory } from "@workflow-catalog/contracts";
 import { z } from "zod";
-import { extractClaimsOutputSchema } from "../../agent/lib/extract-claims-schema.ts";
+import { extractClaimsOutputSchema, type ExtractClaimsInput } from "../../agent/lib/extract-claims-schema.ts";
 import { randomSecret } from "../../lib/crypto.ts";
 import { renderProfileMarkdown } from "../../store/profile-markdown.ts";
 import { questionReason } from "../../store/profile-questions.ts";
 import { currentWithdrawal, pendingRevisions, questionNotes, readiness } from "../../store/profile-reducer.ts";
 import { SOURCE_CATEGORY_LABELS, type OnboardingProfile, type StatementKind } from "../../store/profile-types.ts";
-import { ProfileMarkdownError, ProfileStore, StaleMarkdownError, UnsupportedUploadError, type LoadResult } from "../../store/profile.ts";
+import { MAX_MARKDOWN_BYTES, ProfileMarkdownError, ProfileStore, StaleMarkdownError, UnsupportedUploadError, type LoadResult } from "../../store/profile.ts";
 import { ProfileBusyError } from "../../store/profile-writes.ts";
-import { errorResponse, readBoundedJson, validationErrorResponse } from "../http.ts";
+import { runTurn, type TurnResult } from "../run-harness.ts";
+import { errorResponse, readBoundedJson, validationErrorResponse, type BodyResult } from "../http.ts";
 import { defineRouteModule } from "../route-modules.ts";
 
 /**
@@ -50,15 +51,31 @@ export const EXTRACTION_STOPPED = "The extraction was stopped before it finished
 
 const MAX_SMALL_BODY_BYTES = 8 * 1024;
 const MAX_SOURCE_CONTENT_BYTES = 512 * 1024;
-const MAX_MARKDOWN_BYTES = 512 * 1024;
+// MAX_MARKDOWN_BYTES: imported from store/profile.ts (round-4 reviewer nit 1) — one bound for the incoming
+// POST /markdown body and the outgoing markdownOnDisk view, not two numbers to keep in sync by hand.
+
+/**
+ * P03.2 (round-4 UI critic, outside the round): `readBoundedJson`'s own 413 reads "Request body is larger
+ * than 524288 bytes." — accurate, but not a sentence written for the person pasting text or picking a
+ * file. `server/http.ts` is out of this packet's Owns, so the friendlier reason is substituted here, and
+ * only for the one failure that produced it (a body over the cap); every other `readBoundedJson` failure
+ * — bad JSON, the wrong content type — keeps its own message.
+ * Q10 (revision 1, critic polish): "KiB" is the correct binary-unit abbreviation but reads as jargon next
+ * to a plain sentence; "KB" is what a person expects here, close enough at this size to say without lying.
+ */
+const SOURCE_CONTENT_TOO_LARGE_MESSAGE = "That's over 512 KB. Paste less text, or upload a smaller file.";
+
+async function boundedSourceBody(request: Request): Promise<BodyResult> {
+  const body = await readBoundedJson(request, MAX_SOURCE_CONTENT_BYTES);
+  if (body.ok || body.response.status !== 413) return body;
+  return { ok: false, response: errorResponse(413, "body_too_large", SOURCE_CONTENT_TOO_LARGE_MESSAGE) };
+}
 /** The sum of everything saved for one category: an extraction prompt must never grow without bound. */
 export const MAX_TOTAL_SOURCE_TEXT_BYTES = 2 * 1024 * 1024;
 /** One real model call, single-shot: the same default as `eve-gateway.ts`'s `checkModel`. */
 export const EXTRACTION_TIMEOUT_MS = 90_000;
 /** The deadline the route actually uses. Only tests change it, to reach the timeout path without waiting 90 s. */
 export const extractionTiming = { timeoutMs: EXTRACTION_TIMEOUT_MS };
-/** A cancel request to an eve that has stopped answering must not hold the page's request open. */
-const CANCEL_TIMEOUT_MS = 5_000;
 
 function seconds(ms: number): string {
   return ms >= 1000 ? `${Math.round(ms / 1000)} s` : `${ms} ms`;
@@ -95,68 +112,109 @@ export function buildExtractionPrompt(category: SourceCategory, sourceText: stri
   ].join("\n");
 }
 
-type ExtractionTurnOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
-
 /**
- * Whether an extraction turn succeeded (R3). `result.status` alone is not
- * enough:
- *
- * - a turn can fail (`turn.failed` and friends, found with eve's own
- *   `isTurnFailureEvent`) while the session still parks "waiting";
- * - a cancelled turn ends `turn.cancelled`, then `session.waiting`, and
- *   `isTurnFailureEvent` doesn't count it (J1, eve-runtime.md §8 item 15:
- *   "`turn.cancelled` … is not ok");
- * - a turn parked on an input request this route can never show also
- *   reports "waiting";
- * - eve@0.63.0's client reports "completed" for a turn it never saw finish
- *   when its stream ends without a terminal `session.*` event, which is what
- *   an abort while the stream is opening or reopening produces
- *   (docs/spec/research/eve-runtime.md §8 item 15). So a turn counts as
- *   finished only when eve's own `isCurrentTurnBoundaryEvent` saw one.
- *
- * Each reason is the whole message the page shows (J5).
+ * Q3 (revision 1, critic 3): `classifyTurn`'s own "failed" detail can be a
+ * raw eve code and message, or an arbitrary thrown error's text — right for
+ * `ctx.log.warn` (below), wrong for a person to read ("The extraction
+ * failed: MODEL_CALL_FAILED: Model provider API request failed (HTTP
+ * 400)."). `events` is already being collected (`collectEvents: true`, for
+ * `verifiedExtraction`), so reading it here to tell "the model itself
+ * answered with a failure" (a real `TurnFailureStreamEvent` came back) from
+ * "eve or the network never answered at all" (the stream threw, or ended
+ * with no boundary, before any such event) is not a second classifier — the
+ * ok/failed/cancelled/parked/timeout decision itself stays entirely
+ * `classifyTurn`'s; this only chooses which already-honest plain sentence to
+ * show for an already-decided "failed".
  */
-function interpretExtractionTurn(result: Pick<MessageResult, "status" | "events" | "inputRequests">): ExtractionTurnOutcome {
-  const failure = result.events.find(isTurnFailureEvent);
-  if (failure) return { ok: false, reason: `The extraction failed: ${failure.data.message.replace(/\.$/, "")} (${failure.data.code}).` };
-  if (result.events.some((event) => event.type === "turn.cancelled")) return { ok: false, reason: EXTRACTION_STOPPED };
-  if (result.status === "failed") return { ok: false, reason: "The extraction failed. Try again." };
-  if (result.inputRequests.length > 0) return { ok: false, reason: "The model asked a question this page can't show, so the extraction stopped. Try again." };
-  if (!result.events.some(isCurrentTurnBoundaryEvent)) return { ok: false, reason: "The extraction ended before the model finished. Try again." };
-  return { ok: true };
-}
-
-interface PersistedExtraction {
-  readonly added: number;
-  readonly rejected: number;
-  readonly message: string;
+function extractionFailureMessage(result: Pick<TurnResult, "detail" | "providerLimit" | "events">): string {
+  if (result.providerLimit) return "The extraction stopped: the model's provider is rate-limited. Try later.";
+  if ((result.events ?? []).some(isTurnFailureEvent)) return "The extraction failed: the model had a problem answering. Try again.";
+  return "The extraction failed: eve or the network didn't answer. Try again.";
 }
 
 /**
- * D14: the extract_claims calls in this turn that persisted claims for
- * `category`, read from the turn's own `action.result` events (the tool's
- * output, `extract-claims-schema.ts`). Undefined when none did, in which case
- * the content hash is not recorded and the same text is extracted again next
- * time (R7).
+ * P03.2 (deliverable 1): the one line the page shows for a turn `runTurn`
+ * (`run-harness.ts`'s single classifier) did not report "ok". Classification
+ * itself — what counts as cancelled, parked, timed out or failed, following
+ * eve-runtime.md §8 item 15 — stays entirely in `run-harness.ts`; this only
+ * phrases an already-decided `TurnResult.status` for a person to read (J5,
+ * one short sentence, about 80 characters, Q3). "cancelled" keeps P03's
+ * exact wording (unchanged by this move). "failed" is phrased by
+ * `extractionFailureMessage` above (Q3) — never the raw code, status or an
+ * HTTP number.
+ *
+ * S6 (revision 2, round-2 UI critic issue 2): "parked" and "timeout" now put
+ * the consequence first, as every other outcome here does ("The extraction
+ * stopped: …", "The extraction failed: …"); P03's wording put the cause
+ * first ("No answer from the model within 90 s, so the extraction was
+ * stopped."). The timeout still names the deadline this route chose.
  */
-function persistedExtraction(events: readonly MessageStreamEvent[], category: SourceCategory): PersistedExtraction | undefined {
-  let found: { added: number; rejected: number; messages: string[] } | undefined;
+function extractionRefusal(result: TurnResult, timeoutMs: number): string {
+  if (result.status === "cancelled") return EXTRACTION_STOPPED;
+  if (result.status === "parked") return "The extraction stopped: the model asked a question this page can't show. Try again.";
+  if (result.status === "timeout") return `The extraction stopped: no answer from the model within ${seconds(timeoutMs)}. Try again.`;
+  return extractionFailureMessage(result);
+}
+
+interface VerifiedExtraction {
+  readonly claims: ExtractClaimsInput["claims"];
+  readonly rejected: readonly string[];
+}
+
+/**
+ * P03.2 (deliverables 1 and 5): the `extract_claims` calls in this turn that
+ * verified at least one claim for `category` (S1: at least one that also
+ * survives the route's own re-check below), read from the turn's own
+ * `action.result` events (`TurnResult.events`, from `collectEvents: true` —
+ * the same way `persistedExtraction` used to read `MessageResult.events`).
+ * Undefined when none did. `extract_claims` itself only verifies and returns
+ * now (deliverable 5: `extract-claims-logic.ts`'s `verifyExtractedClaims`) —
+ * this route is the one place that persists what it verified, through
+ * `ProfileStore.extractClaims`, and only once the whole turn is confirmed
+ * "ok" below, so a turn that verifies claims and then fails or is cancelled
+ * saves nothing (P04's T1 rule). A call that verified nothing (every quote
+ * fabricated) is skipped entirely, the same as the old `!output.data.persisted`
+ * skip — its `rejected` quotes are not surfaced on their own, matching P03's
+ * existing behaviour, which this packet was not asked to change.
+ *
+ * Q6 (revision 1, reviewer 5): re-applies the tool's own check (the same
+ * `sourceText.includes(claim.evidenceQuote)` test `extract-claims-logic.ts`'s
+ * `verifyExtractedClaims` already ran) against this route's own `sourceText`
+ * — the text as it was before this turn started, read once at the top of the
+ * route handler. The tool verified against whatever the store's `sourceText`
+ * was *at tool-call time*, mid-turn; a claim that no longer checks out
+ * against the route's own pre-turn snapshot (the source changed underneath
+ * the running turn, say) is counted rejected here too, never persisted —
+ * belt and suspenders, not a second place a fabricated quote could slip
+ * through, since a route that trusted the event's `output.claims` outright
+ * would be exactly that.
+ *
+ * S1 (revision 2, round-2 reviewer issue 1): what counts is what survives
+ * that re-check, not what the tool returned. When no claim survives it —
+ * every quote the tool's result carried is missing from the route's own
+ * text — this answers undefined, exactly like a call that verified nothing
+ * at all: the route then saves nothing, records no content hash, and
+ * answers `{ok: false, status: "no_result"}`, so the same text is extracted
+ * again next time. Before this, an all-rejected result still counted as
+ * found: the route persisted an empty list, recorded the hash, answered
+ * `ok: true`, and every retry answered "unchanged" without running a turn.
+ */
+function verifiedExtraction(events: readonly MessageStreamEvent[], category: SourceCategory, sourceText: string): VerifiedExtraction | undefined {
+  let found: { claims: ExtractClaimsInput["claims"]; rejected: string[] } | undefined;
   for (const event of events) {
     if (event.type !== "action.result" || event.data.status !== "completed") continue;
     const result = event.data.result;
     if (result.kind !== "tool-result" || result.toolName !== "extract_claims" || result.isError) continue;
     const output = extractClaimsOutputSchema.safeParse(result.output);
-    if (!output.success || !output.data.persisted || output.data.sourceCategory !== category) continue;
-    found ??= { added: 0, rejected: 0, messages: [] };
-    found.added += output.data.added;
-    found.rejected += output.data.rejected.length;
-    found.messages.push(output.data.message);
+    if (!output.success || output.data.claims.length === 0 || output.data.sourceCategory !== category) continue;
+    found ??= { claims: [], rejected: [] };
+    for (const claim of output.data.claims) {
+      if (sourceText.includes(claim.evidenceQuote)) found.claims.push(claim);
+      else found.rejected.push(claim.evidenceQuote);
+    }
+    found.rejected.push(...output.data.rejected);
   }
-  return found && { added: found.added, rejected: found.rejected, message: found.messages.at(-1) ?? "" };
-}
-
-function isTimeout(error: unknown, signal: AbortSignal): boolean {
-  return signal.aborted || (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"));
+  return found !== undefined && found.claims.length > 0 ? found : undefined;
 }
 
 const accountSourceBodySchema = z
@@ -301,7 +359,7 @@ export default defineRouteModule({
     router.post("/sources/:category/content", async (c) => {
       const category = c.req.param("category");
       if (!isSourceCategory(category)) return errorResponse(404, "not_found", "No such source category.");
-      const body = await readBoundedJson(c.req.raw, MAX_SOURCE_CONTENT_BYTES);
+      const body = await boundedSourceBody(c.req.raw);
       if (!body.ok) return body.response;
       const parsed = pastedTextBodySchema.safeParse(body.value);
       if (!parsed.success) return validationErrorResponse(parsed.error);
@@ -312,7 +370,7 @@ export default defineRouteModule({
     router.post("/sources/:category/uploads", async (c) => {
       const category = c.req.param("category");
       if (!isSourceCategory(category)) return errorResponse(404, "not_found", "No such source category.");
-      const body = await readBoundedJson(c.req.raw, MAX_SOURCE_CONTENT_BYTES);
+      const body = await boundedSourceBody(c.req.raw);
       if (!body.ok) return body.response;
       const parsed = uploadBodySchema.safeParse(body.value);
       if (!parsed.success) return validationErrorResponse(parsed.error);
@@ -365,58 +423,62 @@ export default defineRouteModule({
       // The page shows "npm run runner" as code (polish 2); the message itself stays plain text.
       if (!eve) return errorResponse(503, "eve_not_running", "eve is not running. Start the runner with npm run runner, then try again.");
 
+      // P03.2 (deliverable 1): runTurn is run-harness.ts's one classifier —
+      // it opens the session, reads the stream event by event, applies the
+      // timeout, and cancels through the session for a timed-out or parked
+      // turn (eve-runtime.md §8 item 15), so this route no longer drives any
+      // of that itself. It never rejects: every outcome, including a network
+      // error from sessions.create, comes back as a TurnResult. A single,
+      // manual, foreground extraction never goes through withRun and writes
+      // no RunRecord, so a provider limit here does not pause the budget
+      // (see the report for the full decision, mirrored in eve-gateway.ts's
+      // checkModel).
       const timeoutMs = extractionTiming.timeoutMs;
-      const signal = AbortSignal.timeout(timeoutMs);
-      const timedOut = () => errorResponse(504, "extraction_timed_out", `No answer from the model within ${seconds(timeoutMs)}, so the extraction was stopped. Try again.`);
-      let created: CreatedClientSession | undefined;
-      // eve-runtime §8 item 15: MessageResponse.cancel() sends nothing before
-      // the client has seen the turn start, or once the turn is parked, so a
-      // timed-out, unfinished or parked turn is cancelled through its session.
-      const cancelSession = async (why: string) => {
-        if (!created) return;
-        await created.session.cancel({ signal: AbortSignal.timeout(CANCEL_TIMEOUT_MS) }).catch((error: unknown) => {
-          ctx.log.warn(`onboarding: failed to cancel ${why} extraction session for ${category}: ${error instanceof Error ? error.message : String(error)}`);
-        });
-      };
-      try {
-        created = await eve.client.sessions.create({ message: buildExtractionPrompt(category, sourceText), signal });
-        const result = await created.response.result();
+      const result = await runTurn(ctx, { message: buildExtractionPrompt(category, sourceText), timeoutMs, collectEvents: true, pauseBudgetOnProviderLimit: false });
+      // Presentation only — reads the already-classified status/detail, never re-derives it (run-harness.ts
+      // stays the one classifier). runTurn itself logs nothing, so this is the only operator-visible trace
+      // of a non-ok extraction turn.
+      if (result.status !== "ok") ctx.log.warn(`onboarding: extraction turn for ${category} ended ${result.status} (${result.detail ?? "no detail"})`);
 
-        // eve-runtime §8 item 15: an abort while the client opens or reopens
-        // the stream resolves result() quietly instead of throwing.
-        if (signal.aborted) {
-          await cancelSession("a timed-out");
-          ctx.log.warn(`onboarding: extraction turn for ${category} timed out after ${seconds(timeoutMs)}`);
-          return timedOut();
+      // D14, J1, P04's T1 rule (deliverable 5): extract_claims only verifies
+      // and returns now (extract-claims-logic.ts); this is the one place
+      // that persists what it verified, through ProfileStore.extractClaims,
+      // and only once the whole turn is confirmed "ok" — so a turn that
+      // verifies claims and then fails, is cancelled, parks, or times out
+      // saves nothing, and the same text is extracted again next time (R7).
+      // The hash is recorded only when the store actually accepted the
+      // write (it can still refuse, e.g. a concurrent write unmarked the
+      // source while the turn was running).
+      let saved: { readonly ok: boolean; readonly added: number; readonly rejected: number; readonly message: string } | undefined;
+      if (result.status === "ok") {
+        const verified = verifiedExtraction(result.events ?? [], category, sourceText);
+        if (verified) {
+          const persisted = await s.extractClaims(category, verified.claims);
+          if (persisted.ok) await s.recordExtractionContentHash(category, sourceText);
+          saved = { ok: persisted.ok, added: persisted.added, rejected: verified.rejected.length, message: persisted.message };
         }
-
-        const outcome = interpretExtractionTurn(result);
-        // Never leave a turn running or parked on an input request this route
-        // can't show or answer.
-        if (!outcome.ok && (result.inputRequests.length > 0 || !result.events.some(isCurrentTurnBoundaryEvent))) await cancelSession("an unfinished");
-
-        // D14, J1: the hash is recorded only for a finished turn (never a
-        // cancelled one) whose extract_claims call persisted. Claims a
-        // cancelled turn's tool step saved before the cancel stay, as on the
-        // timeout path, and the same text is extracted again next time.
-        const persisted = outcome.ok ? persistedExtraction(result.events, category) : undefined;
-        if (persisted) await s.recordExtractionContentHash(category, sourceText);
-        const after = await s.read();
-        // J5: built from the counts, so it stays one short sentence whatever the tool's own message says.
-        const found = persisted && (persisted.added > 0 ? `${persisted.added} candidate claim${persisted.added === 1 ? "" : "s"} extracted from ${label}` : `No new claims from ${label}`);
-        const dropped = persisted && persisted.rejected > 0 ? `${found}; ${persisted.rejected} had no matching quote.` : undefined;
-        const message = !outcome.ok ? outcome.reason : persisted ? (dropped ?? persisted.message) : "The model finished without saving any claims. Try again.";
-        return c.json({ ok: outcome.ok && persisted !== undefined, status: result.status, message, claims: claimsFor(after) });
-      } catch (error) {
-        // The turn never produced a MessageResult (a network error, or the
-        // timeout fired while an open stream was being read). Cancel a turn
-        // that did start rather than leaving it running unattended.
-        const isTimedOut = isTimeout(error, signal);
-        await cancelSession(isTimedOut ? "a timed-out" : "a failed");
-        const detail = error instanceof Error ? error.message : String(error);
-        ctx.log.warn(`onboarding: extraction turn for ${category} ${isTimedOut ? "timed out" : "failed"}: ${detail}`);
-        return isTimedOut ? timedOut() : errorResponse(502, "extraction_failed", `The extraction turn for ${label} failed: ${detail}`);
       }
+
+      const after = await s.read();
+      let message: string;
+      if (result.status !== "ok") {
+        message = extractionRefusal(result, timeoutMs);
+      } else if (!saved) {
+        message = "The model finished without saving any claims. Try again.";
+      } else if (!saved.ok) {
+        message = saved.message; // the store's own refusal (a race, not the turn itself)
+      } else {
+        // J5: built from the counts, so it stays one short sentence whatever the store's own message says.
+        const found = saved.added > 0 ? `${saved.added} candidate claim${saved.added === 1 ? "" : "s"} extracted from ${label}` : `No new claims from ${label}`;
+        message = saved.rejected > 0 ? `${found}; ${saved.rejected} had no matching quote.` : saved.message;
+      }
+      // Q1 (revision 1, reviewer 1): the response's own `status` must never read "ok" while `ok` is false —
+      // an ok turn that saved nothing (nothing verified, or the store refused the persist on a race) answers
+      // "no_result", not a self-contradictory {ok:false, status:"ok"}. Every non-ok turn keeps classifyTurn's
+      // own status verbatim; "ok" is reserved for the one branch that actually persisted something.
+      const ok = result.status === "ok" && saved !== undefined && saved.ok;
+      const status = result.status !== "ok" ? result.status : ok ? "ok" : "no_result";
+      return c.json({ ok, status, message, claims: claimsFor(after) });
     });
 
     router.post("/claims/:id/decide", async (c) => {

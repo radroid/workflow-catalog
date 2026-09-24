@@ -81,6 +81,21 @@ function messageOf(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Q10 (revision 1, critic polish, "outside this round" note): store/profile.ts's `editsNote` puts a fixed-
+ * shape sentence ("1 edit saved.", "2 edits saved, 1 edit proposed.") *after* the server's own message
+ * whenever a write also reconciled a hand edit to career-profile.md (Q10's own reordering, this same
+ * revision). `decide()` below replaces a Confirm's own message with "An answer is needed." when it opens a
+ * question — losing that trailing note would silently drop real information every other outcome keeps.
+ * Kept here (not read off `editsNote` itself, out of Owns for this packet's revision) as a narrow, named
+ * match on that one fixed shape, moved to follow the replacement instead.
+ */
+const EDITS_NOTE = / \d+ edits? (?:saved|proposed)(?:, \d+ edits? (?:saved|proposed))?\.$/;
+function withEditsNote(message, replacement) {
+  const match = EDITS_NOTE.exec(message);
+  return match ? `${replacement}${match[0]}` : replacement;
+}
+
 /** Appends the children that exist: `Element.append(null)` would add the text "null". */
 function add(parent, ...children) {
   for (const child of children) if (child) parent.append(child);
@@ -144,7 +159,18 @@ function stopWorking() {
   working = null;
 }
 
-/** Announces one outcome, once. The same text twice in a row is cleared first so it is announced again. */
+/**
+ * Announces one outcome, once. The same text twice in a row is cleared first
+ * so it is announced again.
+ *
+ * Q9 (revision 1, critic 1 and 4): the visible tag carries no colon (the
+ * walkthrough's own words, "Last action"/"Refused"/"Working") -- a
+ * *visually hidden* ": " between `.tag` and `.text` in the static markup
+ * (onboarding.html's `#last-action`) is what separates them for assistive
+ * tech instead, on load and after every action, at every width, not only
+ * where a CSS margin happened to be visible. Neither node here ever touches
+ * that separator; it is a fixed sibling this function never renders.
+ */
 function lastAction(message, tone = "done") {
   if (tone !== "working") stopWorking();
   const node = $("last-action");
@@ -337,10 +363,18 @@ function fieldError(controlId) {
   return message ? el("p", { className: "field-error", text: message, attrs: { id: fieldErrorId(controlId) } }) : null;
 }
 
-/** A problem with what was typed or chosen: the detail sits next to the field, focus goes there, and the line says only `outcome` (J4). */
-function refuseAt(controlId, detail, outcome) {
+/**
+ * A problem with what was typed or chosen: `detail` sits next to the field, and focus goes there (J4). When
+ * the refused control already holds focus, though, focus never moves anywhere for a screen reader to read
+ * `detail` from -- the line's own `outcome` ("Not uploaded.") was all that was announced. `focusedReason`,
+ * when given, replaces `outcome` in the line for exactly that case: a short, line-length sentence (not
+ * `detail`'s fuller, field-length one), e.g. "Not uploaded: only .txt or .md files can be uploaded." (P03.2,
+ * round-4 UI critic polish 1).
+ */
+function refuseAt(controlId, detail, outcome, focusedReason) {
   fieldErrors.set(controlId, detail);
-  lastAction(outcome, "refused");
+  const alreadyFocused = focusedReason && document.activeElement?.id === controlId;
+  lastAction(alreadyFocused ? focusedReason : outcome, "refused");
   render(controlId);
 }
 
@@ -409,10 +443,27 @@ async function run(id, work, field) {
   }
 }
 
+/**
+ * S8 (revision 2, round-2 UI critic polish): a server's sentence reused after the line's own "<Outcome>: "
+ * starts in lower case, as the page's own refusals do ("Not added: type a boundary first."). Only an ordinary
+ * capitalised first word is lowered ("That's", "The"); an acronym or a lone "I" is left as it is. The field's
+ * own error keeps the server's sentence unchanged: there it stands alone.
+ */
+function afterColon(message) {
+  return /^[A-Z][a-z]/.test(message) ? `${message[0].toLowerCase()}${message.slice(1)}` : message;
+}
+
 async function refused(error, id, field) {
   const message = messageOf(error);
   await load().catch(() => undefined);
-  if (field && !view?.markdownError) return refuseAt(field.id, message, field.outcome);
+  // Q7 (revision 1, reviewer 6 and critic 2): unlike a client-side refusal (refuseAt's other call sites,
+  // each hand-authoring its own short focusedReason distinct from the fuller detail next to the field), the
+  // server gives only one message -- already short, plain and code-free (J5, Q3) -- so there is no separate
+  // longer text to shorten it from. Reusing it, after the same "<Outcome>: " prefix those hand-authored ones
+  // use (S8: in lower case, see afterColon), keeps the line's own shape (what happened, then why) for a
+  // server refusal too: the upload's 413, or a statement's Enter refused by the server (the profile lock's
+  // 503), while the field never loses focus for a screen reader to re-read the field error from.
+  if (field && !view?.markdownError) return refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${afterColon(message)}`);
   lastAction(message, "refused");
   // Focus stays where the person acted (the button, or the field they pressed Enter in); only a lost focus goes to the button.
   render(document.activeElement && document.activeElement !== document.body ? undefined : id);
@@ -766,10 +817,15 @@ async function upload(category, input) {
   if (!file) return;
   input.value = "";
   if (!/\.(txt|md)$/i.test(file.name)) {
-    return refuseAt(fileId, `“${file.name}” is not a .txt or .md file. Only plain text and Markdown files can be uploaded; paste other text into the box instead.`, "Not uploaded.");
+    return refuseAt(
+      fileId,
+      `“${file.name}” is not a .txt or .md file. Only plain text and Markdown files can be uploaded; paste other text into the box instead.`,
+      "Not uploaded.",
+      "Not uploaded: only .txt or .md files can be uploaded.",
+    );
   }
   const text = await file.text();
-  if (!text.trim()) return refuseAt(fileId, `“${file.name}” is empty, so there is nothing to upload.`, "Not uploaded.");
+  if (!text.trim()) return refuseAt(fileId, `“${file.name}” is empty, so there is nothing to upload.`, "Not uploaded.", "Not uploaded: that file is empty.");
   const outcome = await postJson(`/api/onboarding/sources/${category}/uploads`, { fileName: file.name, text });
   await load();
   lastAction(outcome.message, "done");
@@ -944,7 +1000,7 @@ async function decide(claimId, decision) {
   await load();
   // J4: a question opened. Focus goes to its answer box, whose description carries the question and why; the line says only that.
   const opened = outcome.ok && decision === "confirmed" && view.claims.find((claim) => claim.id === claimId)?.status === "disputed";
-  lastAction(opened ? "An answer is needed." : outcome.message, outcome.ok ? "done" : "refused");
+  lastAction(opened ? withEditsNote(outcome.message, "An answer is needed.") : outcome.message, outcome.ok ? "done" : "refused");
   render(() => claimFocusTarget(claimId));
 }
 
@@ -990,7 +1046,7 @@ function statementForm(spec) {
 
 async function addStatement(spec, inputId) {
   const text = (drafts.get(inputId) ?? "").trim();
-  if (!text) return refuseAt(inputId, `Type a ${spec.one} first, then add it.`, "Not added.");
+  if (!text) return refuseAt(inputId, `Type a ${spec.one} first, then add it.`, "Not added.", `Not added: type a ${spec.one} first.`);
   const outcome = await postJson(`/api/onboarding/statements/${spec.kind}`, { text });
   if (outcome.ok) {
     drafts.delete(inputId);

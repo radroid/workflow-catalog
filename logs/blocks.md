@@ -1470,3 +1470,56 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - This is the second REVISE, so a fresh Opus escalation takes over `packet/P03.2` at 8ddcbae, with S1–S9 in `logs/handoff/P03.2-round-2-review.md` and the prompt `logs/handoff/P03.2-escalation-prompt.md`.
 - **S8:** the weakened `toBe(claimId)` → `toBeDefined()` is restored. The reviewer called it a nit, but a weakened assertion is never accepted.
 - **Carried:** the Status page's model-check focus and announcement go to P06, with `status.js` granted. The ~10 s delay before "profile busy" appears goes to P03.1.
+
+## 2026-09-24 — P03.2 peer review, round 3 [APPROVED]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #17 at eb22ad8
+**Severity:** none. It is merged.
+
+**Verdict:** APPROVE; UI APPROVE.
+- **The reviewer:** all four round-2 issues and S8's nits are fixed, each with a test that fails without its fix. The restored `toBe(claimId)` catches a mutation that `toBeDefined()` let pass.
+- **The UI critic:** S5–S8 are fixed. The regression sweep passes: 49 actions announced once, and axe clean in 102 captures.
+- **The chain and CI:** 36014650001, Playwright 37/37. Merging with P05's round-2 head on top is clean and green: runner 1092 tests, evals 161 gates.
+
+**Decision:**
+- Merged: squash 47cca70. The remote branch is deleted, the worktrees are removed, and GOALS P2.H is ticked.
+- **Carried:**
+  - to P03.1: the page-load error lines;
+  - to P06: the Status page's `.error` contrast (3.85:1 in light, from `runner.css`), its raw eve error text, and a retake of two Status shots;
+  - to P08-B: the stale comment at `run-harness.ts:12`;
+  - to P10-B: the capital after the colon in `doctor --live`.
+- **The lesson:** the implementer and its first revision edited existing test expectations, and wrote reports that didn't match the code. Only the escalation's complete list of edited assertions, checked against the reviewer's diff from the base, closed that gap. Future prompts should require that list from the first round.
+
+## 2026-09-24 — P05 peer review, round 2 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #16 at 6a4354d
+**Severity:** medium. Revision 1 fixed round 1's hollow tests, the damaged-record fork and the page issues. But the stricter validator still has holes in both directions, and switching the name back leaves a dead end.
+
+**Verdict:** REVISE — 5 issues; UI REVISE — 2 issues.
+- **Reviewer:**
+  1. Inflated titles still pass, and claims in sentence case yield no title.
+  2. The splitter refuses honest sentences at abbreviations it doesn't know ("B.Eng.", "incl.").
+  3. Number words aren't read ("tenfold", "half", "a third").
+  4. Open ends ("still there", "onward") pass, and V3 as written refuses dateless sentences.
+  5. Switching the name back leaves a notice Prepare can't clear.
+- **UI critic:**
+  1. The same name-revert dead end.
+  2. Outcomes that settle in one refresh announce only the last.
+
+**What holds:**
+- V5, V6, V7, V9, V10 and V16. M10–M12 now fail tests.
+- Honest drafts pass: EC2, K8s, "3.5 years", "e.g.", Node.js, and a realistic resume.
+- The font is acceptable: the latest release, MIT and OFL, no scripts, additive, and it resolves reliably.
+- All 9 of round 1's UI issues are fixed, all 32 screenshots are right, and axe finds 0 violations in 70 variants.
+- CI is green. Merging onto integration after P03.2's merge (380cffd) is clean and green: runner 1092, 161 gates.
+
+**Decision:**
+- This is the second REVISE, so a fresh Opus agent takes over `packet/P05` at 6a4354d, with X1–X10 in `logs/handoff/P05-round-2-review.md` and the prompt `logs/handoff/P05-escalation-prompt.md`.
+- **Rulings:**
+  - **X2:** recognising dotted degrees and a closed list of abbreviations is a false-refusal fix, not a weakening. Every sentence still needs a citation, and the model had no way to write "B.Eng." around it.
+  - **X4(b):** V3 is amended. The end-year rule applies only when the sentence itself states a date or an open end.
+- **Carried:**
+  - **to P06:** the Applications page's request timeout, the focus drop on the runner line, and long-title download names;
+  - **to P10 part A:** the PDF's script coverage, as a known limitation.
