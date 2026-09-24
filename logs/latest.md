@@ -1,6 +1,8 @@
-Latest: iter-007 in progress since 2026-09-24 about 08:10. **P05** (Opus, port 4320) ∥ **P03.2** (Sonnet, port 4330) are implementing, spawned from `logs/handoff/P05-prompt.md` and `logs/handoff/P03.2-prompt.md` on 08262a1 or later. Last closed: iter-006 (P04 08262a1 #14, P02.2 2b93cf0 #15). CI on 08262a1 is green (35972854108, 35972858634). Log: logs/iter-006.md.
+Latest: iter-007 in progress since 2026-09-24 about 08:10. Both PRs are open and linked, and round 1 is running (since about 11:05) with an Opus reviewer and an Opus UI critic on each:
+- **P05** (#16): head 3130763, CI green. Reviewer on 4320 if needed; critic on 4340.
+- **P03.2** (#17): head 1ed5a91, CI 35989603016 was running at dispatch. Reviewer on 4330 if needed; critic on 4350. Last closed: iter-006 (log: logs/iter-006.md).
 
-Next, in iter 007: link each PR as it opens, then run round 1 with one Opus reviewer and one Opus UI critic per PR. P05's critic covers the application page, and P03.2's covers the changed Onboarding and Profile messages. The critics use 4340 and 4350; a reviewer uses its packet's port only if needed.
+Next, in iter 007: act on the round-1 verdicts. A REVISE goes to the same implementer, whose worktree is kept. When P05 merges: the rulebook's P06 row says P06 extends `routes/applications.ts`, and the nav position of the Applications page is carried to P06 (P05's open questions 1 and 2).
 - **Then:**
   - after P05: P08-B (it carries P08-A's follow-ups and the extraction-budget question) and P06 (it carries P04's follow-ups);
   - after P03.2 and P05: P03.1;
