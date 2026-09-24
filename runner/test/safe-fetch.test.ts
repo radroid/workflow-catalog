@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import https from "node:https";
 import net from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isBlockedAddress, nodeHttpsRequest, safeFetch, type PerformRequest, type ResolvedAddress, type SafeFetchResponse } from "../lib/safe-fetch.ts";
+import { selfSignedCertificate } from "./tls-fixture.ts";
 
 /**
  * `safeFetch`'s own tests (P04 packet: "give each a small documented
@@ -53,6 +55,18 @@ describe("isBlockedAddress", () => {
     ["64:ff9b::7f00:1", "NAT64 of 127.0.0.1"],
     ["fec0::1", "site-local (deprecated)"],
     ["fe80::1%lo0", "link-local with a zone id"],
+    // Round-2 review T7: ranges the round-2 reviewer found still allowed.
+    ["::ffff:0:7f00:1", "IPv4-translated ::ffff:0:0:0/96, embedding 127.0.0.1"],
+    ["::ffff:0:a9fe:a9fe", "IPv4-translated, embedding the metadata address"],
+    ["0:0:0:0:ffff:0:a00:1", "IPv4-translated, uncompressed, embedding 10.0.0.1"],
+    ["64:ff9b:1::1", "local-use NAT64 64:ff9b:1::/48, blocked entirely"],
+    ["64:ff9b:1::5db8:d822", "local-use NAT64, blocked entirely even when it embeds a public IPv4 address"],
+    ["2002::1", "6to4 2002::/16, blocked entirely"],
+    ["2002:5db8:d822::1", "6to4, blocked entirely even when it encodes a public IPv4 address"],
+    ["198.18.0.1", "benchmarking 198.18.0.0/15 (low end)"],
+    ["198.19.255.255", "benchmarking 198.18.0.0/15 (high end)"],
+    ["192.0.0.1", "IETF protocol assignments 192.0.0.0/24"],
+    ["192.0.0.255", "IETF protocol assignments 192.0.0.0/24 (high end)"],
   ])("blocks %s (%s)", (address) => {
     expect(isBlockedAddress(address)).toBe(true);
   });
@@ -63,6 +77,12 @@ describe("isBlockedAddress", () => {
     ["2606:2800:220:1:248:1893:25c8:1946", "an ordinary public IPv6 address"],
     ["::ffff:93.184.216.34", "an IPv4-mapped IPv6 address embedding a public IPv4 address (L2: checked by its embedded IPv4, not the whole ::ffff:0:0/96 range)"],
     ["64:ff9b::93.184.216.34", "a NAT64 address embedding a public IPv4 address"],
+    ["::ffff:0:5db8:d822", "an IPv4-translated address embedding a public IPv4 address (T7: checked by its embedded IPv4)"],
+    ["198.20.0.1", "just above 198.18.0.0/15"],
+    ["198.17.255.255", "just below 198.18.0.0/15"],
+    ["192.0.1.1", "just above 192.0.0.0/24"],
+    ["2003::1", "just above 2002::/16"],
+    ["64:ff9b:2::1", "just above 64:ff9b:1::/48"],
   ])("allows %s (%s)", (address) => {
     expect(isBlockedAddress(address)).toBe(false);
   });
@@ -90,9 +110,143 @@ describe("nodeHttpsRequest: the production transport (mutation targets: M6b hand
     // still in place, Node's autoSelectFamily would call it with { all: true }, get back a bare string where it
     // expected an array, and every real request would throw ERR_INVALID_IP_ADDRESS before ever reaching the wire.
     await expect(
-      nodeHttpsRequest({ url: new URL(`https://never-resolvable.invalid:${address.port}/posting`), address: "127.0.0.1", timeoutMs: 3000 }),
+      nodeHttpsRequest({ url: new URL(`https://never-resolvable.invalid:${address.port}/posting`), address: "127.0.0.1", signal: AbortSignal.timeout(3000) }),
     ).rejects.toThrow(); // the plain TCP listener isn't real TLS, so the handshake itself fails — that's expected.
     expect(connections).toBe(1); // but the connection reached the pinned address first.
+  });
+});
+
+describe("safeFetch: a DNS name connects to the checked address (round-2 review T7, mutation target: M6b for a DNS name)", () => {
+  it("hands the transport the address the resolver answered and the check passed, never the hostname", async () => {
+    const seen: Array<{ host: string; address: string }> = [];
+    const result = await safeFetch("https://jobs.example/posting", {
+      resolve: async () => PUBLIC_ADDRESS,
+      performRequest: async ({ url, address }) => {
+        seen.push({ host: url.hostname, address });
+        return { status: 200, headers: new Headers({ "content-type": "text/plain" }), body: (async function* () { yield new TextEncoder().encode("ok"); })(), cancel: () => undefined };
+      },
+    });
+    expect(result).toMatchObject({ ok: true, text: "ok" });
+    expect(seen).toEqual([{ host: "jobs.example", address: "93.184.216.34" }]);
+  });
+});
+
+describe("the real transport against a local TLS server (round-2 review T4 and T7)", () => {
+  // The fictional host the in-memory certificate names. It has no real DNS answer, so every connection below can
+  // only have gone through the pinned lookup.
+  const HOST = "jobs.example";
+  let server: https.Server;
+  let port = 0;
+  let previousCa: https.AgentOptions["ca"];
+  const drips = new Set<ReturnType<typeof setInterval>>();
+
+  function drip(res: ServerResponse): void {
+    const timer = setInterval(() => {
+      if (!res.writableEnded && !res.destroyed) res.write("d");
+    }, 50);
+    drips.add(timer);
+    res.on("close", () => {
+      clearInterval(timer);
+      drips.delete(timer);
+    });
+  }
+
+  beforeAll(async () => {
+    const { key, cert } = selfSignedCertificate(HOST);
+    previousCa = https.globalAgent.options.ca;
+    https.globalAgent.options.ca = cert; // trusted by this test file's own process only
+    server = https.createServer({ key, cert }, (req, res) => {
+      switch (new URL(req.url ?? "/", "https://placeholder").pathname) {
+        case "/ok":
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.end("Staff Platform Engineer at Northwind Labs. Fictional posting.");
+          return;
+        case "/drip":
+          res.writeHead(200, { "content-type": "text/plain" });
+          drip(res);
+          return;
+        case "/redirect-drip":
+          res.writeHead(302, { location: "/ok", "content-type": "text/plain" });
+          drip(res);
+          return;
+        case "/reset-mid-body":
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.write("partial");
+          setTimeout(() => res.socket?.destroy(), 100);
+          return;
+        case "/endless": {
+          res.writeHead(200, { "content-type": "text/plain" });
+          const chunk = Buffer.alloc(64 * 1024, 0x7a);
+          const pump = () => {
+            while (!res.destroyed && res.write(chunk)) {
+              // keep writing until the socket pushes back
+            }
+          };
+          res.on("drain", pump);
+          pump();
+          return;
+        }
+        default:
+          res.writeHead(404).end();
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind a port");
+    port = address.port;
+  });
+
+  afterAll(async () => {
+    for (const timer of drips) clearInterval(timer);
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    https.globalAgent.options.ca = previousCa;
+  });
+
+  /**
+   * The real transport, reached through a DNS name. The resolver answers a public address, which passes the
+   * check; this wrapper refuses to go on unless the transport was handed exactly that checked address, then
+   * points the real transport at the local server instead (the public address is fictional and unreachable).
+   */
+  function realTransportToLocal(seen: string[]): PerformRequest {
+    return (input) => {
+      seen.push(input.address);
+      if (input.address !== PUBLIC_ADDRESS[0]!.address) return Promise.reject(new Error(`handed ${input.address}, not the checked address`));
+      return nodeHttpsRequest({ ...input, address: "127.0.0.1" });
+    };
+  }
+
+  it("fetches a DNS name end to end over TLS, connecting through the checked address (M6b for a DNS name)", async () => {
+    const seen: string[] = [];
+    const result = await safeFetch(`https://${HOST}:${port}/ok`, { resolve: async () => PUBLIC_ADDRESS, performRequest: realTransportToLocal(seen) });
+    expect(result).toMatchObject({ ok: true, status: 200, text: "Staff Platform Engineer at Northwind Labs. Fictional posting." });
+    expect(seen).toEqual(["93.184.216.34"]);
+  });
+
+  it("a slow-drip body gives timeout, not too_large", async () => {
+    const started = Date.now();
+    const result = await safeFetch(`https://${HOST}:${port}/drip`, { resolve: async () => PUBLIC_ADDRESS, performRequest: realTransportToLocal([]), timeoutMs: 600 });
+    expect(result).toMatchObject({ ok: false, reason: "timeout" });
+    expect(Date.now() - started).toBeLessThan(2400); // 4x the 600 ms deadline
+  });
+
+  it("a reset mid-body gives request_failed, not too_large", async () => {
+    const result = await safeFetch(`https://${HOST}:${port}/reset-mid-body`, { resolve: async () => PUBLIC_ADDRESS, performRequest: realTransportToLocal([]), timeoutMs: 5000 });
+    expect(result).toMatchObject({ ok: false, reason: "request_failed" });
+  });
+
+  it("an endless body gives too_large at the default 2 MiB cap", async () => {
+    const started = Date.now();
+    const result = await safeFetch(`https://${HOST}:${port}/endless`, { resolve: async () => PUBLIC_ADDRESS, performRequest: realTransportToLocal([]), timeoutMs: 5000 });
+    expect(result).toMatchObject({ ok: false, reason: "too_large" });
+    expect(Date.now() - started).toBeLessThan(20_000); // 4x the 5 s deadline
+  });
+
+  it("a redirect whose body drips is cancelled, and its target still loads", async () => {
+    const seen: string[] = [];
+    const result = await safeFetch(`https://${HOST}:${port}/redirect-drip`, { resolve: async () => PUBLIC_ADDRESS, performRequest: realTransportToLocal(seen), timeoutMs: 5000 });
+    expect(result).toMatchObject({ ok: true, finalUrl: `https://${HOST}:${port}/ok` });
+    expect(seen).toEqual(["93.184.216.34", "93.184.216.34"]); // both hops resolved and checked again
   });
 });
 
@@ -163,9 +317,14 @@ async function startFakeServer(routes: Record<string, RouteHandler>): Promise<{ 
 
 /** Ignores the (fictional, test-only) `address` argument and always connects to the real local fake server. */
 function performRequestVia(port: number): PerformRequest {
-  return async ({ url, timeoutMs }) => {
-    const response = await fetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, { signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
-    return { status: response.status, headers: response.headers, body: response.body ?? (async function* () {})(), cancel: () => void response.body?.cancel() } as SafeFetchResponse;
+  return async ({ url, signal }) => {
+    const response = await fetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, { signal, redirect: "manual" });
+    // A web stream that safeFetch is iterating is locked to that iterator (safeFetch closes the iterator itself); only
+    // an unread body can be cancelled here. Safe to call more than once, as the PerformRequest contract requires.
+    const cancel = () => {
+      if (response.body && !response.body.locked) response.body.cancel().catch(() => undefined);
+    };
+    return { status: response.status, headers: response.headers, body: response.body ?? (async function* () {})(), cancel } as SafeFetchResponse;
   };
 }
 
@@ -343,11 +502,12 @@ describe("safeFetch: the redirect limit", () => {
 });
 
 describe("safeFetch: the size cap", () => {
-  it("rejects an endless body quickly — the cap is checked incrementally while streaming, not after buffering the whole body (mutation target: M8, checking the cap only after buffering everything)", async () => {
+  it("rejects an endless body as too_large — the cap is checked incrementally while streaming, not after buffering the whole body (mutation target: M8, checking the cap only after buffering everything, which reaches the deadline instead)", async () => {
     const started = Date.now();
     const result = await safeFetch("https://jobs.example/endless", {
       resolve: resolveTo(PUBLIC_ADDRESS),
       maxBytes: 1000,
+      timeoutMs: 500,
       performRequest: async () => ({
         status: 200,
         headers: new Headers({ "content-type": "text/plain" }),
@@ -359,8 +519,8 @@ describe("safeFetch: the size cap", () => {
       }),
     });
     const elapsedMs = Date.now() - started;
-    expect(result).toMatchObject({ ok: false, reason: "too_large" });
-    expect(elapsedMs).toBeLessThan(1000); // caught within a handful of chunks, nowhere near this file's own timeoutMs
+    expect(result).toMatchObject({ ok: false, reason: "too_large" }); // M8 gives "timeout" here: the reason is the real assertion
+    expect(elapsedMs).toBeLessThan(2000); // 4x the 500 ms deadline (round-2 review T4's headroom rule)
   });
 
   it("rejects a body larger than maxBytes without ever returning the oversized text", async () => {
@@ -391,16 +551,25 @@ describe("safeFetch: the content-type gate", () => {
 });
 
 describe("safeFetch: timeouts and transport failures", () => {
-  it("reports a timeout when performRequest aborts", async () => {
+  it("reports a timeout when the deadline aborts a request whose headers never arrive", async () => {
     const result = await safeFetch("https://jobs.example/slow", {
       resolve: resolveTo(PUBLIC_ADDRESS),
-      performRequest: async () => {
-        const error = new Error("aborted");
-        error.name = "AbortError";
-        throw error;
-      },
+      timeoutMs: 100,
+      // What the real transport does with the signal: https.request rejects with an AbortError once it fires.
+      performRequest: ({ signal }) =>
+        new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true })),
     });
     expect(result).toMatchObject({ ok: false, reason: "timeout" });
+  });
+
+  it("reports request_failed, not timeout, for an AbortError that is not the deadline (T4: classified by cause, not by the error's name)", async () => {
+    const result = await safeFetch("https://jobs.example/aborted", {
+      resolve: resolveTo(PUBLIC_ADDRESS),
+      performRequest: async () => {
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      },
+    });
+    expect(result).toMatchObject({ ok: false, reason: "request_failed" });
   });
 
   it("reports request_failed for any other transport error", async () => {
@@ -439,32 +608,55 @@ describe("safeFetch: timeouts and transport failures", () => {
   });
 });
 
-describe("safeFetch: never throws, even when the body itself errors (round-1 review issue 4)", () => {
-  it("resolves timeout, not a rejection, when the body stream errors after the deadline destroys it", async () => {
+/** The error the real transport's body throws both when the deadline destroys the socket and when the server resets it (round-2 reviewer probe `abort-error-shape-probe.mjs`): the same shape either way. */
+function econnreset(): Error {
+  return Object.assign(new Error("aborted"), { code: "ECONNRESET" });
+}
+
+describe("safeFetch: body errors are classified by cause, and it never throws (round-1 review issue 4, round-2 review T4)", () => {
+  it("resolves timeout when the deadline destroys a slow body, even though the body throws a plain ECONNRESET", async () => {
     const result = await safeFetch("https://jobs.example/slow-drip", {
       resolve: resolveTo(PUBLIC_ADDRESS),
-      timeoutMs: 50,
-      // A transport whose own timeout mechanism (this is exactly what the real one's AbortSignal.timeout does to
-      // a genuine slow-drip socket, and what the existing suite's fetch-based fake already did in probe E4/E5)
-      // throws out of the body's async iterator partway through reading it.
-      performRequest: async ({ timeoutMs }) => ({
+      timeoutMs: 100,
+      // Mimics the real transport: the deadline signal destroys the socket, and the body's iterator then throws
+      // ECONNRESET "aborted", which on its own says nothing about why.
+      performRequest: async ({ signal }) => ({
         status: 200,
         headers: new Headers({ "content-type": "text/plain" }),
         body: (async function* () {
-          await new Promise((_resolve, reject) => {
-            AbortSignal.timeout(timeoutMs).addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })));
-          });
-          yield new Uint8Array(); // unreachable
+          yield new TextEncoder().encode("partial");
+          await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(econnreset()), { once: true }));
         })(),
         cancel: () => undefined,
       }),
     });
-    // Never a thrown/rejected promise (this whole call awaiting without a try/catch and reaching here at all is
-    // half the proof); the other half is that it resolves the right outcome instead of hanging forever.
     expect(result).toMatchObject({ ok: false, reason: "timeout" });
   });
 
-  it("resolves request_failed, not a rejection, when the body stream itself throws mid-read", async () => {
+  it("resolves timeout when a body neither ends nor errors, even if the transport ignores the deadline signal", async () => {
+    const started = Date.now();
+    let cancelled = false;
+    const result = await safeFetch("https://jobs.example/stalled", {
+      resolve: resolveTo(PUBLIC_ADDRESS),
+      timeoutMs: 100,
+      performRequest: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "text/plain" }),
+        body: (async function* () {
+          yield new TextEncoder().encode("partial");
+          await new Promise(() => {}); // never settles, never looks at the signal
+        })(),
+        cancel: () => {
+          cancelled = true;
+        },
+      }),
+    });
+    expect(result).toMatchObject({ ok: false, reason: "timeout" });
+    expect(cancelled).toBe(true); // the abandoned body is closed, not left holding a connection
+    expect(Date.now() - started).toBeLessThan(400); // 4x the 100 ms deadline
+  });
+
+  it("resolves request_failed, not too_large, when the body stream throws mid-read before the deadline", async () => {
     const result = await safeFetch("https://jobs.example/broken-body", {
       resolve: resolveTo(PUBLIC_ADDRESS),
       performRequest: async () => ({
@@ -472,15 +664,28 @@ describe("safeFetch: never throws, even when the body itself errors (round-1 rev
         headers: new Headers({ "content-type": "text/plain" }),
         body: (async function* () {
           yield new TextEncoder().encode("partial");
-          throw new Error("ECONNRESET");
+          throw econnreset();
         })(),
         cancel: () => undefined,
       }),
     });
-    expect(result).toMatchObject({ ok: false, reason: "too_large" });
-    // (Documented, not asserted, since SafeFetchResult carries no separate "why" for this branch: a body error
-    // that isn't the deadline firing is folded into the same "can't return this text" outcome as too_large — the
-    // caller-visible guarantee L4 asks for is just that it never throws, which the awaited call above proves.)
+    expect(result).toMatchObject({ ok: false, reason: "request_failed" });
+  });
+
+  it("resolves request_failed for an abort that is not the deadline", async () => {
+    const result = await safeFetch("https://jobs.example/aborted-elsewhere", {
+      resolve: resolveTo(PUBLIC_ADDRESS),
+      performRequest: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "text/plain" }),
+        body: (async function* () {
+          yield new TextEncoder().encode("partial");
+          throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+        })(),
+        cancel: () => undefined,
+      }),
+    });
+    expect(result).toMatchObject({ ok: false, reason: "request_failed" });
   });
 });
 
@@ -496,7 +701,7 @@ describe("safeFetch: one overall deadline covers DNS, every hop and the body (ro
     });
     const elapsedMs = Date.now() - started;
     expect(result).toMatchObject({ ok: false, reason: "timeout" });
-    expect(elapsedMs).toBeLessThan(1000); // generous margin; the point is "bounded", not "exactly 200ms"
+    expect(elapsedMs).toBeLessThan(1000); // 5x the 200 ms deadline; the reason above is the real assertion
   });
 
   it("a redirect chain's total time is bounded by one timeoutMs, not a fresh allowance per hop", async () => {
@@ -525,9 +730,10 @@ describe("safeFetch: one overall deadline covers DNS, every hop and the body (ro
     const result = await safeFetch("https://jobs.example/hop1", { resolve: resolveTo(PUBLIC_ADDRESS), performRequest: performRequestVia(server.port), timeoutMs: 250 });
     const elapsedMs = Date.now() - started;
     // Three hops at 150ms each is 450ms of server-side delay alone; a fresh 250ms per hop would let this
-    // finish (and did, before this fix). One 250ms deadline for the whole chain must not.
+    // finish (and did, before round-1's fix), so the reason is the real assertion. The time bound is 4x the
+    // 250 ms deadline (round-2 review T4: the old 400 ms bound failed once in seven runs at 551 ms).
     expect(result).toMatchObject({ ok: false, reason: "timeout" });
-    expect(elapsedMs).toBeLessThan(400);
+    expect(elapsedMs).toBeLessThan(1000);
   });
 });
 

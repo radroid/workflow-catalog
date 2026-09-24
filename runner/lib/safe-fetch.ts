@@ -9,64 +9,38 @@ import { lookup as dnsLookup } from "node:dns/promises";
  * and is never fetched at all).
  *
  * Small, documented interface, its own tests (P03.1 reuses it): call
- * `safeFetch(url)`. Everything else is an injectable seam so tests exercise
- * every check — the scheme gate, address blocking, redirect re-validation,
- * the size cap, the timeout and the content-type gate — against a local fake
- * server, never the real network:
+ * `safeFetch(url)`. It never throws: every outcome is a `SafeFetchResult`.
+ * Everything else is an injectable seam, so tests exercise every check (the
+ * scheme gate, address blocking, redirect re-validation, the size cap, the
+ * deadline and the content-type gate) against local fake servers, never the
+ * real network:
  *
  * - `resolve`: DNS lookup, replaced in tests with a fake that maps a
  *   fictional hostname to whatever address the scenario needs (including a
  *   blocked one, to prove a hostile DNS answer is caught).
- * - `performRequest`: the one function that actually opens a connection. The
- *   production default (`nodeHttpsRequest`) uses `node:https` with a custom
- *   `lookup` socket option so the TCP connection lands on exactly the
- *   address `safeFetch` just validated — closing the gap a second,
- *   independent DNS lookup inside a generic `fetch()` would leave open
- *   (classic DNS-rebinding TOCTOU). Tests substitute a fake that talks to a
- *   plain local `http.Server`, so no certificate handling is needed to
- *   exercise the redirect/size/content-type logic in `safeFetch` itself,
- *   which is transport-agnostic.
+ * - `performRequest`: the one function that opens a connection. It is handed
+ *   the address `safeFetch` just checked and must connect there, never
+ *   re-resolving the URL's hostname (the DNS-rebinding gap a second,
+ *   independent lookup inside a generic `fetch()` would leave open). The
+ *   production default, `nodeHttpsRequest`, pins `node:https`'s `lookup` to
+ *   that address; for an IP-literal host Node never calls `lookup` and
+ *   connects to the literal itself, which is the address that was checked.
  *
- * Every check in this file runs again on every redirect hop: a redirect to a
- * blocked address is refused exactly like a first request to one would be
- * (hard-problems.md's SSRF concern applies at every hop, not only the first).
+ * Every check runs again on every redirect hop: a redirect to a blocked
+ * address is refused exactly like a first request to one would be.
  *
- * Round-1 review fixes (logs/handoff/P04-round-1-review.md, decisions L1,
- * L2, L4, L8):
- * - L1: Node 24's `autoSelectFamily` calls the pinned `lookup` with
- *   `{ all: true }` and expects an array back; the old callback answered the
- *   3-argument shape unconditionally, so every real fetch threw
- *   `ERR_INVALID_IP_ADDRESS` and no test ever drove the production
- *   transport to notice. `nodeHttpsRequest`'s `lookup` now answers whichever
- *   shape it was asked for, and `safe-fetch.test.ts` drives the real
- *   transport end to end against a local server.
- * - L2: a bracketed IPv6 URL host (`https://[::1]/`) never reaches
- *   `net.isIP` as a literal (brackets make it fail), so it went to `resolve`
- *   as if it were a hostname — and confirmed separately, Node's
- *   `https.request` never calls a custom `lookup` at all for a literal IPv6
- *   host, so the address `safeFetch` validated and the address the socket
- *   actually connects to were two different things. Fixed by stripping
- *   brackets before the literal check, so an IPv6 URL host is recognized and
- *   validated as the literal it is, the same as an IPv4 literal already was.
- *   `isBlockedIPv6` is rewritten against parsed 16-byte addresses and
- *   `net.BlockList` (numeric containment, immune to hex/decimal/compressed/
- *   zero-padded textual differences) instead of string-prefix matching,
- *   which missed most of the IPv6 table below.
- * - L4: `safeFetch` claimed "never throws" but didn't guard the body reads
- *   (`readBounded`, and the three former `drainBody` call sites) — a
- *   slow-drip body destroyed by the timeout signal threw out of the `for
- *   await` loop, uncaught. Every body read is now wrapped, one overall
- *   deadline (not a fresh one per redirect hop, and not DNS-exempt) covers
- *   resolution, every hop's connection and the body, a redirect's body is
- *   cancelled outright rather than drained, `accept-encoding: identity` is
- *   sent and any other `content-encoding` is refused, and a declared
- *   charset `TextDecoder` supports is honoured (falling back to UTF-8).
- * - L8/M8: the size cap already checked incrementally inside the read loop,
- *   but nothing timed it — a body that never ends could hang instead of
- *   resolving `too_large` promptly. The one overall deadline fixes this too:
- *   an endless body now aborts (and is read as `too_large` well before
- *   `maxBytes`, if it gets that far, or `timeout` if the deadline is
- *   shorter) instead of hanging.
+ * One deadline (round-2 review T4). `safeFetch` makes one `AbortSignal` for
+ * the whole call and hands it to the transport. DNS, every hop's request and
+ * every body read race that signal, so a transport or resolver that ignores
+ * it still cannot outlive the deadline. A failure is classified by its
+ * cause, never by the shape of the error the transport happened to throw:
+ * the real transport reports both "our deadline destroyed the socket" and
+ * "the server reset the connection" as the same `ECONNRESET` "aborted" error
+ * mid-body (reviewer probe, round 2), so the question asked is whether the
+ * deadline signal has fired:
+ *   - the deadline fired: `timeout`;
+ *   - any other error or abort (a reset, a refused connection): `request_failed`;
+ *   - more bytes than `maxBytes`: `too_large`, and only that.
  */
 
 export interface ResolvedAddress {
@@ -80,14 +54,19 @@ export type Resolve = (hostname: string) => Promise<readonly ResolvedAddress[]>;
 export interface SafeFetchResponse {
   readonly status: number;
   readonly headers: Headers;
-  /** Raw response body chunks; safeFetch enforces the size cap while consuming this, so a transport never has to. */
+  /** Raw response body chunks; safeFetch enforces the size cap and the deadline while consuming this, so a transport never has to. */
   readonly body: AsyncIterable<Uint8Array>;
-  /** Ends the underlying connection without reading the rest of the body (L4: a redirect's, a non-2xx's, or a wrong-content-type's body is never content safeFetch wants, and a hostile or slow server must not be able to hold the connection open by trickling it). Always safe to call more than once. */
+  /** Ends the underlying connection without reading the rest of the body (a redirect's, a refused page's, or a body read that has been abandoned). Always safe to call more than once. */
   readonly cancel: () => void;
 }
 
-/** Injectable transport: issues exactly one request (no redirect following) and connects to `address`, never re-resolving `url.hostname` itself. `timeoutMs` is this call's *share* of `safeFetch`'s one overall deadline, not a fresh budget of its own. */
-export type PerformRequest = (input: { readonly url: URL; readonly address: string; readonly timeoutMs: number }) => Promise<SafeFetchResponse>;
+/**
+ * Injectable transport: issues exactly one request (no redirect following)
+ * to `address`, never re-resolving `url.hostname` itself. `signal` is
+ * `safeFetch`'s one overall deadline: a transport should abort on it, and
+ * `safeFetch` stops waiting on it either way.
+ */
+export type PerformRequest = (input: { readonly url: URL; readonly address: string; readonly signal: AbortSignal }) => Promise<SafeFetchResponse>;
 
 export interface SafeFetchOptions {
   readonly resolve?: Resolve;
@@ -96,7 +75,7 @@ export interface SafeFetchOptions {
   readonly maxRedirects?: number;
   /** Default 2 MiB: room for a real HTML page; the extracted text is capped separately at 200 KB (P04 packet). */
   readonly maxBytes?: number;
-  /** Default 10 s. One deadline for the whole call — DNS, every redirect hop's connection, and every body read together, not a fresh allowance for each. */
+  /** Default 10 s. One deadline for the whole call: DNS, every redirect hop and every body read together. */
   readonly timeoutMs?: number;
 }
 
@@ -123,7 +102,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const ALLOWED_CONTENT_TYPES = new Set(["text/html", "text/plain"]);
 
-// --- IPv6 parsing (L2) -------------------------------------------------------
+// --- Address rules -----------------------------------------------------------
 
 /** Strips a URL host's `[...]` brackets (WHATWG URL always brackets an IPv6 host); a no-op for anything else. */
 function bareHostname(hostname: string): string {
@@ -133,10 +112,8 @@ function bareHostname(hostname: string): string {
 /**
  * Parses any valid textual IPv6 address (compressed `::`, zero-padded,
  * uncompressed, an embedded dotted-IPv4 tail, or a zone id) into its 16 raw
- * bytes. `undefined` for anything that doesn't parse — callers must treat
- * that as "not safe", never as "not IPv6, try something else", since the
- * only caller (`isBlockedIPv6`) is reached exactly when `net.isIP` already
- * said "6".
+ * bytes. `undefined` for anything that doesn't parse, which the only caller
+ * treats as "not safe".
  */
 function ipv6ToBytes(address: string): Uint8Array | undefined {
   const withoutZone = address.split("%")[0] ?? address;
@@ -171,7 +148,7 @@ function ipv6ToBytes(address: string): Uint8Array | undefined {
     if (!head || !tail) return undefined;
     const missing = 8 - head.length - tail.length;
     if (missing < 0) return undefined;
-    groups = [...head, ...new Array(missing).fill(0), ...tail];
+    groups = [...head, ...new Array<number>(missing).fill(0), ...tail];
   } else {
     groups = parseGroups(withoutZone);
   }
@@ -191,7 +168,7 @@ function bytesToCanonicalIPv6(bytes: Uint8Array): string {
   return groups.join(":");
 }
 
-/** Ranges blocked outright, regardless of what (if anything) they embed. Built once; `net.BlockList` compares numerically, so every textual form of the same address agrees. */
+/** IPv6 ranges blocked outright, whatever they embed. `net.BlockList` compares numerically, so every textual form of one address agrees. */
 const IPV6_BLOCKED_RANGES = new net.BlockList();
 IPV6_BLOCKED_RANGES.addAddress("::", "ipv6"); // unspecified
 IPV6_BLOCKED_RANGES.addAddress("::1", "ipv6"); // loopback
@@ -199,57 +176,88 @@ IPV6_BLOCKED_RANGES.addSubnet("fe80::", 10, "ipv6"); // link-local
 IPV6_BLOCKED_RANGES.addSubnet("fec0::", 10, "ipv6"); // site-local (deprecated)
 IPV6_BLOCKED_RANGES.addSubnet("fc00::", 7, "ipv6"); // unique local
 IPV6_BLOCKED_RANGES.addSubnet("ff00::", 8, "ipv6"); // multicast
+IPV6_BLOCKED_RANGES.addSubnet("64:ff9b:1::", 48, "ipv6"); // T7: local-use NAT64 (RFC 8215), a translator on the person's own network
+IPV6_BLOCKED_RANGES.addSubnet("2002::", 16, "ipv6"); // T7: 6to4, which tunnels to an IPv4 address it encodes
 
-/** Ranges whose *embedded IPv4* decides it, not the range itself (L2: "each checked by its embedded IPv4") — an IPv4-mapped/compatible/NAT64 address that embeds a public IPv4 address is public. */
-const IPV4_MAPPED_RANGE = new net.BlockList();
-IPV4_MAPPED_RANGE.addSubnet("::ffff:0:0", 96, "ipv6");
-const IPV4_COMPATIBLE_RANGE = new net.BlockList();
-IPV4_COMPATIBLE_RANGE.addSubnet("::", 96, "ipv6");
-const NAT64_RANGE = new net.BlockList();
-NAT64_RANGE.addSubnet("64:ff9b::", 96, "ipv6");
+/**
+ * IPv6 ranges that carry an IPv4 address in their last 32 bits, which
+ * decides (round-1 L2: "each checked by its embedded IPv4"): IPv4-mapped
+ * `::ffff:0:0/96`, IPv4-translated `::ffff:0:0:0/96` (T7), IPv4-compatible
+ * `::/96` and NAT64 `64:ff9b::/96`.
+ */
+const EMBEDDED_IPV4_RANGES = new net.BlockList();
+EMBEDDED_IPV4_RANGES.addSubnet("::ffff:0:0", 96, "ipv6");
+EMBEDDED_IPV4_RANGES.addSubnet("::ffff:0:0:0", 96, "ipv6");
+EMBEDDED_IPV4_RANGES.addSubnet("::", 96, "ipv6");
+EMBEDDED_IPV4_RANGES.addSubnet("64:ff9b::", 96, "ipv6");
 
 function isBlockedIPv6(address: string): boolean {
   const bytes = ipv6ToBytes(address);
   if (!bytes) return true; // unparseable: never safe to connect to.
   const canonical = bytesToCanonicalIPv6(bytes);
   if (IPV6_BLOCKED_RANGES.check(canonical, "ipv6")) return true;
-  if (IPV4_MAPPED_RANGE.check(canonical, "ipv6") || IPV4_COMPATIBLE_RANGE.check(canonical, "ipv6") || NAT64_RANGE.check(canonical, "ipv6")) {
-    const embeddedIPv4 = `${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`;
-    return isBlockedIPv4(embeddedIPv4);
-  }
+  if (EMBEDDED_IPV4_RANGES.check(canonical, "ipv6")) return isBlockedIPv4(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
   return false;
-}
-
-/**
- * True for a loopback, RFC 1918 private, link-local (including the cloud
- * metadata address `169.254.169.254`), or otherwise non-public address —
- * IPv4 and IPv6, including every IPv4-mapped/compatible/NAT64 IPv6 form.
- * Exported and tested directly (every mutation proof for "drop the
- * post-redirect address check" targets a caller of this, never this
- * function's own ranges). `address` is always a bare literal (never
- * bracketed) — callers strip brackets first.
- */
-export function isBlockedAddress(address: string): boolean {
-  const kind = net.isIP(address);
-  if (kind === 4) return isBlockedIPv4(address);
-  if (kind === 6) return isBlockedIPv6(address);
-  return true; // not a literal IP at all: never safe to connect to directly.
 }
 
 function isBlockedIPv4(address: string): boolean {
   const parts = address.split(".").map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-  const [a, b] = parts as [number, number, number, number];
-  if (a === 0) return true; // 0.0.0.0/8: "this network" / unspecified.
+  const [a, b, c] = parts as [number, number, number, number];
+  if (a === 0) return true; // 0.0.0.0/8: "this network" / unspecified
   if (a === 127) return true; // loopback
   if (a === 10) return true; // RFC 1918
   if (a === 172 && b >= 16 && b <= 31) return true; // RFC 1918
   if (a === 192 && b === 168) return true; // RFC 1918
-  if (a === 169 && b === 254) return true; // link-local, incl. 169.254.169.254 metadata
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT (RFC 6598) — shared address space, not publicly routable
+  if (a === 169 && b === 254) return true; // link-local, including the 169.254.169.254 metadata address
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT (RFC 6598): shared address space
+  if (a === 198 && (b === 18 || b === 19)) return true; // T7: 198.18.0.0/15, benchmarking (RFC 2544), not publicly routed
+  if (a === 192 && b === 0 && c === 0) return true; // T7: 192.0.0.0/24, IETF protocol assignments (RFC 6890)
   if (a >= 224) return true; // multicast (224/4) and reserved (240/4)
   return false;
 }
+
+/**
+ * True for a loopback, private, link-local (including the cloud metadata
+ * address `169.254.169.254`), or otherwise non-public address, IPv4 or IPv6,
+ * including every IPv6 form that embeds or tunnels to such an IPv4 address.
+ * `address` is always a bare literal (never bracketed); anything that is not
+ * a literal IP at all is blocked, since it can't be connected to directly.
+ */
+export function isBlockedAddress(address: string): boolean {
+  const kind = net.isIP(address);
+  if (kind === 4) return isBlockedIPv4(address);
+  if (kind === 6) return isBlockedIPv6(address);
+  return true;
+}
+
+// --- The deadline --------------------------------------------------------------
+
+const ABORTED = Symbol("aborted");
+
+/** Settles with `promise`'s value, or `ABORTED` as soon as `signal` fires, whichever is first. A later rejection of `promise` is handled here, so it never goes unhandled. */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> {
+  if (signal.aborted) {
+    promise.catch(() => undefined);
+    return Promise.resolve(ABORTED);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(ABORTED);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+// --- The production transport ------------------------------------------------
 
 const nodeResolve: Resolve = async (hostname) => {
   const answers = await dnsLookup(hostname, { all: true, verbatim: true });
@@ -257,39 +265,29 @@ const nodeResolve: Resolve = async (hostname) => {
 };
 
 /**
- * Production transport: connects to the validated `address`, never
- * re-resolving `url.hostname` (closes the DNS-rebinding TOCTOU gap). L1: the
- * pinned `lookup` must answer whichever shape Node asked for — with
- * `{ all: true }` (Node 24's `autoSelectFamily` default) an array of
- * candidates, otherwise the classic `(error, address, family)` triple.
- * Answering only the triple made every real request throw
- * `ERR_INVALID_IP_ADDRESS`, caught by no test because every existing test
- * substitutes its own `performRequest` and never exercises this function.
+ * Production transport: connects to the checked `address`, never re-resolving
+ * `url.hostname`. The pinned `lookup` answers whichever shape Node asks for:
+ * with `{ all: true }` (Node 24's `autoSelectFamily` default) an array of
+ * candidates, otherwise the classic `(error, address, family)` triple. For an
+ * IP-literal host Node skips `lookup` and connects to the literal, which is
+ * the address `safeFetch` checked. Exported for `safe-fetch.test.ts`, which
+ * drives it against a local TLS server.
  */
-/**
- * Exported for `safe-fetch.test.ts` alone: `isBlockedAddress` refuses every
- * address a test could actually bind a local listener to (127.0.0.1, ::1 —
- * the whole point of this file), so a test driving `safeFetch`'s full
- * pipeline can never reach this transport at all. L1's own fix is a property
- * of this function in isolation — given a validated address, does the
- * connection land on it — so it is tested directly, the same way the
- * reviewer's own probe (`lookup-fix-probe.mjs`) did.
- */
-export const nodeHttpsRequest: PerformRequest = ({ url, address, timeoutMs }) =>
+export const nodeHttpsRequest: PerformRequest = ({ url, address, signal }) =>
   new Promise((resolve, reject) => {
     const family = net.isIP(address) === 6 ? 6 : 4;
     const req = httpsRequest(
       url,
       {
         method: "GET",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
         lookup: (_hostname, options, callback) => {
           if (options && typeof options === "object" && (options as { all?: boolean }).all) callback(null, [{ address, family }]);
           else callback(null, address, family);
         },
         headers: {
           accept: "text/html,text/plain;q=0.9,*/*;q=0.1",
-          "accept-encoding": "identity", // L4: never ask for compression; a body we can't decode is a body we can't cap correctly either.
+          "accept-encoding": "identity", // a body we can't decode is a body we can't cap correctly either
           "user-agent": "workflow-catalog-runner/0.1 (+job capture)",
         },
       },
@@ -306,6 +304,8 @@ export const nodeHttpsRequest: PerformRequest = ({ url, address, timeoutMs }) =>
     req.end();
   });
 
+// --- safeFetch -------------------------------------------------------------------
+
 function contentTypeOf(headers: Headers): string {
   return (headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
 }
@@ -317,83 +317,71 @@ function declaredCharsetOf(headers: Headers): string | undefined {
   return match?.[2]?.trim().toLowerCase();
 }
 
-/** A response declaring anything other than identity encoding: safeFetch asked for `accept-encoding: identity` (L4), so a server that answers with one anyway is either ignoring that or lying about it — either way, not a body this reads correctly. */
+/** A response declaring anything other than identity encoding: `safeFetch` asked for `accept-encoding: identity`, so a server answering otherwise sends a body this can't read correctly. */
 function hasUnsupportedEncoding(headers: Headers): boolean {
   const encoding = (headers.get("content-encoding") ?? "").trim().toLowerCase();
   return encoding !== "" && encoding !== "identity";
 }
 
-async function resolveAndValidate(hostname: string, resolve: Resolve, remainingMs: number): Promise<{ ok: true; address: string } | { ok: false; result: SafeFetchResult }> {
-  const bare = bareHostname(hostname);
-  const literal = net.isIP(bare);
-  let addresses: readonly ResolvedAddress[];
-  if (literal) {
-    addresses = [{ address: bare, family: literal as 4 | 6 }];
-  } else {
-    try {
-      addresses = await withDeadline(resolve(hostname), remainingMs);
-    } catch (error) {
-      return isDeadlineError(error)
-        ? { ok: false, result: { ok: false, reason: "timeout", message: "No answer within the fetch's time limit." } }
-        : { ok: false, result: { ok: false, reason: "dns_failed", message: `Could not resolve ${hostname}.` } };
-    }
-  }
-  if (addresses.length === 0) {
-    return { ok: false, result: { ok: false, reason: "dns_failed", message: `Could not resolve ${hostname}.` } };
-  }
-  const blocked = addresses.find((candidate) => isBlockedAddress(candidate.address));
-  if (blocked) {
-    return { ok: false, result: { ok: false, reason: "blocked_address", message: "That address is not a public host the runner will fetch (loopback, private, link-local or metadata addresses are refused)." } };
-  }
-  const first = addresses[0];
-  if (!first) return { ok: false, result: { ok: false, reason: "dns_failed", message: `Could not resolve ${hostname}.` } };
-  return { ok: true, address: first.address };
-}
+type BodyRead = { readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: "too_large" | "timeout" | "request_failed" };
 
-/** Rejects with a `TimeoutError` after `remainingMs`, so a step with no timeout of its own (DNS resolution) still respects the one overall deadline (L4). */
-function withDeadline<T>(promise: Promise<T>, remainingMs: number): Promise<T> {
-  if (remainingMs <= 0) return Promise.reject(Object.assign(new Error("Deadline already passed."), { name: "TimeoutError" }));
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(Object.assign(new Error(`No answer within ${Math.round(remainingMs / 1000)} s.`), { name: "TimeoutError" })), remainingMs);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function isDeadlineError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
-}
-
-/** Consumes `body` up to `maxBytes`, decoding with `charset` when `TextDecoder` supports it, else UTF-8. Rejects (without ever building the oversized string) once the cap is passed. Never throws: a stream error (including the deadline destroying it mid-read) resolves `{ ok: false, timedOut }` instead of propagating (L4 — this used to be the one unguarded spot that broke "safeFetch never throws"). */
-async function readBounded(body: AsyncIterable<Uint8Array>, maxBytes: number, charset: string | undefined): Promise<{ ok: true; text: string } | { ok: false; timedOut: boolean }> {
+/**
+ * Consumes `response.body` up to `maxBytes`, decoding with `charset` when
+ * `TextDecoder` supports it, else UTF-8. Never throws. Each chunk read races
+ * the deadline, so a body that neither ends nor errors still stops at the
+ * deadline. The result is classified by cause (T4): the byte cap is
+ * `too_large`; a read that fails or stops once the deadline has fired is
+ * `timeout`; any other failure (a reset, an abort from elsewhere) is
+ * `request_failed`. An abandoned body is cancelled.
+ */
+async function readBounded(response: SafeFetchResponse, maxBytes: number, charset: string | undefined, signal: AbortSignal): Promise<BodyRead> {
   const chunks: Uint8Array[] = [];
   let total = 0;
-  try {
-    for await (const chunk of body) {
-      total += chunk.byteLength;
-      if (total > maxBytes) return { ok: false, timedOut: false };
-      chunks.push(chunk);
+  const iterator = response.body[Symbol.asyncIterator]();
+  /** Stops reading: closes this iterator (which releases a web stream's lock and cancels it) and the connection. */
+  const abandon = () => {
+    try {
+      void Promise.resolve(iterator.return?.()).catch(() => undefined);
+    } catch {
+      // An iterator whose return() throws synchronously has nothing left to close.
     }
-  } catch (error) {
-    return { ok: false, timedOut: isDeadlineError(error) };
+    response.cancel();
+  };
+  try {
+    for (;;) {
+      const next = await raceAbort(iterator.next(), signal);
+      if (next === ABORTED) {
+        abandon();
+        return { ok: false, reason: "timeout" };
+      }
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        abandon();
+        return { ok: false, reason: "too_large" };
+      }
+      chunks.push(next.value);
+    }
+  } catch {
+    abandon();
+    return { ok: false, reason: signal.aborted ? "timeout" : "request_failed" };
   }
   const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
   if (charset && charset !== "utf-8" && charset !== "utf8") {
     try {
       return { ok: true, text: new TextDecoder(charset).decode(buffer) };
     } catch {
-      // Not a charset TextDecoder supports: fall through to UTF-8, same as no declared charset at all.
+      // Not a charset TextDecoder supports: fall through to UTF-8, the same as no declared charset.
     }
   }
   return { ok: true, text: buffer.toString("utf8") };
 }
 
 /**
- * Fetches `rawUrl`: https only, no loopback/private/link-local/metadata
- * address (checked after DNS resolution and again on every redirect), a
- * redirect limit, a size cap, one overall timeout covering DNS, every
- * redirect hop and the body, and only `text/html` or `text/plain` with no
- * compression. Never throws.
+ * Fetches `rawUrl`: https only; no loopback, private, link-local or metadata
+ * address, checked after DNS resolution and again on every redirect; a
+ * redirect limit; a size cap; one deadline covering DNS, every hop and the
+ * body; only `text/html` or `text/plain`, uncompressed. Never throws.
  */
 export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}): Promise<SafeFetchResult> {
   const resolve = options.resolve ?? nodeResolve;
@@ -401,8 +389,8 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  const remaining = () => deadline - Date.now();
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const timedOut = (): SafeFetchResult => ({ ok: false, reason: "timeout", message: `The page didn't finish loading within ${Math.round(timeoutMs / 1000)} s.` });
 
   let current: URL;
   try {
@@ -415,23 +403,48 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
     if (current.protocol !== "https:") {
       return { ok: false, reason: "scheme_not_https", message: "The runner only fetches https:// URLs." };
     }
-    if (remaining() <= 0) return { ok: false, reason: "timeout", message: `No answer within ${Math.round(timeoutMs / 1000)} s.` };
-    const validated = await resolveAndValidate(current.hostname, resolve, remaining());
-    if (!validated.ok) return validated.result;
+    if (deadline.aborted) return timedOut();
 
-    let response: SafeFetchResponse;
+    const bare = bareHostname(current.hostname);
+    const literal = net.isIP(bare);
+    let addresses: readonly ResolvedAddress[];
+    if (literal) {
+      addresses = [{ address: bare, family: literal as 4 | 6 }];
+    } else {
+      let answer: readonly ResolvedAddress[] | typeof ABORTED;
+      try {
+        answer = await raceAbort(resolve(current.hostname), deadline);
+      } catch {
+        return { ok: false, reason: "dns_failed", message: `Could not resolve ${current.hostname}.` };
+      }
+      if (answer === ABORTED) return timedOut();
+      addresses = answer;
+    }
+    if (addresses.length === 0) return { ok: false, reason: "dns_failed", message: `Could not resolve ${current.hostname}.` };
+    if (addresses.some((candidate) => isBlockedAddress(candidate.address))) {
+      return { ok: false, reason: "blocked_address", message: "That address is not a public host the runner will fetch (loopback, private, link-local or metadata addresses are refused)." };
+    }
+    const checkedAddress = addresses[0]!.address;
+
+    const pending = performRequest({ url: current, address: checkedAddress, signal: deadline });
+    let response: SafeFetchResponse | typeof ABORTED;
     try {
-      if (remaining() <= 0) return { ok: false, reason: "timeout", message: `No answer within ${Math.round(timeoutMs / 1000)} s.` };
-      response = await performRequest({ url: current, address: validated.address, timeoutMs: remaining() });
+      response = await raceAbort(pending, deadline);
     } catch (error) {
-      return isDeadlineError(error)
-        ? { ok: false, reason: "timeout", message: `No answer within ${Math.round(timeoutMs / 1000)} s.` }
-        : { ok: false, reason: "request_failed", message: `Could not fetch that page: ${error instanceof Error ? error.message : String(error)}` };
+      if (deadline.aborted) return timedOut();
+      return { ok: false, reason: "request_failed", message: `Could not fetch that page: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (response === ABORTED) {
+      // A transport that ignored the signal may still answer later: close whatever it brings.
+      pending.then(
+        (late) => late.cancel(),
+        () => undefined,
+      );
+      return timedOut();
     }
 
     if (REDIRECT_STATUSES.has(response.status)) {
-      // L4: cancel the redirect's body outright — it is never the content we want, and a hostile or slow server
-      // must not be able to hold the connection open by trickling it while we wait to read it out.
+      // A redirect's body is never the content wanted, and a slow server must not hold the connection open by trickling it.
       response.cancel();
       const location = response.headers.get("location");
       if (!location) return { ok: false, reason: "redirect_missing_location", message: "The server redirected without saying where to." };
@@ -441,30 +454,28 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
       } catch {
         return { ok: false, reason: "invalid_url", message: "The redirect target is not a valid URL." };
       }
-      continue; // loop: the next iteration re-checks scheme, re-resolves DNS, and re-validates the address.
+      continue; // the next pass re-checks the scheme, resolves again, and re-checks the address
     }
 
     if (response.status < 200 || response.status >= 300) {
       response.cancel();
       return { ok: false, reason: "http_status", message: `The page answered with an error (HTTP ${response.status}).` };
     }
-
     if (hasUnsupportedEncoding(response.headers)) {
       response.cancel();
       return { ok: false, reason: "unsupported_content_type", message: "That page uses compression the runner does not decode." };
     }
-
     const contentType = contentTypeOf(response.headers);
     if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
       response.cancel();
       return { ok: false, reason: "unsupported_content_type", message: "That page is not plain text or HTML." };
     }
 
-    const read = await readBounded(response.body, maxBytes, declaredCharsetOf(response.headers));
+    const read = await readBounded(response, maxBytes, declaredCharsetOf(response.headers), deadline);
     if (!read.ok) {
-      return read.timedOut
-        ? { ok: false, reason: "timeout", message: `No answer within ${Math.round(timeoutMs / 1000)} s.` }
-        : { ok: false, reason: "too_large", message: `That page is larger than ${Math.round(maxBytes / 1024)} KB.` };
+      if (read.reason === "timeout") return timedOut();
+      if (read.reason === "too_large") return { ok: false, reason: "too_large", message: `That page is larger than ${Math.round(maxBytes / 1024)} KB.` };
+      return { ok: false, reason: "request_failed", message: "The connection closed before the page finished loading." };
     }
     return { ok: true, status: response.status, contentType, text: read.text, finalUrl: current.toString() };
   }
