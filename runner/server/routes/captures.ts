@@ -284,12 +284,28 @@ export interface CaptureAndExtractResult {
   readonly extraction?: ExtractionState;
 }
 
+/**
+ * The one text-normalization rule every capture path applies before hashing
+ * or storing (round-1 review L7): previously only the URL-fetch route
+ * trimmed its text, so the identical posting produced a different content
+ * hash depending on which path captured it (the paste and extension-event
+ * paths kept a trailing newline the fetch path's `.trim()` dropped),
+ * defeating F6's "three paths produce identical records" acceptance. Trim
+ * only — no other rewriting — so the stored text stays exactly what the
+ * person saw, less only the leading/trailing whitespace no path assigns
+ * meaning to.
+ */
+function normalizeCapturedText(text: string): string {
+  return text.trim();
+}
+
 /** The one path every capture (extension event, paste, URL fetch) goes through, so the three produce identical snapshot records for the same text (F6 acceptance). Responds once the snapshot is saved; extraction (when the content changed) is queued, not awaited. */
 export async function captureAndExtract(ctx: RunnerContext, input: CaptureAndExtractInput): Promise<CaptureAndExtractResult> {
   const store = new JobsStore(ctx.workspace);
-  const capture = await store.captureJob(input);
+  const text = normalizeCapturedText(input.text);
+  const capture = await store.captureJob({ ...input, text });
   if (!capture.contentChanged) return { capture };
-  const extraction = await queueExtraction(ctx, capture.jobId, capture.revision, input.text);
+  const extraction = await queueExtraction(ctx, capture.jobId, capture.revision, text);
   return { capture, extraction };
 }
 
@@ -320,103 +336,116 @@ function fetchStatusFor(reason: SafeFetchRejectionReason): number {
   }
 }
 
-export default defineRouteModule({
-  events: {
-    // mvp-spec §5: "job_capture ... unique eventId; stale revisions rejected."
-    // A replay of the same eventId never reaches here at all (server/events.ts
-    // answers it from the journal, duplicate: true, without dispatching
-    // again); the same URL with the same content hash creates no new
-    // revision (JobsStore.captureJob).
-    job_capture: async (event, ctx) => {
-      const result = await captureAndExtract(ctx, {
-        url: event.url,
-        text: event.text,
-        extractorVersion: event.extractorVersion,
-        capturedAt: event.occurredAt,
-      });
-      return { jobId: result.capture.jobId, revision: result.capture.revision, contentChanged: result.capture.contentChanged, extraction: result.extraction };
+/**
+ * A factory, not a `context.ts` field (round-1 review L7): production wiring
+ * (the default export below) always gets the real `safeFetch`; a test that
+ * wants to drive the URL-fetch path without a real network call builds its
+ * own module instance with a fake in its place — e.g. the "three paths
+ * produce identical records" test in `test/captures.test.ts`, which cares
+ * about this route's own normalization and storage, not about `safeFetch`'s
+ * transport (already covered end to end by `test/safe-fetch.test.ts`).
+ */
+export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch) {
+  return defineRouteModule({
+    events: {
+      // mvp-spec §5: "job_capture ... unique eventId; stale revisions rejected."
+      // A replay of the same eventId never reaches here at all (server/events.ts
+      // answers it from the journal, duplicate: true, without dispatching
+      // again); the same URL with the same content hash creates no new
+      // revision (JobsStore.captureJob).
+      job_capture: async (event, ctx) => {
+        const result = await captureAndExtract(ctx, {
+          url: event.url,
+          text: event.text,
+          extractorVersion: event.extractorVersion,
+          capturedAt: event.occurredAt,
+        });
+        return { jobId: result.capture.jobId, revision: result.capture.revision, contentChanged: result.capture.contentChanged, extraction: result.extraction };
+      },
     },
-  },
 
-  api(router, ctx) {
-    router.get("/", async (c) => {
-      const summaries = await new JobsStore(ctx.workspace).listJobs();
-      return c.json({ jobs: summaries.map((summary) => ({ jobId: summary.jobId, revisionCount: summary.revisionCount, latest: summary.latestRevision })) });
-    });
-
-    router.get("/:jobId", async (c) => {
-      const jobId = uuidSchema.safeParse(c.req.param("jobId"));
-      if (!jobId.success) return errorResponse(404, "not_found", "No such job.");
-      const store = new JobsStore(ctx.workspace);
-      const revisions = await store.getJobRevisions(jobId.data);
-      if (!revisions) return errorResponse(404, "not_found", "No such job.");
-      // Parallel to `revisions`, same order and length; a JSON `undefined` entry serializes to `null` ("no
-      // extraction ever recorded for this revision"), which is exactly the distinction `describeExtractionState`
-      // draws (`store/jobs.ts`'s own doc comment).
-      const extraction = await Promise.all(revisions.map((revision) => describeExtractionState(ctx, jobId.data, revision.revision)));
-      return c.json({ jobId: jobId.data, revisions, extraction });
-    });
-
-    router.post("/paste", async (c) => {
-      const body = await readBoundedJson(c.req.raw, MAX_PASTE_BODY_BYTES);
-      if (!body.ok) return body.response;
-      const parsed = pasteBodySchema.safeParse(body.value);
-      if (!parsed.success) return validationErrorResponse(parsed.error);
-      const result = await captureAndExtract(ctx, {
-        url: parsed.data.url,
-        text: parsed.data.text,
-        extractorVersion: PASTE_EXTRACTOR_VERSION,
-        capturedAt: ctx.clock.now().toISOString(),
+    api(router, ctx) {
+      router.get("/", async (c) => {
+        const summaries = await new JobsStore(ctx.workspace).listJobs();
+        return c.json({ jobs: summaries.map((summary) => ({ jobId: summary.jobId, revisionCount: summary.revisionCount, latest: summary.latestRevision })) });
       });
-      return c.json(captureResponseBody(result));
-    });
 
-    router.post("/url", async (c) => {
-      const body = await readBoundedJson(c.req.raw, MAX_URL_BODY_BYTES);
-      if (!body.ok) return body.response;
-      const parsed = urlBodySchema.safeParse(body.value);
-      if (!parsed.success) return validationErrorResponse(parsed.error);
-      let parsedUrl: URL;
-      try {
-        parsedUrl = new URL(parsed.data.url);
-      } catch {
-        return errorResponse(400, "invalid_url", "That doesn't look like a URL.");
-      }
-      // The URL rule (decision, iter 005): only this fetch path is https-only.
-      if (parsedUrl.protocol !== "https:") {
-        return errorResponse(400, "https_required", "The runner only fetches https:// URLs. Paste the posting text instead for an http:// page.");
-      }
-      const fetched = await safeFetch(parsedUrl.toString());
-      if (!fetched.ok) return errorResponse(fetchStatusFor(fetched.reason), `fetch_${fetched.reason}`, fetched.message);
-      const text = extractReadableText(fetched.text, fetched.contentType).trim();
-      if (text.length === 0) return errorResponse(422, "no_text_extracted", "Couldn't find readable text on that page. Try pasting the posting instead.");
-      if (!utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES).safeParse(text).success) {
-        return errorResponse(413, "text_too_large", "This posting is over 200 KB. Paste a shorter excerpt instead.");
-      }
-      const result = await captureAndExtract(ctx, {
-        url: fetched.finalUrl,
-        text,
-        extractorVersion: URL_FETCH_EXTRACTOR_VERSION,
-        capturedAt: ctx.clock.now().toISOString(),
+      router.get("/:jobId", async (c) => {
+        const jobId = uuidSchema.safeParse(c.req.param("jobId"));
+        if (!jobId.success) return errorResponse(404, "not_found", "No such job.");
+        const store = new JobsStore(ctx.workspace);
+        const revisions = await store.getJobRevisions(jobId.data);
+        if (!revisions) return errorResponse(404, "not_found", "No such job.");
+        // Parallel to `revisions`, same order and length; a JSON `undefined` entry serializes to `null` ("no
+        // extraction ever recorded for this revision"), which is exactly the distinction `describeExtractionState`
+        // draws (`store/jobs.ts`'s own doc comment).
+        const extraction = await Promise.all(revisions.map((revision) => describeExtractionState(ctx, jobId.data, revision.revision)));
+        return c.json({ jobId: jobId.data, revisions, extraction });
       });
-      return c.json(captureResponseBody(result));
-    });
 
-    // A revision saved before eve was running (or whose turn didn't finish)
-    // has no structured fields yet; this lets the Jobs page try again. Like
-    // every other path, this responds once the retry is queued, not once it
-    // finishes — the current state is enough to know what a click just did.
-    router.post("/:jobId/:revision/extract", async (c) => {
-      const jobId = uuidSchema.safeParse(c.req.param("jobId"));
-      const revision = revisionParamSchema.safeParse(c.req.param("revision"));
-      if (!jobId.success || !revision.success) return errorResponse(404, "not_found", "No such job.");
-      const store = new JobsStore(ctx.workspace);
-      const snapshot = await store.getSnapshot(jobId.data, revision.data);
-      if (!snapshot) return errorResponse(404, "not_found", "No such job.");
-      const current = await describeExtractionState(ctx, jobId.data, revision.data);
-      // Already mid-flight: report it as-is rather than queuing a second, redundant turn behind it.
-      const extraction = current?.status === "waiting" || current?.status === "running" ? current : await queueExtraction(ctx, jobId.data, revision.data, snapshot.text);
-      return c.json({ ok: true, extraction, job: snapshot });
-    });
-  },
-});
+      router.post("/paste", async (c) => {
+        const body = await readBoundedJson(c.req.raw, MAX_PASTE_BODY_BYTES);
+        if (!body.ok) return body.response;
+        const parsed = pasteBodySchema.safeParse(body.value);
+        if (!parsed.success) return validationErrorResponse(parsed.error);
+        const result = await captureAndExtract(ctx, {
+          url: parsed.data.url,
+          text: parsed.data.text,
+          extractorVersion: PASTE_EXTRACTOR_VERSION,
+          capturedAt: ctx.clock.now().toISOString(),
+        });
+        return c.json(captureResponseBody(result));
+      });
+
+      router.post("/url", async (c) => {
+        const body = await readBoundedJson(c.req.raw, MAX_URL_BODY_BYTES);
+        if (!body.ok) return body.response;
+        const parsed = urlBodySchema.safeParse(body.value);
+        if (!parsed.success) return validationErrorResponse(parsed.error);
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(parsed.data.url);
+        } catch {
+          return errorResponse(400, "invalid_url", "That doesn't look like a URL.");
+        }
+        // The URL rule (decision, iter 005): only this fetch path is https-only.
+        if (parsedUrl.protocol !== "https:") {
+          return errorResponse(400, "https_required", "The runner only fetches https:// URLs. Paste the posting text instead for an http:// page.");
+        }
+        const fetched = await fetchUrl(parsedUrl.toString());
+        if (!fetched.ok) return errorResponse(fetchStatusFor(fetched.reason), `fetch_${fetched.reason}`, fetched.message);
+        const text = extractReadableText(fetched.text, fetched.contentType).trim();
+        if (text.length === 0) return errorResponse(422, "no_text_extracted", "Couldn't find readable text on that page. Try pasting the posting instead.");
+        if (!utf8BoundedTextSchema(MAX_JOB_CAPTURE_TEXT_BYTES).safeParse(text).success) {
+          return errorResponse(413, "text_too_large", "This posting is over 200 KB. Paste a shorter excerpt instead.");
+        }
+        const result = await captureAndExtract(ctx, {
+          url: fetched.finalUrl,
+          text,
+          extractorVersion: URL_FETCH_EXTRACTOR_VERSION,
+          capturedAt: ctx.clock.now().toISOString(),
+        });
+        return c.json(captureResponseBody(result));
+      });
+
+      // A revision saved before eve was running (or whose turn didn't finish)
+      // has no structured fields yet; this lets the Jobs page try again. Like
+      // every other path, this responds once the retry is queued, not once it
+      // finishes — the current state is enough to know what a click just did.
+      router.post("/:jobId/:revision/extract", async (c) => {
+        const jobId = uuidSchema.safeParse(c.req.param("jobId"));
+        const revision = revisionParamSchema.safeParse(c.req.param("revision"));
+        if (!jobId.success || !revision.success) return errorResponse(404, "not_found", "No such job.");
+        const store = new JobsStore(ctx.workspace);
+        const snapshot = await store.getSnapshot(jobId.data, revision.data);
+        if (!snapshot) return errorResponse(404, "not_found", "No such job.");
+        const current = await describeExtractionState(ctx, jobId.data, revision.data);
+        // Already mid-flight: report it as-is rather than queuing a second, redundant turn behind it.
+        const extraction = current?.status === "waiting" || current?.status === "running" ? current : await queueExtraction(ctx, jobId.data, revision.data, snapshot.text);
+        return c.json({ ok: true, extraction, job: snapshot });
+      });
+    },
+  });
+}
+
+export default createCapturesRouteModule();

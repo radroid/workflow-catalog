@@ -1,13 +1,20 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { JobStructured } from "@workflow-catalog/contracts";
 import type { Client, ClientSession, MessageResponse, MessageStreamEvent } from "eve/client";
 import { describe, expect, it } from "vitest";
+import type { SafeFetchResult } from "../lib/safe-fetch.ts";
 import type { EveGateway } from "../server/eve-gateway.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
-import capturesModule, { buildJobExtractionPrompt, captureAndExtract, runExtraction, waitForExtractionQueue } from "../server/routes/captures.ts";
+import capturesModule, { buildJobExtractionPrompt, captureAndExtract, createCapturesRouteModule, runExtraction, waitForExtractionQueue } from "../server/routes/captures.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import { JobsStore } from "../store/jobs.ts";
 import { BRIDGE, jobCapture, makeBridge, pairDevice, postEvent, UI_TOKEN, type TestBridge } from "./helpers.ts";
+
+const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "packages", "job-assistant", "fixtures");
+const NORTHWIND_TEXT = readFileSync(path.join(FIXTURES_DIR, "job-posting-northwind.txt"), "utf8");
 
 /**
  * `/api/captures` and the `job_capture` event handler (P04). The extension
@@ -280,6 +287,41 @@ describe("captures.ts: three paths produce identical snapshot records for the sa
       expect(snapshot?.contentHash).toBe(viaExtension.capture.snapshot.contentHash);
       expect(snapshot?.structured).toEqual(NORTHWIND_STRUCTURED);
     }
+  });
+
+  it("the three real routes (extension event, paste form, URL fetch) store job-posting-northwind.txt identically (round-1 review L7)", async () => {
+    // A factory, not context.ts (L7): this fake stands in for safeFetch so the URL-fetch route can be driven
+    // through its own real handler — including its own extractReadableText/.trim() step — without a real
+    // network call, the same fixture the extension and paste paths receive directly.
+    const fakeFetchUrl = async (url: string): Promise<SafeFetchResult> => ({ ok: true, status: 200, contentType: "text/plain", text: NORTHWIND_TEXT, finalUrl: url });
+    const modules: readonly LoadedRouteModule[] = [{ name: "captures", module: createCapturesRouteModule(fakeFetchUrl) }];
+    const bridge = await makeBridge({ modules });
+    const { token } = await pairDevice(bridge);
+
+    const eventResponse = await postEvent(bridge, token, jobCapture({ url: "https://jobs.example/via-event", text: NORTHWIND_TEXT }));
+    const eventBody = (await eventResponse.json()) as { result: { jobId: string; revision: number } };
+
+    const pasteResponse = await postCaptures(bridge, "/paste", { url: "https://jobs.example/via-paste", text: NORTHWIND_TEXT });
+    const pasteBody = (await pasteResponse.json()) as { job: { jobId: string; revision: number } };
+
+    const urlResponse = await postCaptures(bridge, "/url", { url: "https://jobs.example/via-url" });
+    expect(urlResponse.status).toBe(200);
+    const urlBody = (await urlResponse.json()) as { job: { jobId: string; revision: number } };
+
+    const store = new JobsStore(bridge.workspace);
+    const eventSnapshot = await store.getSnapshot(eventBody.result.jobId, eventBody.result.revision);
+    const pasteSnapshot = await store.getSnapshot(pasteBody.job.jobId, pasteBody.job.revision);
+    const urlSnapshot = await store.getSnapshot(urlBody.job.jobId, urlBody.job.revision);
+
+    // The fixture ends in a trailing newline; the extension and paste paths receive it exactly as written, while
+    // the URL route's own extractReadableText(...).trim() already strips it before this ever reaches
+    // captureAndExtract. Without a shared rule (L7), the first two would store a different (longer) text and
+    // content hash than the third for what is otherwise the same posting.
+    expect(eventSnapshot?.text.endsWith("\n")).toBe(false);
+    expect(pasteSnapshot?.text).toBe(eventSnapshot?.text);
+    expect(urlSnapshot?.text).toBe(eventSnapshot?.text);
+    expect(pasteSnapshot?.contentHash).toBe(eventSnapshot?.contentHash);
+    expect(urlSnapshot?.contentHash).toBe(eventSnapshot?.contentHash);
   });
 });
 
