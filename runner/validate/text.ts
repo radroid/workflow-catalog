@@ -18,6 +18,8 @@ const MARKER = new RegExp(MARKER_SOURCE, "g");
 const MARKER_RUN = new RegExp(`(?:\\s*${MARKER_SOURCE})+`, "g");
 const LEADING_MARKERS = new RegExp(`^(?:${MARKER_SOURCE}\\s*)+`);
 const ONLY_MARKERS = new RegExp(`^(?:\\s*${MARKER_SOURCE})+\\s*$`);
+const MARKER_AT_END = new RegExp(`${MARKER_SOURCE}\\s*$`);
+const MARKER_AT_START = new RegExp(`^${MARKER_SOURCE}`);
 const LABEL = /C\d{1,4}/g;
 const STRAY_BRACKET = /\[[^\]]*\]/g;
 
@@ -28,6 +30,53 @@ const ABBREVIATIONS = new Set([
 
 /** A dotted abbreviation such as `B.S.`, `U.S.`, `e.g.`, `Ph.D.`: one or two letters, a period, repeated. */
 const DOTTED = /^(?:[A-Za-z]{1,2}\.)+$/;
+
+/**
+ * What ends a sentence: a run of sentence terminals (`.`, `!`, `?`, the
+ * ellipsis `…`, and their fullwidth and ideographic forms, Unicode's
+ * Sentence_Terminal) and any closing quotes or brackets after it.
+ */
+const BOUNDARY = /[\p{Sentence_Terminal}…]+[\p{Pe}\p{Pf}"']*/gu;
+
+/** Line and paragraph breaks: each ends a sentence, as a new line in a document would. */
+const LINE_BREAKS = /[\n\v\f\r\u0085\u{2028}\u{2029}]+/u;
+
+/** Invisible format characters (zero-width spaces and joiners, soft hyphens, direction marks): never a word, a break or a digit. */
+const INVISIBLE = /\p{Cf}/gu;
+
+/** Opening quotes and brackets that may sit between a sentence end and the next sentence's first letter. */
+const OPENERS = /[\p{Ps}\p{Pi}"']/u;
+
+/** The part of a dotted name after its period, which never starts a sentence: `ASP.NET`, `Socket.IO`. */
+const DOTTED_NAME_TAIL = /^(?:NET|IO)(?![\p{L}\p{N}])/u;
+
+/**
+ * Text as the fact rules read it: compatibility forms folded (NFKC), every
+ * decimal digit of any script as its ASCII digit (`٥٠٠` is `500`), invisible
+ * format characters removed, and a next-line character read as a space. A
+ * sentence and the claims it cites are read the same way, so a fact can't
+ * hide behind a character that looks like another, or behind nothing at all.
+ */
+export function normalizeForChecks(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/\u0085/g, " ")
+    .replace(INVISIBLE, "")
+    .replace(/\p{Nd}/gu, asciiDigit);
+}
+
+/**
+ * A decimal digit of any script as its ASCII digit. Unicode assigns decimal
+ * digits only in contiguous runs from 0 to 9 (a stability policy), so a
+ * digit's value is its distance from the start of its run of digits, mod 10.
+ */
+function asciiDigit(digit: string): string {
+  const code = digit.codePointAt(0)!;
+  if (code >= 0x30 && code <= 0x39) return digit;
+  let start = code;
+  while (start > 0 && /\p{Nd}/u.test(String.fromCodePoint(start - 1))) start -= 1;
+  return String((code - start) % 10);
+}
 
 /** The claim labels a text cites, in order, without repeats. */
 export function citedLabels(text: string): string[] {
@@ -57,43 +106,104 @@ export function stripCitations(text: string): string {
     .trim();
 }
 
-/** Whether a period at `index` of `text` (the end of `word`) ends a sentence. */
+/** Whether `word`, ending in a period, is an abbreviation or an initial rather than the end of a sentence. */
 function isAbbreviation(word: string): boolean {
-  const bare = word.replace(/^[("'“‘]+/, "");
+  const bare = word.replace(/^[\p{Ps}\p{Pi}"']+/u, "");
   if (DOTTED.test(bare)) return true;
   const lower = bare.replace(/\.$/, "").toLowerCase();
   if (ABBREVIATIONS.has(lower)) return true;
   return /^[A-Z]$/.test(bare.replace(/\.$/, "")); // an initial, as in "J. Doe"
 }
 
+/** The index of the first character at or after `from` that isn't an invisible format character. */
+function nextVisible(text: string, from: number): number {
+  let index = from;
+  while (index < text.length) {
+    const char = String.fromCodePoint(text.codePointAt(index)!);
+    if (!/^\p{Cf}$/u.test(char)) break;
+    index += char.length;
+  }
+  return index;
+}
+
+/** Whether `char` is a capital letter of any script (upper or title case). */
+function isCapital(char: string): boolean {
+  return /^[\p{Lu}\p{Lt}]$/u.test(char);
+}
+
 /**
- * Splits one statement into sentences. A sentence ends at `.`, `!` or `?`
- * (after any closing quotes or brackets) followed by whitespace and a
- * capital letter, a digit, an opening quote or a citation marker, or at the
- * end of the text. A period ending an abbreviation (`B.S.`, `Inc.`, an
- * initial) or inside a number (`3.5`) never ends one. Citation markers that
- * open a sentence (`… Labs. [C1] Maintains …`) belong to the sentence
- * before them.
+ * Whether the terminal run `match` (at `match.index` of `text`, within the
+ * sentence that began at `start`) ends that sentence, given the first
+ * visible character after it, at `next`.
  */
-export function splitSentences(statement: string): string[] {
-  const text = statement.replace(/\s+/g, " ").trim();
+function endsSentence(text: string, start: number, match: RegExpExecArray, next: number): boolean {
+  const terminal = match[0];
+  // A sentence end right after a citation marker is one, whatever follows: "… [C3].won …".
+  if (MARKER_AT_END.test(text.slice(start, match.index))) return true;
+  const period = terminal.startsWith(".");
+  const following = String.fromCodePoint(text.codePointAt(next)!);
+
+  if (following === " ") {
+    // Whatever the next sentence starts with (a capital of any script, a digit, a quote, a lower-case word),
+    // a sentence ends here, unless the period ends an abbreviation or an initial ("B.S. in", "J. Doe").
+    const lastWord = text.slice(start, match.index + terminal.length).split(" ").at(-1) ?? "";
+    return !(period && isAbbreviation(lastWord));
+  }
+
+  // Nothing between the end and what follows: "… teams.Won …".
+  let letterAt = next;
+  while (letterAt < text.length && OPENERS.test(text[letterAt]!)) letterAt = nextVisible(text, letterAt + 1);
+  const letter = letterAt < text.length ? String.fromCodePoint(text.codePointAt(letterAt)!) : "";
+  const opensSentence = isCapital(letter) || MARKER_AT_START.test(text.slice(next));
+  if (!opensSentence) return false; // a digit or a lower-case letter: 3.5, Node.js, example.com
+  if (period) {
+    const tokenStart = text.lastIndexOf(" ", match.index) + 1;
+    if (isAbbreviation(text.slice(tokenStart, match.index + 1))) return false; // B.S., Ph.D., U.S., St.Louis
+    if (DOTTED_NAME_TAIL.test(text.slice(next))) return false; // ASP.NET, Socket.IO
+  }
+  return true;
+}
+
+/** The sentences of one line of a statement: see `splitSentences`. */
+function splitLine(line: string): string[] {
+  const text = line.replace(/\s+/g, " ").trim();
   if (!text) return [];
   const pieces: string[] = [];
   let start = 0;
-  const boundary = /[.!?]+["'”’)\]]*(?= |$)/g;
-  for (const match of text.matchAll(boundary)) {
+  for (const match of text.matchAll(BOUNDARY)) {
     const end = match.index + match[0].length;
-    const before = text.slice(start, end);
-    const lastWord = before.split(" ").at(-1) ?? "";
-    const after = text.slice(end).trimStart();
-    if (after.length > 0) {
-      if (match[0].startsWith(".") && isAbbreviation(lastWord)) continue;
-      if (!/^(?:[A-Z0-9"'“‘(]|\x60?\[\s*C\d)/.test(after)) continue;
-    }
-    pieces.push(before.trim());
+    const next = nextVisible(text, end);
+    if (next < text.length && !endsSentence(text, start, match, next)) continue;
+    pieces.push(text.slice(start, end).trim());
     start = end;
   }
   if (start < text.length) pieces.push(text.slice(start).trim());
+  return pieces.filter((piece) => piece.replace(INVISIBLE, "").trim().length > 0);
+}
+
+/**
+ * Splits one statement into sentences, strictly, so no uncited sentence can
+ * ride along with a cited one:
+ *
+ * - A line break ends a sentence.
+ * - A sentence terminal (`.`, `!`, `?`, `…`, or a fullwidth or ideographic
+ *   form), with any closing quotes or brackets, ends a sentence when the text
+ *   ends there, or a space follows it, whatever comes after the space: a
+ *   capital of any script, a digit, a quote, a citation marker or a
+ *   lower-case word.
+ * - With nothing in between, it ends one when a capital, an opening quote
+ *   before one, or a citation marker follows it ("… teams.Won …"), and
+ *   always right after a citation marker ("… [C3].won …").
+ * - A period never ends one when it ends an abbreviation or an initial
+ *   (`B.S.`, `Inc.`, `J. Doe`), sits inside a number (`3.5`) or a name
+ *   (`Node.js`, `ASP.NET`).
+ * - Invisible format characters are looked through, never at.
+ *
+ * Citation markers that open a sentence (`… Labs. [C1] Maintains …`) belong
+ * to the sentence before them.
+ */
+export function splitSentences(statement: string): string[] {
+  const pieces = statement.split(LINE_BREAKS).flatMap(splitLine);
 
   // Markers that open a sentence belong to the one before it.
   const sentences: string[] = [];
@@ -118,8 +228,7 @@ export function splitSentences(statement: string): string[] {
 /** Lowercased words (letters and digits), for the n-gram rules. `%` stays attached to its number. */
 export function wordsOf(text: string): string[] {
   return (
-    text
-      .normalize("NFKC")
+    normalizeForChecks(text)
       .toLowerCase()
       .replace(/[’‘]/g, "'")
       .match(/[\p{L}\p{N}]+(?:['.][\p{L}\p{N}]+)*%?/gu) ?? []
@@ -150,4 +259,9 @@ export function uuidsIn(text: string): string[] {
 /** Whether `text` contains a UUID. */
 export function hasUuid(text: string): boolean {
   return new RegExp(UUID_SOURCE, "i").test(text);
+}
+
+/** `text` with every UUID blanked out: an id is the `raw_id` rule's alone, never a number or a date. */
+export function withoutUuids(text: string): string {
+  return text.replace(new RegExp(UUID_SOURCE, "gi"), " ");
 }

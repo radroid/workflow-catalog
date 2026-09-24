@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkPreparation, postingText, requirementsDigest, type PreparationStores } from "../agent/lib/prepare-logic.ts";
+import { checkPreparation, postingText, requirementsDigest, reviewPreparation, type PreparationStores } from "../agent/lib/prepare-logic.ts";
 import type { PrepareApplicationInput } from "../agent/lib/prepare-schema.ts";
 import { ManualClock } from "../lib/clock.ts";
 import { ApplicationsStore, type PreparationRecord } from "../store/applications.ts";
@@ -196,13 +196,32 @@ describe("checkPreparation: the draft", () => {
     const output = await call(f, { requirements: COVERED, resume: DRAFT_WITH_EXCLUDED_METRIC });
     expect(output.status).toBe("refused");
     expect(output.message).toMatch(/^The runner refused \d+ sentence problems?\. Fix exactly what each one names/);
-    expect(output.problems).toContainEqual(expect.objectContaining({ rule: "excluded_claim", where: "Resume, Projects, bullet 1" }));
+    // Revision 1 (V10): the wording it borrowed reads as something the confirmed claims don't state, never as an excluded claim's.
+    expect(output.problems).toContainEqual(expect.objectContaining({ rule: "unknown_citation", where: "Resume, Projects, bullet 1" }));
     expect(output.problems).toContainEqual(expect.objectContaining({ rule: "number", where: "Resume, Projects, bullet 1" }));
     for (const problem of output.problems ?? []) {
+      expect(problem.rule).not.toBe("excluded_claim");
       expect(problem.message).not.toContain("Grew signups");
       expect(problem.message).not.toContain(EXCLUDED_METRIC.id);
     }
     expect(output.draft).toBeUndefined();
+  });
+
+  it("tells the model an excluded label, id or wording as it would one it was never given, while the person's view says what it was (V10)", async () => {
+    const f = await fixture();
+    const byLabel = { sections: [{ heading: "Experience", statements: ["Grew signups after the launch [C2]."] }] };
+    const unknown = { sections: [{ heading: "Experience", statements: ["Grew signups after the launch [C99]."] }] };
+    const excludedReview = await reviewPreparation({ taskId: f.taskId, requirements: COVERED, resume: byLabel }, f.stores);
+    const unknownReview = await reviewPreparation({ taskId: f.taskId, requirements: COVERED, resume: unknown }, f.stores);
+    const modelView = (review: typeof excludedReview) => JSON.stringify(review.output).replaceAll("C2", "C#").replaceAll("C99", "C#");
+    expect(modelView(excludedReview)).toBe(modelView(unknownReview));
+    expect(excludedReview.output.problems?.map((problem) => problem.rule)).toEqual(["unknown_citation"]);
+    expect(excludedReview.problems.map((problem) => problem.rule)).toEqual(["excluded_claim"]);
+    expect(unknownReview.problems.map((problem) => problem.rule)).toEqual(["unknown_citation"]);
+
+    const byWording = await reviewPreparation({ taskId: f.taskId, requirements: COVERED, resume: DRAFT_WITH_EXCLUDED_METRIC }, f.stores);
+    expect(JSON.stringify(byWording.output)).not.toContain("excluded");
+    expect(byWording.problems).toContainEqual(expect.objectContaining({ rule: "excluded_claim", where: "Resume, Projects, bullet 1" }));
   });
 
   it("accepts a draft that states only what its cited claims say, and hands it back for the bridge to export", async () => {

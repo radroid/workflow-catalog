@@ -23,6 +23,7 @@ import {
   HOSTILE_JOB,
   INJECTION_PHRASES,
   parsePreparationPrompt,
+  PERSON,
   platformLeadJob,
   profileFilesHash,
   scriptedModel,
@@ -250,6 +251,23 @@ async function documentText(bridge: TestBridge, taskId: string, file: string): P
   if (file.endsWith(".docx")) return docxAllText(body);
   if (file.endsWith(".pdf")) return pdfText(body);
   return body.toString("utf8");
+}
+
+/** A sentence every happy-path draft states, per document kind (GOOD_RESUME, GOOD_COVER_LETTER), as exported. */
+const KNOWN_SENTENCE: Readonly<Record<string, string>> = {
+  resume: "Shipped the on-call rotation tooling used by three engineering teams.",
+  cover_letter: "Outside work, I maintain Ledgerkit, an open-source ledger reconciliation library.",
+};
+
+/**
+ * Revision 1 (V6): an absence check proves nothing about a file its reader can't read. So before a test greps a
+ * DOCX or PDF for what must not be there, the file must show what must: the person's name, and a sentence it was
+ * given. A reader that returned "" (the round-1 reviewer's M10 and M12) fails here.
+ */
+function expectReadBack(document: { readonly kind: string; readonly format: string; readonly path: string }, text: string): void {
+  if (document.format !== "docx" && document.format !== "pdf") return;
+  expect(text, `${document.path} holds the person's name`).toContain(PERSON.name);
+  expect(text, `${document.path} holds a sentence it was given`).toContain(KNOWN_SENTENCE[document.kind]);
 }
 
 async function applicationRecord(bridge: TestBridge, taskId: string) {
@@ -516,10 +534,12 @@ describe("the excluded metric (acceptance)", () => {
     const [prompt] = model.prompts;
     for (const needle of [EXCLUDED_METRIC.text, "Grew signups", "500%", excluded.id, EXCLUDED_METRIC.id, "[C2]"]) expect(prompt).not.toContain(needle);
 
-    // The tool refused the draft that slipped it in, by place, without naming the claim; the revision passed.
+    // The tool refused the draft that slipped it in, by place, without naming the claim: the model is told of wording
+    // the confirmed claims don't state, never of an excluded claim (revision 1, V10). The revision passed.
     expect(model.outputs.map((output) => output.status)).toEqual(["refused", "accepted"]);
     const refused = model.outputs[0]!;
-    expect(refused.problems?.find((problem) => problem.rule === "excluded_claim")?.where).toBe("Resume, Projects, bullet 1");
+    expect(refused.problems?.find((problem) => problem.rule === "unknown_citation")?.where).toBe("Resume, Projects, bullet 1");
+    expect(refused.problems?.map((problem) => problem.rule)).not.toContain("excluded_claim");
     for (const problem of refused.problems ?? []) {
       expect(problem.message).not.toContain("Grew signups");
       expect(problem.message).not.toContain(excluded.id);
@@ -531,6 +551,7 @@ describe("the excluded metric (acceptance)", () => {
     expect(application.documents.map((document) => document.format).sort()).toEqual(["docx", "docx", "md", "md", "md", "pdf", "pdf"]);
     for (const document of application.documents) {
       const text = flat(await documentText(bridge, taskId, document.path.split("/").at(-1)!));
+      expectReadBack(document, text);
       for (const needle of ["Grew signups", "500%", "self-serve onboarding", excluded.id, EXCLUDED_METRIC.id]) expect(text, `${document.path} contains “${needle}”`).not.toContain(needle);
     }
     // Nor in what the page is sent, or the version the runner keeps.
@@ -675,7 +696,9 @@ describe("a hostile posting (acceptance)", () => {
     const outputs: Array<[string, string]> = [];
     for (const document of application.documents) {
       const file = document.path.split("/").at(-1)!;
-      outputs.push([file, await documentText(bridge, taskId, file)]);
+      const text = await documentText(bridge, taskId, file);
+      expectReadBack(document, flat(text));
+      outputs.push([file, text]);
     }
     outputs.push(
       ["tool inputs", JSON.stringify(model.inputs)],

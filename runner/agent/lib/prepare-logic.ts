@@ -4,7 +4,7 @@ import { sha256Hex } from "../../lib/crypto.ts";
 import { ApplicationsStore, type PreparationRecord, type PreparedClaim } from "../../store/applications.ts";
 import { JobsStore } from "../../store/jobs.ts";
 import { Workspace } from "../../store/workspace.ts";
-import { describeLocation, validateDraft, type ValidationClaim } from "../../validate/validator.ts";
+import { describeLocation, validateDraft, type Refusal, type ValidationClaim } from "../../validate/validator.ts";
 import type { PrepareApplicationInput, PrepareApplicationOutput } from "./prepare-schema.ts";
 
 /**
@@ -28,7 +28,12 @@ import type { PrepareApplicationInput, PrepareApplicationOutput } from "./prepar
  *   before exporting anything.
  *
  * Nothing it returns names an excluded claim, by text or id: the model was
- * never shown one, and a refusal never tells it.
+ * never shown one, and a refusal never tells it. Nor does a refusal tell it
+ * which label, id or wording belongs to one: those read exactly as a label
+ * or an id it was never given (the validator's `forModel`). The person's
+ * view of the same refusal (`reviewPreparation`'s `problems`) keeps the
+ * validator's own rules, so the page can say "It drew on a claim you
+ * excluded."
  */
 
 export interface PreparationStores {
@@ -101,58 +106,92 @@ function coverageProblems(input: PrepareApplicationInput, attempt: PreparationRe
   return problems;
 }
 
+/** One problem as a refusal names it: the rule, where, the sentence and what to fix. */
+export interface PreparationProblemView {
+  readonly rule: string;
+  readonly where: string;
+  readonly sentence: string;
+  readonly message: string;
+}
+
+/** One check of a `prepare_application` call: what the model is told, and the problems as the person is shown them. */
+export interface PreparationReview {
+  /** The tool's answer, for the model. */
+  readonly output: PrepareApplicationOutput;
+  /** When the answer refuses the draft or the requirements: every problem by the validator's own rule. Otherwise empty. */
+  readonly problems: readonly PreparationProblemView[];
+}
+
+function problemView(refusal: Refusal): PreparationProblemView {
+  return { rule: refusal.rule, where: describeLocation(refusal.where), sentence: refusal.sentence, message: refusal.message };
+}
+
 /** Checks one `prepare_application` call against the attempt the bridge started. Never writes; never throws for bad input. */
 export async function checkPreparation(input: PrepareApplicationInput, stores: PreparationStores): Promise<PrepareApplicationOutput> {
+  return (await reviewPreparation(input, stores)).output;
+}
+
+/**
+ * `checkPreparation`, with the person's view of any refusal beside it. The
+ * bridge calls it again after the turn, on the call whose answer counts, to
+ * keep the refusals the page words (the model's own answer tells it less).
+ */
+export async function reviewPreparation(input: PrepareApplicationInput, stores: PreparationStores): Promise<PreparationReview> {
+  const answer = (output: PrepareApplicationOutput, problems: readonly PreparationProblemView[] = []): PreparationReview => ({ output, problems });
   const attempt = await stores.applications.readPreparation(input.taskId);
   if (attempt === undefined || attempt === "unreadable" || attempt.status !== "running") {
-    return { taskId: input.taskId, status: "refused", message: "This application isn't being prepared right now, so nothing was checked." };
+    return answer({ taskId: input.taskId, status: "refused", message: "This application isn't being prepared right now, so nothing was checked." });
   }
   const base = { taskId: input.taskId, attemptId: attempt.attemptId };
   const snapshot = await stores.jobs.readSnapshot(attempt.jobId, attempt.jobRevision);
-  if (snapshot.kind !== "ok") return { ...base, status: "refused", message: "The job posting this preparation uses can't be read, so nothing was checked." };
+  if (snapshot.kind !== "ok") return answer({ ...base, status: "refused", message: "The job posting this preparation uses can't be read, so nothing was checked." });
   const requirements = snapshot.snapshot.structured.requirements ?? [];
   if (requirementsDigest(requirements) !== attempt.requirementsDigest || requirements.length !== attempt.requirementCount) {
-    return { ...base, status: "refused", message: "The job's requirements changed while this was being prepared. Stop here; the person can prepare it again." };
+    return answer({ ...base, status: "refused", message: "The job's requirements changed while this was being prepared. Stop here; the person can prepare it again." });
   }
 
   const coverage = input.requirements.map((entry) => ({ requirement: entry.requirement, status: entry.status, labels: entry.claims ?? [] }));
   const problems = coverageProblems(input, attempt);
   if (problems.length > 0) {
-    return { ...base, status: "refused", message: `Fix ${plural(problems.length, "problem")} with the requirements, then call again.`, problems };
+    // Already the same for both: an excluded label reads as a label never given.
+    return answer({ ...base, status: "refused", message: `Fix ${plural(problems.length, "problem")} with the requirements, then call again.`, problems }, problems);
   }
 
   const gaps = input.requirements.filter((entry) => entry.status === "gap");
   if (gaps.length > 0) {
-    return {
+    return answer({
       ...base,
       status: "questions",
       message: `${plural(gaps.length, "question")} recorded for the person. Stop here and write no documents: the runner asks, and preparation continues once they answer.`,
       questions: gaps.map((entry) => ({ requirement: entry.requirement, question: entry.question! })),
       coverage,
-    };
+    });
   }
 
-  if (!input.resume) return { ...base, status: "refused", message: "Every requirement is accounted for, so write the resume now and call again with it.", coverage };
-  if (input.coverLetter && !attempt.coverLetter) return { ...base, status: "refused", message: "No cover letter was asked for. Call again without one.", coverage };
+  if (!input.resume) return answer({ ...base, status: "refused", message: "Every requirement is accounted for, so write the resume now and call again with it.", coverage });
+  if (input.coverLetter && !attempt.coverLetter) return answer({ ...base, status: "refused", message: "No cover letter was asked for. Call again without one.", coverage });
 
   const draft = { resume: input.resume, ...(input.coverLetter ? { coverLetter: input.coverLetter } : {}) };
   const result = validateDraft({ draft, claims: asValidationClaims(attempt.claims), postingText: postingText(snapshot.snapshot), coverLetterRequested: attempt.coverLetter });
   if (!result.ok) {
-    return {
-      ...base,
-      status: "refused",
-      message: `The runner refused ${plural(result.refusals.length, "sentence problem")}. Fix exactly what each one names, keep the other sentences as they are, and call again with the whole draft.`,
-      problems: result.refusals.map((refusal) => ({ rule: refusal.rule, where: describeLocation(refusal.where), sentence: refusal.sentence, message: refusal.message })),
-      coverage,
-    };
+    return answer(
+      {
+        ...base,
+        status: "refused",
+        message: `The runner refused ${plural(result.forModel.length, "sentence problem")}. Fix exactly what each one names, keep the other sentences as they are, and call again with the whole draft.`,
+        problems: result.forModel.map(problemView),
+        coverage,
+      },
+      result.refusals.map(problemView),
+    );
   }
-  return {
+  return answer({
     ...base,
     status: "accepted",
     message: "Accepted. The runner saves the documents when this turn ends. Reply with one short line; don't repeat the documents.",
     coverage,
     draft,
-  };
+  });
 }
 
 /**

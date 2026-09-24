@@ -76,14 +76,33 @@ export const prepareApplicationToolDescription =
 
 /** The last completed, non-error `prepare_application` result in `events` for this task and attempt. Undefined when there is none. */
 export function preparationResult(events: readonly MessageStreamEvent[], taskId: string, attemptId: string): PrepareApplicationOutput | undefined {
-  let found: PrepareApplicationOutput | undefined;
+  return preparationCall(events, taskId, attemptId)?.output;
+}
+
+/**
+ * The last completed, non-error `prepare_application` call in `events` for
+ * this task and attempt: its result, and the input the model sent with it
+ * (matched by call id; undefined if the request isn't among the events).
+ */
+export function preparationCall(
+  events: readonly MessageStreamEvent[],
+  taskId: string,
+  attemptId: string,
+): { readonly input: PrepareApplicationInput | undefined; readonly output: PrepareApplicationOutput } | undefined {
+  const inputs = new Map<string, unknown>();
+  let found: { input: PrepareApplicationInput | undefined; output: PrepareApplicationOutput } | undefined;
   for (const event of events) {
+    if (event.type === "actions.requested") {
+      for (const action of event.data.actions) if ("toolName" in action && action.toolName === PREPARE_APPLICATION_TOOL) inputs.set(action.callId, action.input);
+      continue;
+    }
     if (event.type !== "action.result" || event.data.status !== "completed") continue;
     const result = event.data.result;
     if (result.kind !== "tool-result" || result.toolName !== PREPARE_APPLICATION_TOOL || result.isError) continue;
     const output = prepareApplicationOutputSchema.safeParse(result.output);
     if (!output.success || output.data.taskId !== taskId || output.data.attemptId !== attemptId) continue;
-    found = output.data;
+    const input = prepareApplicationInputSchema.safeParse(inputs.get(result.callId));
+    found = { input: input.success && input.data.taskId === taskId ? input.data : undefined, output: output.data };
   }
   return found;
 }

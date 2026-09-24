@@ -8,8 +8,12 @@
  * Deterministic and deliberately strict: a presentation change may reword a
  * claim, never change a metric, date, title or credential in it. What these
  * patterns can't tell apart is refused rather than guessed at, and the model
- * rewrites the sentence (the revision pass).
+ * rewrites the sentence (the revision pass). Every extractor reads the text
+ * through `normalizeForChecks`: any script's digits are ASCII digits, and an
+ * invisible character hides nothing.
  */
+
+import { normalizeForChecks } from "./text.ts";
 
 export type NumberUnit = "" | "%" | "x";
 
@@ -38,23 +42,40 @@ const QUANTITY_WORDS: Readonly<Record<string, string>> = {
   doubled: "2x", doubling: "2x", twice: "2x", tripled: "3x", tripling: "3x", quadrupled: "4x", halved: "0.5x", halving: "0.5x",
 };
 
-const NUMERAL = /^(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%|x|k|mm|m|bn|b)?\+?$/i;
+/** The number a token starts with: digits, optionally in comma-separated thousands, and a decimal part. */
+const LEADING_NUMBER = /^(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?/;
+
+/** A unit or scale glued to a numeral: `40%`, `10x`, `2k`, `1.5M`, `3bn`, each optionally with a `+`. */
+const GLUED_SUFFIX = /^(%|x|k|mm|m|bn|b)\+?$/i;
+
+/** A multiplier written before its number: `x2`, `x10`. */
+const MULTIPLIER_FIRST = /^x(\d+(?:\.\d+)?)$/i;
 
 function keyOf(value: number, unit: NumberUnit): string {
   return `${Math.round(value * 1_000_000) / 1_000_000}${unit}`;
 }
 
-/** A 4-digit year a résumé would state: 1900 to 2099. The date rule checks these, so the number rule skips them. */
+/** A 4-digit year a résumé would state: 1900 to 2099. The date rule checks these, so the number rule skips them. Read on the raw token: "1,950" is a number, not a year. */
 export function isYear(raw: string): boolean {
   return /^(19|20)\d{2}$/.test(raw);
 }
 
-/** Words, numerals and symbols-with-numbers, split at hyphens ("3-person", "twenty-five", "2019-2022"), outer punctuation dropped. */
+/**
+ * Words, numerals and symbols-with-numbers, split at hyphens ("3-person",
+ * "twenty-five", "2019-2022") and at a comma that isn't a thousands
+ * separator ("3,5", "teams,won"), outer punctuation dropped. The
+ * multiplication sign reads as `x` ("2×", "×2").
+ */
 function tokens(text: string): string[] {
-  const raw = text.normalize("NFKC").replace(/[’‘]/g, "'").replace(/[–—]/g, "-").match(/[\p{L}\p{N}$€£%.,+'-]+/gu) ?? [];
+  const raw =
+    normalizeForChecks(text)
+      .replace(/[’‘]/g, "'")
+      .replace(/[‐‑‒–—―−]/g, "-")
+      .replace(/×/g, "x")
+      .match(/[\p{L}\p{N}$€£%.,+'-]+/gu) ?? [];
   const out: string[] = [];
   for (const token of raw) {
-    for (const part of token.split("-")) {
+    for (const part of token.split(/-|,(?!\d{3}(?!\d))/)) {
       const cleaned = part.replace(/^[$€£+'.,]+/, "").replace(/[.,']+$/, "");
       if (cleaned) out.push(cleaned);
     }
@@ -75,12 +96,14 @@ function trailingUnit(list: readonly string[], at: number): { readonly scale: nu
 
 /**
  * Every quantity in `text`: numerals (`3`, `1,200`, `2.5`, `40%`, `10x`,
- * `$2M`, `2k`, `8+`), number words (`three`, `twenty-five`, `a dozen`),
- * scaled and written-out forms (`two hundred`, `3 million`, `40 percent`)
- * and multiplier words (`doubled`). A digit glued to letters (`EC2`, `K8s`,
- * `B2B`) is part of a name, not a quantity, and years are left to the date
- * rule. "One" is not counted: as a pronoun it is far too common to be a
- * claim.
+ * `x10`, `$2M`, `2k`, `8+`, `1e6`), numerals with a unit glued on (`200ms`,
+ * `5GB`, `3rd`: the quantity is the number, as it is for `200 ms`), number
+ * words (`three`, `twenty-five`, `a dozen`), scaled and written-out forms
+ * (`two hundred`, `3 million`, `40 percent`) and multiplier words
+ * (`doubled`). Digits of any script count (`٥٠٠`). A name that starts with
+ * a letter (`EC2`, `K8s`, `P99`, `Q3`, `B2B`) is not a quantity, and years
+ * (`2019`, and `2019Q3`'s) are left to the date rule. "One" is not counted:
+ * as a pronoun it is far too common to be a claim.
  */
 export function numbersIn(text: string): NumberFact[] {
   const list = tokens(text);
@@ -89,26 +112,36 @@ export function numbersIn(text: string): NumberFact[] {
     const token = list[index]!;
     const lower = token.toLowerCase();
 
-    const numeral = NUMERAL.exec(token);
-    if (numeral) {
-      const digits = `${numeral[1]!.replace(/,/g, "")}${numeral[2] ?? ""}`;
-      const suffix = (numeral[3] ?? "").toLowerCase();
-      if (!suffix && !numeral[2] && isYear(digits)) continue;
-      let value = Number(digits);
-      let unit: NumberUnit = "";
-      if (suffix === "%") unit = "%";
-      else if (suffix === "x") unit = "x";
-      else if (suffix) value *= SUFFIX_SCALES[suffix] ?? 1;
-      else {
+    const lead = LEADING_NUMBER.exec(token);
+    if (lead) {
+      const integer = lead[1]!;
+      const fraction = lead[2] ?? "";
+      const rest = token.slice(lead[0].length);
+      const digits = `${integer.replace(/,/g, "")}${fraction}`;
+      const glued = GLUED_SUFFIX.exec(rest)?.[1]?.toLowerCase();
+      if (rest === "" || rest === "+") {
+        if (!fraction && isYear(integer)) continue; // the raw token, commas and all: "1,950" is a number
         const after = trailingUnit(list, index + 1);
-        value *= after.scale;
-        unit = after.unit;
+        facts.push({ key: keyOf(Number(digits) * after.scale, after.unit), raw: token });
         index += after.count;
+      } else if (glued) {
+        const unit: NumberUnit = glued === "%" ? "%" : glued === "x" ? "x" : "";
+        facts.push({ key: keyOf(Number(digits) * (unit ? 1 : (SUFFIX_SCALES[glued] ?? 1)), unit), raw: token });
+      } else if (/^e[+-]?\d+$/i.test(rest)) {
+        facts.push({ key: keyOf(Number(`${digits}${rest}`), ""), raw: token }); // 1e6
+      } else if (!fraction && isYear(integer) && /^\p{L}/u.test(rest)) {
+        continue; // a year with letters glued on ("2019Q3"): the date rule reads it
+      } else {
+        facts.push({ key: keyOf(Number(digits), ""), raw: token }); // a unit glued on: "200ms", "5GB", "3rd"
       }
-      facts.push({ key: keyOf(value, unit), raw: token });
       continue;
     }
-    if (/\d/.test(token)) continue; // digits glued to letters: a name such as EC2 or B2B
+    const multiplier = MULTIPLIER_FIRST.exec(token);
+    if (multiplier) {
+      facts.push({ key: keyOf(Number(multiplier[1]), "x"), raw: token });
+      continue;
+    }
+    if (/\d/.test(token)) continue; // a letter first: a name such as EC2, K8s, P99, Q3 or B2B
 
     const quantity = QUANTITY_WORDS[lower];
     if (quantity !== undefined) {
@@ -152,32 +185,108 @@ function monthNumber(word: string): number | undefined {
 }
 
 export interface DateFacts {
-  /** Every 4-digit year (1900–2099). */
+  /** Every 4-digit year (1900–2099), including one glued to letters ("FY2019", "2019Q3"). */
   readonly years: readonly string[];
   /** Every month named next to a day or a year ("March 2022", "Mar 3, 2022", "3 March 2022"), by number. */
   readonly months: readonly number[];
+  /** Years that end something: the second year of a range ("2019–2021", "from 2019 to 2021", "between 2019 and 2021"), or a year after an end word ("until 2021", "left in 2021"). */
+  readonly endYears: readonly string[];
+  /** The word or mark that says something is still going on ("present", "since", "current", "to date", a range left open: "2019–"), when there is one. */
+  readonly openEnd?: string;
+  /** Whether it states when something started and never when it ended: "Started at Northwind Labs in 2022." */
+  readonly startOnly: boolean;
+}
+
+/** Words that join the two ends of a range. "and" joins one only after "between". */
+const RANGE_JOINERS = new Set(["-", "to", "until", "till", "through", "thru", "and"]);
+/** Words after which a year is when something ended. */
+const END_WORDS = new Set(["until", "till", "through", "thru", "left", "leaving", "ended", "ending"]);
+/** Words that say when something started. */
+const START_WORDS = new Set(["started", "start", "starting", "joined", "join", "joining", "began", "begin", "beginning", "from", "since"]);
+/** Words that say something is still going on, wherever they are. */
+const OPEN_WORDS = new Set(["present", "current", "currently", "ongoing", "since"]);
+/** Words that leave a range open when they end it: "2019 to date", "2019–now", "until today". */
+const OPEN_RANGE_ENDS = new Set(["now", "today", "date", "present", "current"]);
+/** Words that may sit between an end word or a joiner and its year: "until the end of March 2021". */
+const BEFORE_YEAR = new Set(["in", "on", "of", "the", "end", "early", "mid", "late"]);
+/** A year followed by a dash and then nothing, or only punctuation: "(2019–)". */
+const DANGLING_RANGE = /(?<!\d)(?:19|20)\d{2}\s*-\s*(?=[^\p{L}\p{N}\s-]|$)/u;
+
+/** Every 4-digit year in one word, including one glued to letters ("FY2019", "2019Q3"). */
+function yearsInWord(word: string): string[] {
+  return word.match(/(?<!\d)(?:19|20)\d{2}(?!\d)/g) ?? [];
+}
+
+function isDay(word: string): boolean {
+  return /^\d{1,2}$/.test(word);
 }
 
 /**
- * The dates in `text`: its years, and its months where a month name sits
- * next to a day or a year. A bare "may" is a verb, so a month counts only in
- * a date. Seasons and "present" are words, not dates.
+ * The dates in `text`: its years, its months where a month name sits next
+ * to a day or a year, which years end something, and whether it leaves
+ * something open (still going on) or states only a start. A bare "may" is a
+ * verb, so a month counts only in a date. Seasons are words, not dates.
  */
 export function datesIn(text: string): DateFacts {
-  const words = (text.normalize("NFKC").replace(/[–—]/g, " ").match(/[\p{L}\p{N}]+/gu) ?? []).map((word) => word);
+  const normalized = normalizeForChecks(text).replace(/[‐‑‒–—―−]/g, "-");
+  const words = normalized.match(/[\p{L}\p{N}]+|-/gu) ?? [];
+  const lower = words.map((word) => word.toLowerCase());
   const years: string[] = [];
   const months: number[] = [];
+  const endYears: string[] = [];
+  let openEnd: string | undefined;
+  /** Whether a year sits just before `at` (past a month or a day): the start of a range. */
+  const yearBefore = (at: number): boolean => {
+    let back = at - 1;
+    while (back >= 0 && at - back <= 3 && (monthNumber(lower[back]!) !== undefined || isDay(lower[back]!))) back -= 1;
+    return back >= 0 && isYear(words[back]!);
+  };
+
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index]!;
-    if (isYear(word)) years.push(word);
+    years.push(...yearsInWord(word));
     const month = monthNumber(word);
-    if (month === undefined) continue;
-    const next = words[index + 1] ?? "";
-    const afterNext = words[index + 2] ?? "";
-    const previous = words[index - 1] ?? "";
-    if (isYear(next) || (/^\d{1,2}$/.test(next) && isYear(afterNext)) || /^\d{1,2}$/.test(previous)) months.push(month);
+    if (month !== undefined) {
+      const next = words[index + 1] ?? "";
+      const afterNext = words[index + 2] ?? "";
+      const previous = words[index - 1] ?? "";
+      if (isYear(next) || (isDay(next) && isYear(afterNext)) || isDay(previous)) months.push(month);
+    }
+    if (openEnd === undefined && OPEN_WORDS.has(lower[index]!)) openEnd = lower[index];
+    if (openEnd === undefined && OPEN_RANGE_ENDS.has(lower[index]!)) {
+      // "2019 to date", "2019–now", "until today"; never "up to date".
+      const joiner = lower[index - 1] ?? "";
+      const anchored = joiner === "-" || joiner === "to" ? yearBefore(index - 1) : END_WORDS.has(joiner) && joiner !== "left";
+      if (anchored) openEnd = joiner === "-" ? `–${lower[index]}` : `${joiner} ${lower[index]}`;
+    }
+    if (!isYear(word)) continue;
+
+    // Is this year the end of something? Look back past the words that may sit before a year.
+    let back = index - 1;
+    while (back >= 0 && index - back <= 4 && (BEFORE_YEAR.has(lower[back]!) || monthNumber(lower[back]!) !== undefined || isDay(lower[back]!))) back -= 1;
+    const before = lower[back] ?? "";
+    if (END_WORDS.has(before)) {
+      endYears.push(word);
+      continue;
+    }
+    if (!RANGE_JOINERS.has(before) || !yearBefore(back)) continue;
+    if (before === "and") {
+      // "between 2019 and 2021" is a range; "in 2019 and 2021" is two dates.
+      let first = back - 1;
+      while (first >= 0 && !isYear(words[first]!)) first -= 1;
+      if (lower[first - 1] !== "between") continue;
+    }
+    endYears.push(word);
   }
-  return { years, months };
+  if (openEnd === undefined && DANGLING_RANGE.test(normalized)) openEnd = "–";
+
+  const startOnly = years.length > 0 && endYears.length === 0 && lower.some((word) => START_WORDS.has(word));
+  return { years, months, endYears, ...(openEnd !== undefined ? { openEnd } : {}), startOnly };
+}
+
+/** Whether a claim leaves its dates open: it says so ("present", "since", "2019–"), or states a start and no end. */
+export function isOpenEnded(dates: DateFacts): boolean {
+  return dates.openEnd !== undefined || dates.startOnly;
 }
 
 // --- Titles ----------------------------------------------------------------
@@ -198,30 +307,73 @@ const TITLE_CONNECTORS = new Set(["of", "and", "&", "for"]);
 /** Words that end a lower-case title phrase: a title is one contiguous run of modifiers and nouns. */
 const PHRASE_BREAKS = new Set(["a", "an", "the", "and", "or", "of", "to", "with", "for", "in", "at", "on", "by", "from", "as", "who", "that", "which"]);
 
+/** Abbreviations whose period stays inside a title: "Sr. Platform Engineer". */
+const TITLE_ABBREVIATIONS = new Set(["sr", "jr", "snr", "jnr", "assoc", "asst", "exec", "mgr", "dir", "eng", "engr", "vp", "svp", "evp", "avp"]);
+
+/** Role words that open a sentence as a verb as often as a title ("Lead the migration", "Head the team"). */
+const VERB_LIKE_ROLES = new Set(["lead", "head"]);
+
+/** What follows a role word that opens a sentence as a title: "Director at …", "CTO of …", "Engineer for …", or a comma. */
+const AFTER_OPENING_TITLE = new Set(["at", "of", "for"]);
+
+/** Words after which a lower-case role phrase is a title: "as a platform engineer", "became head of platform", "promoted to director". */
+const TITLE_CONTEXTS = new Set(["as", "became", "named", "appointed"]);
+const ARTICLES = new Set(["a", "an", "the"]);
+
 function bareWord(word: string): string {
   return word.replace(/[,;:.]+$/, "");
 }
 
 function isCapitalized(word: string): boolean {
-  return /^[\p{Lu}][\p{L}\p{N}&'.-]*$/u.test(word);
+  return /^[\p{Lu}][\p{L}\p{N}&'./-]*$/u.test(word);
 }
 
+/** A role word, whole or as one part of a hyphenated or slashed word: "engineer", "co-founder", "platform-engineer". */
 function isRoleNoun(word: string): boolean {
-  return ROLE_NOUNS.has(bareWord(word).toLowerCase().replace(/-/g, ""));
+  const bare = bareWord(word).toLowerCase();
+  if (ROLE_NOUNS.has(bare.replace(/[-/]/g, ""))) return true;
+  return bare.split(/[-/]/).some((part) => ROLE_NOUNS.has(part));
+}
+
+/** A title as the rule compares it: lowercased, an abbreviation's period dropped, hyphens and slashes as spaces, "&" as "and". */
+function titleKey(words: readonly string[]): string {
+  return words
+    .map((word) => bareWord(word).toLowerCase())
+    .join(" ")
+    .replace(/[-/]/g, " ")
+    .replace(/&/g, " and ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Whether the words before `at` (past one article) make what follows a title: "as a …", "became …", "promoted to …". */
+function inTitleContext(lower: readonly string[], at: number): boolean {
+  let before = at - 1;
+  if (ARTICLES.has(lower[before] ?? "")) before -= 1;
+  const word = lower[before] ?? "";
+  return TITLE_CONTEXTS.has(word) || (word === "to" && lower[before - 1] === "promoted");
 }
 
 /**
- * The job titles `text` states, lowercased: a capitalized phrase that names
- * a role ("Senior Platform Engineer", "Head of Platform"), and a lower-case
- * one with a seniority word before its role noun ("senior platform
- * engineer"). A single capitalized word that opens the sentence is a verb or
- * a name more often than a title ("Lead the migration"), so it doesn't count.
+ * The job titles `text` states, in comparable form (`titleKey`):
+ *
+ * - a capitalized phrase that names a role ("Senior Platform Engineer",
+ *   "Head of Platform", "Sr. Platform Engineer", "Staff Platform-Engineer");
+ * - a single capitalized role word, except as the first word, where it counts
+ *   only when "at", "of", "for" or a comma follows it ("Director at Fernwood
+ *   Labs", "CTO, Harbor") and it isn't a verb-like word ("Lead the
+ *   migration");
+ * - a lower-case role phrase with a seniority word before its role word
+ *   ("senior platform engineer"), with "of X" after it ("director of
+ *   platform"), or after "as", "became", "named", "appointed" or "promoted
+ *   to" ("worked as a platform engineer").
+ *
  * The validator compares titles whole: a sentence's title must equal one its
  * cited claims state, so "Platform Engineer" doesn't pass on a claim that
  * says "Senior Platform Engineer", and "Staff Engineer" never passes on it.
  */
 export function titlesIn(text: string): string[] {
-  const words = text.normalize("NFKC").replace(/[“”"()[\]]/g, " ").split(/\s+/).filter(Boolean);
+  const words = normalizeForChecks(text).replace(/[“”"()[\]]/g, " ").split(/\s+/).filter(Boolean);
   const titles = new Set<string>();
 
   let index = 0;
@@ -232,14 +384,18 @@ export function titlesIn(text: string): string[] {
     }
     const phrase: string[] = [];
     let cursor = index;
+    let endedWithComma = false;
     while (cursor < words.length) {
       const word = words[cursor]!;
       const bare = bareWord(word);
       if (isCapitalized(bare)) {
         phrase.push(bare);
         cursor += 1;
-        if (bare !== word) break; // a comma, colon or full stop ends the phrase
-        continue;
+        if (bare === word) continue;
+        // A comma, colon or full stop ends the phrase, except an abbreviation's period: "Sr. Platform Engineer".
+        if (word === `${bare}.` && TITLE_ABBREVIATIONS.has(bare.toLowerCase())) continue;
+        endedWithComma = word.endsWith(",");
+        break;
       }
       const following = words[cursor + 1];
       if (TITLE_CONNECTORS.has(word.toLowerCase()) && following !== undefined && isCapitalized(bareWord(following))) {
@@ -249,22 +405,44 @@ export function titlesIn(text: string): string[] {
       }
       break;
     }
-    const hasRole = phrase.some(isRoleNoun);
-    if (hasRole && (phrase.length >= 2 || index > 0)) titles.add(phrase.map((word) => word.toLowerCase()).join(" "));
+    if (phrase.some(isRoleNoun)) {
+      const opening = index === 0 && phrase.length === 1;
+      const next = bareWord(words[cursor] ?? "").toLowerCase();
+      const openingTitle = opening && !VERB_LIKE_ROLES.has(phrase[0]!.toLowerCase()) && (endedWithComma || AFTER_OPENING_TITLE.has(next));
+      if (!opening || openingTitle) titles.add(titleKey(phrase));
+    }
     index = Math.max(cursor, index + 1);
   }
 
+  // Lower-case role phrases.
   const lower = words.map((word) => bareWord(word).toLowerCase());
-  for (let start = 0; start < lower.length; start += 1) {
-    if (!SENIORITY.has(lower[start]!) || isCapitalized(bareWord(words[start]!))) continue;
-    for (let end = start + 1; end < Math.min(lower.length, start + 5); end += 1) {
-      if (PHRASE_BREAKS.has(lower[end]!) || isCapitalized(bareWord(words[end]!))) break;
-      if (ROLE_NOUNS.has(lower[end]!)) {
-        titles.add(lower.slice(start, end + 1).join(" "));
+  const punctuated = words.map((word) => bareWord(word) !== word);
+  const plainWord = (at: number) => at >= 0 && at < words.length && !PHRASE_BREAKS.has(lower[at]!) && !isCapitalized(bareWord(words[at]!));
+  for (let role = 0; role < words.length; role += 1) {
+    if (isCapitalized(bareWord(words[role]!)) || !isRoleNoun(words[role]!)) continue;
+    // Modifiers before the role word: up to three plain words, none followed by punctuation.
+    let left = role;
+    while (role - left < 3 && plainWord(left - 1) && !punctuated[left - 1]) left -= 1;
+    let start = role;
+    for (let at = left; at < role; at += 1) {
+      if (SENIORITY.has(lower[at]!)) {
+        start = at;
         break;
       }
-      if (bareWord(words[end]!) !== words[end]) break; // punctuation after a word ends the phrase
     }
+    // "of X" after it: up to three plain words.
+    let end = role;
+    if (!punctuated[role] && lower[role + 1] === "of") {
+      let at = role + 2;
+      while (at - (role + 2) < 3 && plainWord(at)) {
+        at += 1;
+        if (punctuated[at - 1]) break;
+      }
+      if (at > role + 2) end = at - 1;
+    }
+    const context = inTitleContext(lower, left);
+    if (start === role && end === role && !context) continue;
+    titles.add(titleKey(words.slice(context && start === role ? left : start, end + 1)));
   }
   return [...titles];
 }

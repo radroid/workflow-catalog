@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { uuidSchema, type Application, type ApplicationDocument, type JobSnapshot, type JobStructured, type RunKind, type RunRecord } from "@workflow-catalog/contracts";
 import { z } from "zod";
-import { postingText, requirementsDigest } from "../../agent/lib/prepare-logic.ts";
+import { postingText, requirementsDigest, reviewPreparation } from "../../agent/lib/prepare-logic.ts";
 import { buildPreparationPrompt } from "../../agent/lib/prepare-prompt.ts";
-import { actionsOutsidePreparation, preparationResult, type PrepareApplicationOutput } from "../../agent/lib/prepare-schema.ts";
+import { actionsOutsidePreparation, preparationCall, type PrepareApplicationOutput } from "../../agent/lib/prepare-schema.ts";
 import { presentationSummary, renderDiffMarkdown, statementDiffs, versionChanges, type SourceClaim, type StatementDiff } from "../../export/diff.ts";
 import { coverLetterModel, letterDate, resumeModel, type PersonHeader } from "../../export/document.ts";
 import { renderDocx } from "../../export/docx.ts";
@@ -486,8 +486,9 @@ export async function preparePackage(ctx: RunnerContext, plan: Plan): Promise<{ 
     return fail([turn], "The model tried to do something other than prepare documents, so nothing was saved.");
   }
 
-  const result = preparationResult(events, plan.taskId, plan.attemptId);
-  if (!result) return fail([turn], "The model finished without handing over a draft, so nothing was saved. Try again.");
+  const call = preparationCall(events, plan.taskId, plan.attemptId);
+  const result = call?.output;
+  if (!call || !result) return fail([turn], "The model finished without handing over a draft, so nothing was saved. Try again.");
   if (result.status === "questions") {
     const questions = (result.questions ?? []).map((question) => ({ requirement: question.requirement, question: question.question }));
     return {
@@ -496,7 +497,10 @@ export async function preparePackage(ctx: RunnerContext, plan: Plan): Promise<{ 
     };
   }
   if (result.status !== "accepted" || !result.draft) {
-    return fail([turn], "The draft didn't pass the runner's checks, so nothing was saved.", keptProblems(result.problems ?? []));
+    // The refusals as the page words them. The model's own answer tells it less (never which label, id or wording
+    // belongs to an excluded claim), so the call whose answer counts is checked again for the person's view.
+    const personal = call.input ? (await reviewPreparation(call.input, { applications, jobs })).problems : [];
+    return fail([turn], "The draft didn't pass the runner's checks, so nothing was saved.", keptProblems(personal));
   }
 
   // The authoritative check: the draft again, against the profile as it is now (P03 may have changed it during the turn).
