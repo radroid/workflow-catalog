@@ -600,7 +600,7 @@ describe("V1/D9: hand edits to career-profile.md, through the routes", () => {
     const text = await readFile(md, "utf8");
     await writeFile(md, text.replace(view.boundaries[0]!.text, "Never invent a metric, a credential or a responsibility."));
     const response = await post(bridge, "/statements/preference", { text: "Remote-first roles." });
-    expect(((await response.json()) as { message: string }).message).toBe("File edit saved. Your preference is recorded.");
+    expect(((await response.json()) as { message: string }).message).toBe("1 edit saved. Your preference is recorded.");
     const after = await getJson<{ boundaries: Array<{ text: string }>; preferences: Array<{ text: string }> }>(bridge, "");
     expect(after.boundaries[0]!.text).toBe("Never invent a metric, a credential or a responsibility.");
     expect(after.preferences.map((p) => p.text)).toEqual(["Remote-first roles."]);

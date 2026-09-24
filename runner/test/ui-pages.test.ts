@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SOURCE_CATEGORIES } from "@workflow-catalog/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
@@ -55,10 +56,16 @@ interface DomDocument {
   querySelectorAll(selector: string): ArrayLike<DomNode>;
   addEventListener(type: string, listener: (event: { readonly target: DomNode }) => void, capture?: boolean): void;
 }
+/** P03.2 (round-4 reviewer nit 4): just enough of MutationObserver to count how many times a node's text is written. */
+interface DomMutationObserver {
+  observe(target: DomNode, options: { readonly childList?: boolean; readonly characterData?: boolean; readonly subtree?: boolean }): void;
+  disconnect(): void;
+}
 interface DomWindow {
   readonly document: DomDocument;
   readonly HTMLElement: unknown;
   readonly ResizeObserver: unknown;
+  readonly MutationObserver: new (callback: () => void) => DomMutationObserver;
   readonly Event: new (type: string, init?: { bubbles?: boolean; cancelable?: boolean }) => unknown;
   requestAnimationFrame(callback: (time: number) => void): unknown;
   readonly happyDOM: { close(): Promise<void> };
@@ -94,6 +101,25 @@ async function until(check: () => boolean, what: string, timeoutMs = 5_000): Pro
     if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+/**
+ * P03.2 (round-4 reviewer nit 4): counts how many separate times `#last-action
+ * .text` is written — one MutationObserver callback per synchronous DOM
+ * batch, which is what an aria-live region announces on (a same-tick clear
+ * and refill inside one `lastAction()` call is one batch; `lastAction()`'s
+ * own next-frame clear-then-refill, for repeating the same message, is a
+ * second, deliberate one — outside what this counts, since every outcome
+ * used below produces a message distinct from whatever was there before).
+ */
+function announcementCounter(page: Page): { count(): number } {
+  const target = page.byId("last-action").querySelector(".text")!;
+  let count = 0;
+  const observer = new page.window.MutationObserver(() => {
+    count += 1;
+  });
+  observer.observe(target, { childList: true, characterData: true, subtree: true });
+  return { count: () => count };
 }
 
 /** Loads a page's HTML into a fresh DOM and runs its module against the bridge, as the browser would. */
@@ -168,12 +194,14 @@ describe("J4: the focused control is never replaced", () => {
     const button = page.byId("source-status-resume-provided");
     button.focus();
     page.document.addEventListener("focusin", (event) => focusins.push(event.target.id), true);
+    const announced = announcementCounter(page); // round-4 reviewer nit 4: this outcome is announced once
     button.click();
     await until(() => page.line() === "Resume marked provided: add its text, then extract claims.", "the outcome");
     await until(() => page.document.getElementById("source-text-resume")?.getAttribute("aria-busy") === null, "the saved text to load");
     expect(page.document.activeElement).toBe(button);
     expect(button.isConnected).toBe(true);
     expect(focusins).toEqual([]);
+    expect(announced.count()).toBe(1);
   });
 
   it("Confirm on a metric moves focus straight to its answer box, with the Confirm button still on the page, and the line says only that an answer is needed", async () => {
@@ -288,5 +316,39 @@ describe("J3 on the Profile page", () => {
     await until(() => page.line() === "File edits discarded; your unsaved text in the box is kept.", "the discard");
     expect(editor.value).toBe(typed);
     expect(save.hidden).toBe(false);
+  });
+});
+
+describe("P03.2 (round-4 reviewer nit 2): a stale editor error does not survive an unrelated action", () => {
+  it("Accept on a pending revision clears a red editor left by an earlier failed save", async () => {
+    const bridge = await realBridge();
+    const store = new ProfileStore(bridge.ctx.workspace, bridge.ctx.clock);
+    // One pending revision to accept: approve, then a hand edit becomes a proposed revision (D9, D11).
+    await store.accountSource("resume", "provided");
+    const claimId = (await store.extractClaims("resume", [{ text: "Worked on the Harbor deployment pipeline.", kind: "fact", evidenceRef: "resume.md#harbor", evidenceQuote: "Harbor" }])).profile.claims[0]!.id;
+    await store.decideClaim(claimId, "confirmed");
+    for (const category of SOURCE_CATEGORIES) if (category !== "resume") await store.accountSource(category, "not_applicable");
+    expect((await store.approve()).ok).toBe(true);
+    const md = path.join(bridge.workspace.root, "career-profile.md");
+    await writeFile(md, (await readFile(md, "utf8")).replace("Worked on the Harbor deployment pipeline.", "Rebuilt the Harbor deployment pipeline."));
+
+    const page = await openPage("profile", bridge);
+    await until(() => page.document.querySelectorAll(".revision").length === 1, "the pending revision to render");
+
+    // Break a save first (the marker for the confirmed claim goes missing from the submitted text), so
+    // editorError is set: the editor shows red, described by the field error (J4).
+    const editor = page.byId("markdown-editor");
+    page.type("markdown-editor", editor.value.replace(` \`[${claimId}]\``, ""));
+    page.byId("save-markdown").click();
+    await until(() => page.errors().invalid > 0, "the field error to appear");
+    expect(page.errors()).toEqual({ fieldErrors: 1, invalid: 1 });
+
+    // An unrelated action — Accept the pending revision — must not leave that stale red state up.
+    const revision = page.document.querySelectorAll(".revision")[0]!;
+    const accept = revision.querySelector(".revision-actions button")!;
+    accept.click();
+    await until(() => page.document.querySelectorAll(".revision").length === 0, "the revision to be accepted");
+    expect(page.errors()).toEqual({ fieldErrors: 0, invalid: 0 });
+    expect(page.byId("markdown-editor-error").hidden).toBe(true);
   });
 });

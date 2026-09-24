@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SOURCE_CATEGORIES } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
-import { formatUtc, readMarkdownEdits, renderProfileMarkdown } from "../store/profile-markdown.ts";
+import { evidenceText, formatUtc, readMarkdownEdits, renderProfileMarkdown } from "../store/profile-markdown.ts";
 import { reduce, type Action } from "../store/profile-reducer.ts";
 import { createInitialProfile, type OnboardingProfile } from "../store/profile-types.ts";
 
@@ -198,5 +198,51 @@ describe("D9: readMarkdownEdits, the strict reader", () => {
     );
     expect(problem(profile, markdown.replace("Measured against what,", "Measured against the Q2 report,"))).toContain("only the words before a marker can be edited");
     expect(problem(profile, markdown.replace("## Excluded", "## Left out"))).toContain("only the words before a marker can be edited");
+  });
+
+  it("P03.2 (round-4 reviewer probe 2): a problem's echoed text hides anything marker-shaped and cuts off past 80 characters (profile-markdown.ts:353)", () => {
+    // Evidence lines are never read back (they carry no marker), so an edit to one falls into the
+    // "only the words before a marker can be edited" problem, which echoes the line via clip(). That
+    // makes them the one place a hostile or merely long evidence quote reaches clip()'s two defenses.
+    let profile = createInitialProfile(randomUUID);
+    profile = apply(profile, { type: "accountSource", category: "resume", status: "provided" });
+    profile = apply(profile, {
+      type: "extractClaims",
+      category: "resume",
+      extracted: [
+        // A marker-shaped substring in the middle of the quote (escapeLine only ever touches the end
+        // of a line) must still never reach a person-facing message: clip hides it too (defense in depth, J3).
+        { text: "Cut deploy time in half.", kind: "fact", evidenceRef: "resume.md#a", evidenceQuote: "Uses the `[legacy-system]` pipeline daily." },
+        // Long enough, once rendered with its **Evidence:** prefix and (ref) suffix, that clip's 80-character cut applies.
+        {
+          text: "Rebuilt the pipeline.",
+          kind: "fact",
+          evidenceRef: "resume.md#b",
+          evidenceQuote: "Rebuilt the entire payments reconciliation pipeline from the ground up over one very long, very difficult quarter.",
+        },
+      ],
+      now: NOW,
+      newId: randomUUID,
+    });
+    const [embedded, long] = profile.claims;
+    // Only a confirmed claim renders an **Evidence:** line (toMarkdownView).
+    profile = apply(profile, { type: "decideClaim", claimId: embedded!.id, decision: "confirmed", now: NOW, newId: randomUUID });
+    profile = apply(profile, { type: "decideClaim", claimId: long!.id, decision: "confirmed", now: NOW, newId: randomUUID });
+    const markdown = renderProfileMarkdown(profile);
+
+    const embeddedEvidence = `- **Evidence:** ${evidenceText(embedded!)}`;
+    expect(markdown).toContain(embeddedEvidence);
+    expect(embeddedEvidence.length).toBeLessThanOrEqual(80); // isolates marker-hiding from truncation
+    const embeddedProblem = problem(profile, markdown.replace(embeddedEvidence, `${embeddedEvidence} (verified)`));
+    expect(embeddedProblem).toContain(`only the words before a marker can be edited. This line should read “${embeddedEvidence.replace("`[legacy-system]`", "`[…]`")}”.`);
+    expect(embeddedProblem).not.toContain("legacy-system");
+
+    const longEvidence = `- **Evidence:** ${evidenceText(long!)}`;
+    expect(markdown).toContain(longEvidence);
+    expect(longEvidence.length).toBeGreaterThan(80);
+    const longProblem = problem(profile, markdown.replace(longEvidence, `${longEvidence} (verified)`));
+    const clipped = /should read “([^”]*)”/.exec(longProblem)?.[1];
+    expect(clipped).toBe(`${longEvidence.slice(0, 79)}…`);
+    expect(clipped).toHaveLength(80);
   });
 });

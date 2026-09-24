@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ManualClock } from "../lib/clock.ts";
 import { renderProfileMarkdown } from "../store/profile-markdown.ts";
 import { pendingRevisions } from "../store/profile-reducer.ts";
-import { ProfileMarkdownError, ProfileStore, UnsupportedUploadError, uploadFileName } from "../store/profile.ts";
+import { MAX_MARKDOWN_BYTES, ProfileMarkdownError, ProfileStore, UnsupportedUploadError, uploadFileName } from "../store/profile.ts";
 import { PROFILE_BUSY_MESSAGE, ProfileBusyError } from "../store/profile-writes.ts";
 import type { Workspace } from "../store/workspace.ts";
 import { newWorkspace, tempDir } from "./helpers.ts";
@@ -62,11 +62,27 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
 
     const result = await store.addStatement("preference", "Remote-first roles.");
     expect(result.ok).toBe(true);
-    expect(result.message).toBe("File edit saved. Your preference is recorded.");
+    expect(result.message).toBe("1 edit saved. Your preference is recorded.");
     const profile = await store.read();
     expect(profile.claims.find((c) => c.id === claimId)?.text).toBe("Rebuilt the Harbor deployment pipeline.");
     expect(profile.preferences.map((p) => p.text)).toEqual(["Remote-first roles."]);
     expect(await readFile(md, "utf8")).toBe(renderProfileMarkdown(profile));
+  });
+
+  it("P03.2 (round-4 reviewer nit 5): two hand edits at once still keep the prefixed message short", async () => {
+    // The reviewer measured the old wording ("file edit(s) ... saved/proposed as a revision/revisions")
+    // pushing a combined message to 106 characters (profile.ts:192-199, :347 at the time). Two edits at
+    // once (both of the profile's default boundaries) exercises editsNote's plural branch; the fix is the
+    // shorter "edit(s) saved"/"edit(s) proposed" wording, not a cap on how many edits can land at once.
+    const { store, md } = await setup();
+    const [first, second] = (await store.load()).profile.boundaries;
+    await handEdit(md, `- ${first!.text}`, "- Never invent a metric, a credential or a responsibility.");
+    await handEdit(md, `- ${second!.text}`, "- Never change a date or a title.");
+
+    const result = await store.addStatement("preference", "Remote-first roles.");
+    expect(result.message).toBe("2 edits saved. Your preference is recorded.");
+    expect(result.message.length).toBeLessThanOrEqual(90);
+    expect((await store.read()).boundaries.map((b) => b.text)).toEqual(["Never invent a metric, a credential or a responsibility.", "Never change a date or a title."]);
   });
 
   it("keeps a hand-edited boundary when the next write is a different kind of change (the round-2 probe B)", async () => {
@@ -134,6 +150,19 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     expect((await store.load()).markdownError).toBeNull();
   });
 
+  it("P03.2 (round-4 reviewer nit 1): markdownOnDisk is null once the unreadable file exceeds MAX_MARKDOWN_BYTES, not echoed unbounded", async () => {
+    const { store, md } = await setup();
+    const claimId = await withConfirmedClaim(store);
+    await handEdit(md, ` \`[${claimId}]\``, ""); // the same missing-marker refusal as the test above
+    const stillUnreadable = `${await readFile(md, "utf8")}\n<!-- ${"x".repeat(MAX_MARKDOWN_BYTES)} -->`;
+    expect(Buffer.byteLength(stillUnreadable, "utf8")).toBeGreaterThan(MAX_MARKDOWN_BYTES);
+    await writeFile(md, stillUnreadable);
+
+    const loaded = await store.load();
+    expect(loaded.markdownError).not.toBeNull(); // still the same unreadable file, just larger
+    expect(loaded.markdownOnDisk).toBeNull();
+  });
+
   it("N6 (revision 3): claim text shaped like markers never makes the runner's own file unreadable", async () => {
     const { store, md } = await setup();
     await accountAll(store);
@@ -150,7 +179,7 @@ describe("D9: hand edits to career-profile.md are reconciled before every write"
     // A hand edit elsewhere in the file still saves; nothing is locked.
     await handEdit(md, "- Do not change employment dates or official titles.", "- Never change a date or a title.");
     const result = await store.addStatement("preference", "Remote-first roles.");
-    expect(result.message).toBe("File edit saved. Your preference is recorded.");
+    expect(result.message).toBe("1 edit saved. Your preference is recorded.");
     const profile = await store.read();
     expect(profile.claims[0]!.text).toBe(hostile);
     expect(profile.boundaries.map((b) => b.text)).toEqual([boundary.text, "Never change a date or a title."]);

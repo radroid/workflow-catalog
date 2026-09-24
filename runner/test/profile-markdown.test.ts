@@ -286,4 +286,43 @@ describe("N6 (revision 3): marker-shaped text never breaks the runner's own file
     const markdown = renderProfileMarkdown(profile);
     expect(markdown).toContain("- Ran the Harbor rollout `[id-1]`\\\n  and the Quill rollout\\ `[id-3]`\n");
   });
+
+  it("P03.2 (round-4 reviewer probe 3): nestedLine escapes a marker-shaped question or note too, and leaves an ordinary one alone", () => {
+    // The seeded-random suite above already proves hostile nested text (evidence, question, notes) never
+    // breaks the document (strict.ok stays true); nested lines are never read back, so that test can't pin
+    // down the escape itself the way the bullet-line test above does. This does, directly, on the exact
+    // rendered "  - **Question:** …" / "  - **Your note:** …" lines escapeLine produces (profile-markdown.ts:131).
+    const newId = idGen("id");
+    let profile = createInitialProfile(newId);
+    profile = reduce(profile, { type: "accountSource", category: "resume", status: "provided" }).profile;
+    profile = reduce(profile, {
+      type: "extractClaims",
+      category: "resume",
+      extracted: [{ text: "Cut deploy time.", kind: "metric", evidenceRef: "resume.md#a", evidenceQuote: "Cut deploy time" }],
+      now: NOW,
+      newId,
+    }).profile;
+    const claimId = profile.claims[0]!.id;
+    // Ends exactly in a marker-shaped token: MARKER_TAIL matches, so it gets one backslash.
+    profile = reduce(profile, { type: "decideClaim", claimId, decision: "disputed", question: "Measured against `[id-1]`", now: NOW, newId }).profile;
+    profile = reduce(profile, { type: "recordQuestionNote", claimId, note: "Yes, see `[not-a-real-id]`", now: NOW, newId }).profile;
+
+    const markdown = renderProfileMarkdown(profile);
+    expect(markdown).toContain("  - **Question:** Measured against `[id-1]`\\\n");
+    expect(markdown).toContain("  - **Your note:** Yes, see `[not-a-real-id]`\\\n");
+
+    // An ordinary question, not marker-shaped, is untouched (the same "escapes only what needs it" property).
+    profile = reduce(profile, {
+      type: "extractClaims",
+      category: "resume",
+      extracted: [{ text: "Cut build time.", kind: "metric", evidenceRef: "resume.md#b", evidenceQuote: "Cut build time" }],
+      now: NOW,
+      newId,
+    }).profile;
+    const claimId2 = profile.claims.at(-1)!.id;
+    profile = reduce(profile, { type: "decideClaim", claimId: claimId2, decision: "disputed", question: "Measured against what baseline?", now: NOW, newId }).profile;
+    const markdown2 = renderProfileMarkdown(profile);
+    expect(markdown2).toContain("  - **Question:** Measured against what baseline?\n");
+    expect(markdown2).not.toContain("baseline?\\");
+  });
 });

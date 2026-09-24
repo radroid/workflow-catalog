@@ -7,7 +7,7 @@ import { renderProfileMarkdown } from "../../store/profile-markdown.ts";
 import { questionReason } from "../../store/profile-questions.ts";
 import { currentWithdrawal, pendingRevisions, questionNotes, readiness } from "../../store/profile-reducer.ts";
 import { SOURCE_CATEGORY_LABELS, type OnboardingProfile, type StatementKind } from "../../store/profile-types.ts";
-import { ProfileMarkdownError, ProfileStore, StaleMarkdownError, UnsupportedUploadError, type LoadResult } from "../../store/profile.ts";
+import { MAX_MARKDOWN_BYTES, ProfileMarkdownError, ProfileStore, StaleMarkdownError, UnsupportedUploadError, type LoadResult } from "../../store/profile.ts";
 import { ProfileBusyError } from "../../store/profile-writes.ts";
 import { runTurn, type TurnResult } from "../run-harness.ts";
 import { errorResponse, readBoundedJson, validationErrorResponse } from "../http.ts";
@@ -51,7 +51,8 @@ export const EXTRACTION_STOPPED = "The extraction was stopped before it finished
 
 const MAX_SMALL_BODY_BYTES = 8 * 1024;
 const MAX_SOURCE_CONTENT_BYTES = 512 * 1024;
-const MAX_MARKDOWN_BYTES = 512 * 1024;
+// MAX_MARKDOWN_BYTES: imported from store/profile.ts (round-4 reviewer nit 1) — one bound for the incoming
+// POST /markdown body and the outgoing markdownOnDisk view, not two numbers to keep in sync by hand.
 /** The sum of everything saved for one category: an extraction prompt must never grow without bound. */
 export const MAX_TOTAL_SOURCE_TEXT_BYTES = 2 * 1024 * 1024;
 /** One real model call, single-shot: the same default as `eve-gateway.ts`'s `checkModel`. */

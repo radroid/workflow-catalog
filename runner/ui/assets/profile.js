@@ -255,6 +255,13 @@ async function run(id, work) {
   if (busy.has(id)) return;
   busy.add(id);
   setBusy(id, true);
+  // P03.2 (round-4 reviewer nit 2): save-markdown manages editorError itself, on its own outcome (it must
+  // survive its own failed save, to sit on the editor per J4). Every other action here is unrelated to the
+  // editor, so a stale reason from an earlier failed save must not keep showing a red box after it (e.g.
+  // Accept on a pending revision, which re-renders the whole page, including the editor, on success). Every
+  // path below (work()'s own render, or this function's catch branch) re-renders after this runs, so
+  // clearing the variable here is enough; the next renderEditor() call picks it up.
+  if (id !== "save-markdown") editorError = null;
   try {
     await work();
   } catch (error) {
