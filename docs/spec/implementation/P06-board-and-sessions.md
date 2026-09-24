@@ -48,3 +48,7 @@ Findings are in `logs/handoff/P05-round-1-review.md`. On top of P06's Owns, thes
   - In light theme, the model check's failure sentence is #e54b4f on white, 3.85:1 (axe serious). The colour comes from `.error { color: var(--destructive) }` in `runner.css`, which is granted for this rule. Fix it for every page that uses `.error`.
   - The eve line shows the eve client's raw error text. Phrase it for a person.
   - The two 1280 `docs/screenshots/P03.2-status-model-check-failed-*.png` shots include a line from the test setup ("eve is not answering…"). Retake them after these changes; both files are granted.
+- **More Applications-page items** (from P05's round-2 critic; `logs/handoff/P05-round-2-review.md`):
+  - The page's requests have no timeout, so a runner that hangs rather than stops is never noticed. Reuse the Jobs page's timeout, and show the runner-down notice.
+  - With focus on the runner line's Settings link, the runner going down replaces that line and drops focus to the body. Keep focus on a stable node.
+  - Titles over 60 characters or 6 words are left out of download names, so two such jobs at one company collide. Cut at a word instead, and tell collisions apart.

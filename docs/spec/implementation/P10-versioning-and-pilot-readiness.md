@@ -22,6 +22,9 @@ An instance stays on its package version until the person accepts an upgrade, an
 ## Out of scope
 Anything new. This packet closes the MVP.
 
+## Carried into part A (from P05's round-2 review, iter 007)
+- **`docs/pilot/known-limitations.md`, the PDF's characters.** The PDF embeds Noto Sans, which covers Latin (with its extensions), Greek, Cyrillic and Vietnamese. Complex scripts inside its coverage, such as Devanagari's joined letter forms, were not checked. Other scripts (CJK, Arabic, Hebrew, emoji) print "�", and the page warns at the name field and beside the PDF. The Markdown and Word files keep every character.
+
 ## Carried into part B (from P02.2's round-2 review, iter 006)
 Findings are in `logs/blocks.md`, "P02.2 peer review, round 2". These small edits are granted to part B, on top of its Owns: the lines named below, and new tests.
 - **R2-N1.** `runner/README.md:143-147` says setup's default is "always `~/JobAssistant`" and that "`--yes` without `--workspace` always fails". Both are true only on a first run: on a re-run, the default is the recorded workspace. Say "on a first run", and drop "revision 1" (`:144`, `:170`), which is review jargon.
