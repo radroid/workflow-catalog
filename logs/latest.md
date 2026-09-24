@@ -1,8 +1,8 @@
 Latest: iter-007 in progress since 2026-09-24 about 08:10.
 - **P03.2** (#17): merged 47cca70 about 15:08, after three rounds (the last by an Opus escalation). The smoke test on the integrated branch is green (runner 891, evals 107 gates).
-- **P05** (#16): revision 1 (6a4354d). Round 2: UI REVISE 2 (`logs/handoff/P05-round-2-review.md`); the reviewer is still running. A second REVISE goes to a fresh Opus agent. Last closed: iter-006.
+- **P05** (#16): revision 1 (6a4354d), then round 2 REVISE 5 + UI REVISE 2. A fresh Opus escalation took over `packet/P05` about 15:23, with X1–X10 in `logs/handoff/P05-round-2-review.md` (prompt: `P05-escalation-prompt.md`). Port 4320. Last closed: iter-006.
 
-Next, in iter 007: act on P05's round-2 verdicts. When P05 merges, the rulebook's P06 row says P06 extends `routes/applications.ts`. Then iter 008 can run P06 ∥ P08-B ∥ P03.1 (check Owns for overlap).
+Next, in iter 007: round 3 for P05 reuses the same reviewer and UI critic. When P05 merges, the rulebook's P06 row says P06 extends `routes/applications.ts`, and iter 008 can run P06 ∥ P08-B ∥ P03.1 (check Owns for overlap).
 - **Then:**
   - after P05: P08-B (it carries P08-A's follow-ups and the extraction-budget question) and P06 (it carries P04's follow-ups);
   - after P03.2 and P05: P03.1;
