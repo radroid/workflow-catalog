@@ -1,13 +1,11 @@
-import { readFileSync, rmSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import os from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineEval } from "eve/evals";
 import { equals, includes } from "eve/evals/expect";
 import { ManualClock } from "../../lib/clock.ts";
 import { questionNotes } from "../../store/profile-reducer.ts";
 import { ProfileStore } from "../../store/profile.ts";
-import { Workspace } from "../../store/workspace.ts";
+import { openOrCreateEvalWorkspace } from "./eval-workspace.ts";
 import {
   askFollowUpPrompt,
   FIXTURE_FOLLOW_UP_QUESTION,
@@ -26,18 +24,28 @@ import {
  * separately spawned dev host (a distinct OS process reached over HTTP —
  * "target http://127.0.0.1:<port>/"), which snapshots its own environment
  * once, before this file's `test()` function ever runs. Setting
- * `process.env.RUNNER_WORKSPACE` inside `test()` (an earlier version of this
- * file did) is invisible to that process — confirmed empirically (see the
- * P03 report) by watching the error change from "RUNNER_WORKSPACE is not
- * set" to a `WorkspaceError` naming the exact path once the assignment moved
- * to this module's top level. Module-level code here *does* reach the dev
- * host: eve must import this file to discover the eval (its `description`)
- * before it can decide to spawn anything to run it. So the workspace is
- * created and seeded once, at module load, with a top-level await, and
- * `RUNNER_WORKSPACE` is set before either scenario's `t.send(...)` — and,
- * critically, before `node --import ./lib/register-ts.mjs cli/eval.ts`
- * (`runner/package.json`'s "test" script, no special environment) ever gets
- * a chance to run this eval without one.
+ * `process.env.RUNNER_WORKSPACE` inside `test()` is invisible to that
+ * process — confirmed empirically (see the P03 report) by watching the
+ * error change from "RUNNER_WORKSPACE is not set" to a `WorkspaceError`
+ * naming the exact path once the assignment moved to module top level.
+ *
+ * Round-1 review L9: that decision now lives in one place,
+ * `./eval-workspace.ts`'s `openOrCreateEvalWorkspace()`, called by both this
+ * file and `job-extraction.eval.ts` from their own module top level — neither
+ * assigns the variable, or decides fresh-vs-reuse, itself any more.
+ * Module-level code in an imported file *does* reach the dev host (eve must
+ * import a `*.eval.ts` file to discover it — read its `description` — before
+ * it can decide to run it at all), which is why the call happens here at
+ * top level rather than inside `test()`. It is *not* simply computed once in
+ * the shared module and exported as a value, though: confirmed empirically
+ * that "eve eval loads this file from a build cache" means each `*.eval.ts`
+ * file's dependency graph is loaded independently, so a plain shared
+ * top-level constant actually ran twice in the same process and created two
+ * different workspaces. `openOrCreateEvalWorkspace` is idempotent via the
+ * environment variable itself instead — see that module's own comment for
+ * the full story, including how an earlier version of this file (each file
+ * deciding unconditionally, on its own) broke `job-extraction.eval.ts` the
+ * same way.
  *
  * One shared workspace, not one per scenario: `RUNNER_WORKSPACE` can only
  * name one directory for the whole eval run (the dev host's env is fixed
@@ -60,17 +68,8 @@ import {
 const JOB_ASSISTANT_FIXTURES = path.resolve(process.cwd(), "..", "..", "packages", "job-assistant", "fixtures");
 const RESUME_TEXT = readFileSync(path.join(JOB_ASSISTANT_FIXTURES, "resume.md"), "utf8");
 
-const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "wc-eval-onboarding-"));
-process.once("exit", () => {
-  try {
-    rmSync(workspaceRoot, { recursive: true, force: true });
-  } catch {
-    // Best-effort: this process is exiting either way.
-  }
-});
 const clock = new ManualClock();
-const workspace = await Workspace.create(path.join(workspaceRoot, "JobAssistant"), { packageVersion: "0.1.0", clock });
-process.env.RUNNER_WORKSPACE = workspace.root;
+const workspace = await openOrCreateEvalWorkspace();
 const store = new ProfileStore(workspace, clock);
 await store.accountSource("resume", "provided");
 

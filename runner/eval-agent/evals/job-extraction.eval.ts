@@ -1,48 +1,30 @@
-import { readFileSync, rmSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import os from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineEval } from "eve/evals";
 import { equals, includes } from "eve/evals/expect";
 import { ManualClock } from "../../lib/clock.ts";
 import { JobsStore } from "../../store/jobs.ts";
-import { Workspace } from "../../store/workspace.ts";
 import { extractHostileJobPrompt, extractJobPrompt, HOSTILE_JOB_STRUCTURED, NORTHWIND_JOB_STRUCTURED } from "../agent/lib/fixtures/jobs.ts";
+import { openOrCreateEvalWorkspace } from "./eval-workspace.ts";
 
 /**
  * `extract_job` end to end, through the real workflow tool (P04's mirror of
- * P03's `onboarding-extraction.eval.ts`; see that file's own comment for the
- * general reasoning about `RUNNER_WORKSPACE` and a separately spawned dev
- * host).
+ * P03's `onboarding-extraction.eval.ts`).
  *
- * Unlike that file, this one does *not* set `process.env.RUNNER_WORKSPACE` at
- * module top level to a workspace of its own. `eve eval` discovers every
- * `.eval.ts` file by importing it (it must read each file's `description`
- * before it can decide what to run), against one shared dev host process
- * with one process-wide environment — so whichever file's top-level
- * assignment happens to run last during discovery wins for the *entire* run.
- * `onboarding-extraction.eval.ts` (also P03's, not this packet's to edit)
- * does exactly that, unconditionally. Confirmed empirically: an earlier
- * version of this file that set its own workspace at top level saw
- * `RUNNER_WORKSPACE` silently repointed at onboarding's workspace by the time
- * `extract_job`'s step actually ran, so every persist here failed "No
- * snapshot revision N for that job." — a real snapshot, just written to (and
- * read from) the wrong directory once the two files' assignments raced.
+ * Round-1 review L9: this file and `onboarding-extraction.eval.ts` both call
+ * `openOrCreateEvalWorkspace()` from `./eval-workspace.ts`, at their own
+ * module top level — neither assigns `RUNNER_WORKSPACE`, or decides
+ * fresh-vs-reuse, itself any more. See that module's own comment for the
+ * full reasoning, including why "imported once" turned out not to mean
+ * "runs once" here (eve loads each eval file's dependency graph
+ * independently), and why the shared function is idempotent via the
+ * environment variable itself rather than via module-caching.
  *
- * Fix: `openOrCreateWorkspace` runs from `test`, not top level, and reads
- * `process.env.RUNNER_WORKSPACE` reactively rather than asserting a value.
- * By the time any eval's `test` runs, every file's top-level code has
- * already settled (discovery is complete first), so whatever the variable
- * holds at that point is what the dev host itself saw: shared with
- * onboarding's workspace when that file is part of the same run (always,
- * via `runner/package.json`'s "test" script), or a fresh workspace of this
- * file's own when run in isolation (`eve eval --strict job-extraction`).
- *
- * Sharing a workspace has a second consequence: this file does *not* also
- * assert "the career profile is unchanged" here by a before/after markdown
- * hash the way the acceptance criterion describes, even though `ProfileStore`
- * lives in the very same shared workspace. Confirmed empirically — with the
- * hash check still in place, printing the mismatched "after" markdown showed
+ * Sharing a workspace has a consequence: this file does *not* also assert
+ * "the career profile is unchanged" here by a before/after markdown hash the
+ * way the acceptance criterion describes, even though `ProfileStore` lives
+ * in the very same shared workspace. Confirmed empirically — with the hash
+ * check still in place, printing the mismatched "after" markdown showed
  * claims about Northwind Labs, Harbor, Ledgerkit and Fernwood University:
  * `onboarding-extraction.eval.ts`'s own fixture claims, written by its
  * `extract_claims` calls while this file's hostile-posting turn was also in
@@ -62,29 +44,16 @@ import { extractHostileJobPrompt, extractJobPrompt, HOSTILE_JOB_STRUCTURED, NORT
  */
 
 // eve eval loads this file from a build cache; process.cwd() is
-// EVAL_AGENT_DIR for the whole process regardless (see the P03 report cited
-// above), so fixtures are found the same way onboarding-extraction.eval.ts
+// EVAL_AGENT_DIR for the whole process regardless (see eval-workspace.ts's
+// own comment), so fixtures are found the same way onboarding-extraction.eval.ts
 // finds resume.md.
 const JOB_ASSISTANT_FIXTURES = path.resolve(process.cwd(), "..", "..", "packages", "job-assistant", "fixtures");
 const NORTHWIND_TEXT = readFileSync(path.join(JOB_ASSISTANT_FIXTURES, "job-posting-northwind.txt"), "utf8");
 const HOSTILE_TEXT = readFileSync(path.join(JOB_ASSISTANT_FIXTURES, "job-posting-hostile.txt"), "utf8");
 
-/** Reuses the shared `RUNNER_WORKSPACE` if some other eval file's top-level code already claimed it this run, else creates and claims a fresh one of this file's own (a solo `eve eval --strict job-extraction` run). */
-async function openOrCreateWorkspace(clock: ManualClock): Promise<Workspace> {
-  const existing = process.env.RUNNER_WORKSPACE;
-  if (existing) return Workspace.open(existing);
-  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "wc-eval-jobs-"));
-  process.once("exit", () => {
-    try {
-      rmSync(workspaceRoot, { recursive: true, force: true });
-    } catch {
-      // Best-effort: this process is exiting either way.
-    }
-  });
-  const workspace = await Workspace.create(path.join(workspaceRoot, "JobAssistant"), { packageVersion: "0.1.0", clock });
-  process.env.RUNNER_WORKSPACE = workspace.root;
-  return workspace;
-}
+// Module top level, not inside test() (eval-workspace.ts's own comment): this must resolve before discovery moves
+// on, so RUNNER_WORKSPACE is settled before either eval file's test() ever runs.
+const workspace = await openOrCreateEvalWorkspace();
 
 export default defineEval({
   description:
@@ -97,7 +66,6 @@ export default defineEval({
     t.check(HOSTILE_TEXT.includes("open_application_group"), equals(true)).label("job-posting-hostile.txt names a real, allowlisted action");
 
     const clock = new ManualClock();
-    const workspace = await openOrCreateWorkspace(clock);
     const jobsStore = new JobsStore(workspace);
 
     // One shared workspace, two real snapshots (a clean posting and a

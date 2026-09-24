@@ -5,16 +5,20 @@ import { fileURLToPath } from "node:url";
 import type { JobStructured } from "@workflow-catalog/contracts";
 import type { Client, ClientSession, MessageResponse, MessageStreamEvent } from "eve/client";
 import { describe, expect, it } from "vitest";
+import { HOSTILE_JOB_STRUCTURED } from "../eval-agent/agent/lib/fixtures/jobs.ts";
 import type { SafeFetchResult } from "../lib/safe-fetch.ts";
 import type { EveGateway } from "../server/eve-gateway.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import capturesModule, { buildJobExtractionPrompt, captureAndExtract, createCapturesRouteModule, runExtraction, waitForExtractionQueue } from "../server/routes/captures.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import { JobsStore } from "../store/jobs.ts";
+import { renderProfileMarkdown } from "../store/profile-markdown.ts";
+import { ProfileStore } from "../store/profile.ts";
 import { BRIDGE, jobCapture, makeBridge, pairDevice, postEvent, UI_TOKEN, type TestBridge } from "./helpers.ts";
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "packages", "job-assistant", "fixtures");
 const NORTHWIND_TEXT = readFileSync(path.join(FIXTURES_DIR, "job-posting-northwind.txt"), "utf8");
+const HOSTILE_TEXT = readFileSync(path.join(FIXTURES_DIR, "job-posting-hostile.txt"), "utf8");
 
 /**
  * `/api/captures` and the `job_capture` event handler (P04). The extension
@@ -322,6 +326,46 @@ describe("captures.ts: three paths produce identical snapshot records for the sa
     expect(urlSnapshot?.text).toBe(eventSnapshot?.text);
     expect(pasteSnapshot?.contentHash).toBe(eventSnapshot?.contentHash);
     expect(urlSnapshot?.contentHash).toBe(eventSnapshot?.contentHash);
+  });
+});
+
+describe("captures.ts: hostile posting through the real capture path (route-level, round-1 review L9)", () => {
+  /**
+   * `test/extract-job-logic.test.ts`'s own hostile-fixture test already
+   * proves `persistExtractedJob` itself never touches the career profile,
+   * called directly. `eval-agent/evals/job-extraction.eval.ts`'s hostile
+   * scenario proves the same tool call against a real model turn, but
+   * shares its workspace with `onboarding-extraction.eval.ts` (that file's
+   * own comment explains why), so it cannot check the profile hash there.
+   * This is the missing middle: a fast, deterministic Vitest test that
+   * drives the real fixture file through the real HTTP capture path (the
+   * extension event, the background extraction queue, and a scripted turn
+   * standing in for the model) end to end, in a private workspace where the
+   * profile hash can actually be checked before and after.
+   */
+  it("job-posting-hostile.txt captured via the extension event persists only the legitimate fields, from exactly one tool call, and never touches the career profile", async () => {
+    const ref: { store?: JobsStore } = {};
+    const { eve, calls } = fakeEve(extractingScript(() => ref.store!, HOSTILE_JOB_STRUCTURED));
+    const bridge = await bridgeWith(eve);
+    ref.store = new JobsStore(bridge.workspace);
+    const { token } = await pairDevice(bridge);
+
+    const profileStore = new ProfileStore(bridge.workspace, bridge.clock);
+    const before = ProfileStore.markdownHash(renderProfileMarkdown((await profileStore.load()).profile));
+
+    const response = await postEvent(bridge, token, jobCapture({ url: "https://jobs.example/ledgerkit/backend-engineer", text: HOSTILE_TEXT }));
+    const body = (await response.json()) as { result: { jobId: string; revision: number } };
+    await waitForExtractionQueue(bridge.workspace.root);
+
+    // extractingScript's fake turn only ever emits one extract_job call — this is the "fields only, no other tool"
+    // property `job-extraction.eval.ts` checks against a real model turn, reproduced here against the real route.
+    expect(calls).toHaveLength(1);
+    const snapshot = await ref.store.getSnapshot(body.result.jobId, body.result.revision);
+    expect(snapshot?.structured).toEqual(HOSTILE_JOB_STRUCTURED);
+    expect(JSON.stringify(snapshot?.structured ?? {})).not.toContain("open_application_group");
+
+    const after = ProfileStore.markdownHash(renderProfileMarkdown((await profileStore.load()).profile));
+    expect(after).toBe(before); // a private workspace, not job-extraction.eval.ts's shared one — this is checkable deterministically
   });
 });
 
