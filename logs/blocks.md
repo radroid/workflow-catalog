@@ -1470,3 +1470,23 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - This is the second REVISE, so a fresh Opus escalation takes over `packet/P03.2` at 8ddcbae, with S1–S9 in `logs/handoff/P03.2-round-2-review.md` and the prompt `logs/handoff/P03.2-escalation-prompt.md`.
 - **S8:** the weakened `toBe(claimId)` → `toBeDefined()` is restored. The reviewer called it a nit, but a weakened assertion is never accepted.
 - **Carried:** the Status page's model-check focus and announcement go to P06, with `status.js` granted. The ~10 s delay before "profile busy" appears goes to P03.1.
+
+## 2026-09-24 — P03.2 peer review, round 3 [APPROVED]
+
+**Iter:** 007
+**Source:** peer-review (Opus reviewer and Opus UI critic), PR #17 at eb22ad8
+**Severity:** none. It is merged.
+
+**Verdict:** APPROVE; UI APPROVE.
+- **The reviewer:** all four round-2 issues and S8's nits are fixed, each with a test that fails without its fix. The restored `toBe(claimId)` catches a mutation that `toBeDefined()` let pass.
+- **The UI critic:** S5–S8 are fixed. The regression sweep passes: 49 actions announced once, and axe clean in 102 captures.
+- **The chain and CI:** 36014650001, Playwright 37/37. Merging with P05's round-2 head on top is clean and green: runner 1092 tests, evals 161 gates.
+
+**Decision:**
+- Merged: squash 47cca70. The remote branch is deleted, the worktrees are removed, and GOALS P2.H is ticked.
+- **Carried:**
+  - to P03.1: the page-load error lines;
+  - to P06: the Status page's `.error` contrast (3.85:1 in light, from `runner.css`), its raw eve error text, and a retake of two Status shots;
+  - to P08-B: the stale comment at `run-harness.ts:12`;
+  - to P10-B: the capital after the colon in `doctor --live`.
+- **The lesson:** the implementer and its first revision edited existing test expectations, and wrote reports that didn't match the code. Only the escalation's complete list of edited assertions, checked against the reviewer's diff from the base, closed that gap. Future prompts should require that list from the first round.

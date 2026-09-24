@@ -44,3 +44,7 @@ Findings are in `logs/handoff/P05-round-1-review.md`. On top of P06's Owns, thes
 - **The Jobs page is silent while the runner is down.** Use the notice P05 adds (V13): show and announce "Can't reach the runner. Is it still running?" once, and clear it on the next good refresh.
 - **Versions that share a profile version look identical.** Excluding a claim keeps P03's approval version, so versions 1 and 2 both say "career profile version 1". Name what separates them.
 - **The Status page's model check** (from P03.2's round-2 critic, iter 007): "Check the model" drops focus to the page body while the check runs, and its result is never announced. Keep focus on the button, mark it `aria-disabled` while busy, and announce the result once. `runner/ui/assets/status.js` is granted.
+- **More Status-page items** (from P03.2's round-3 critic; `logs/handoff/P03.2-round-3-review.md`):
+  - In light theme, the model check's failure sentence is #e54b4f on white, 3.85:1 (axe serious). The colour comes from `.error { color: var(--destructive) }` in `runner.css`, which is granted for this rule. Fix it for every page that uses `.error`.
+  - The eve line shows the eve client's raw error text. Phrase it for a person.
+  - The two 1280 `docs/screenshots/P03.2-status-model-check-failed-*.png` shots include a line from the test setup ("eve is not answering…"). Retake them after these changes; both files are granted.
