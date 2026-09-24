@@ -429,4 +429,28 @@ describe("buildJobExtractionPrompt", () => {
     // Two calls with identical inputs still get different boundaries, so a hostile posting can't forge the end marker.
     expect(promptA).not.toBe(promptB);
   });
+
+  it("the posting text sits only between a matching START/END marker pair sharing one token (round-1 review L8, mutation target: 'posting text moved out of the boundary block')", () => {
+    const text = "Some posting text that must never appear outside its own boundary.";
+    const prompt = buildJobExtractionPrompt("job-1", 1, text);
+
+    const start = /--- (POSTING-\S+) START ---/.exec(prompt);
+    const end = /--- (POSTING-\S+) END ---/.exec(prompt);
+    expect(start).not.toBeNull();
+    expect(end).not.toBeNull();
+    expect(start![1]).toBe(end![1]); // the same token opens and closes the block — a hostile posting can't forge a matching END of its own
+
+    const startOfBlock = start!.index + start![0].length;
+    const endOfBlock = end!.index;
+    expect(startOfBlock).toBeLessThan(endOfBlock);
+
+    // Exactly one occurrence in the whole prompt, and it sits strictly inside [startOfBlock, endOfBlock) — not
+    // duplicated, and not moved out of the block the model is told to treat as data rather than instructions.
+    expect(prompt.split(text).length - 1).toBe(1);
+    const textIndex = prompt.indexOf(text);
+    expect(textIndex).toBeGreaterThanOrEqual(startOfBlock);
+    expect(textIndex + text.length).toBeLessThanOrEqual(endOfBlock);
+    expect(prompt.slice(0, startOfBlock)).not.toContain(text);
+    expect(prompt.slice(endOfBlock)).not.toContain(text);
+  });
 });
