@@ -344,6 +344,50 @@ reading the page — every message this page shows is its own hand-written
 sentence: no field name, HTTP status code or id ever appears in its visible
 text.
 
+The **Applications page** (`ui/application.html`, P05;
+`server/routes/applications.ts`) prepares a saved job's resume, and a cover
+letter when asked, from the career profile's confirmed claims only.
+Preparing is locked until the profile is approved ("Preparation is locked:
+… The workflow will not guess.") and until the person has typed the name
+their documents carry (`applications/details.json`, never sent to the
+model). One turn runs at a time per workspace, through `runTurn` inside
+`withRun`. The prompt carries the posting's fields and the confirmed claims,
+each by a position label (`[C1]`, never its id), as user-turn data inside a
+random per-call boundary; excluded and unconfirmed claims never reach it,
+and nothing from a posting ever reaches `instructions.md`, a skill or the
+system prompt. The model hands back one thing through `prepare_application`:
+a task id, its account of every requirement (covered by which labels, a gap
+question, left out, or not a requirement) and the draft, with a `[C#]`
+citation on every sentence. That tool only checks and returns. The
+deterministic validator (`validate/`, no model) refuses a sentence with no
+citation, a citation of anything but a confirmed claim, an id, a number,
+date, job title or credential its cited claims don't state, a heading the
+runner doesn't use, or the posting's own wording, and the model revises.
+After the turn the route re-reads the profile, validates the draft again,
+and only then exports (`export/`): Markdown, DOCX (`docx`) and PDF
+(`pdfkit`), with the citation markers stripped at this step and no earlier,
+plus `diff-v<n>.md`, which puts every sentence beside the claims it cites
+and names the presentation change. A gap question parks the preparation:
+eve withdraws its own approval parking when a run ends, so the runner keeps
+the questions (`preparation.json`). The run ends, the page shows the
+questions in amber, and once each is answered (leave it out, or add
+evidence to the profile) preparing again continues from the answers. A turn
+that is not ok, a draft still refused, a tool call other than the
+preparation tools, or a profile that changed during the turn saves nothing
+and says why in plain words; a failed or parked preparation never moves the
+job's stage. Each version records its profile version, job revision and
+idempotency key (the job, its revision, the profile version, whether a
+cover letter was asked for, and a digest of everything the model read), so
+preparing again with the same inputs writes nothing, and a changed profile
+gives a new version that names the one it replaces. Documents download as
+attachments with a sandboxing CSP, and only files the application's record
+lists. The page follows the Jobs page's rules: one live region, each
+outcome announced once; a refresh (every 2 s while a preparation runs, 5 s
+otherwise, only while visible) that keeps focus and open sections; a busy
+button `aria-disabled`; no field name, status code or id in visible text.
+Claim labels appear only in "What changed and why", which shows citations
+on purpose.
+
 The **Runs page** (`ui/runs.html`, P08-A) lists every run this instance has
 made (`GET /api/runs`), newest first, bounded to 200 records / 14 days. Each
 entry shows the date and time, the kind as a readable label, an outcome pill
@@ -455,6 +499,13 @@ jobs/<jobId>/snapshot-<rev>.json         one job posting's revision (P04): url, 
                                          later one; the same URL with the same content hash gets no new revision
 jobs/<jobId>/extraction-<rev>.json       that revision's extraction state (P04): waiting, running, done, not run
                                          or failed, with a reason code; waiting/running name the runner process
+applications/<taskId>.json               one application (P05): the contract's Application record, one per job
+applications/<taskId>/preparation.json   its latest preparation attempt (P05): running, parked on gap questions
+                                         with the answers so far, failed (and why), or done
+applications/<taskId>/versions/v<n>.json one prepared version (P05): the validated draft, the claims it cites,
+                                         the per-sentence diff and the changes since the version it replaces
+applications/<taskId>/docs/              resume-v<n> and cover-v<n> (.md, .docx, .pdf), diff-v<n>.md (P05)
+applications/details.json                the name and contact line on every document (P05); never sent to the model
 runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
 runs/budget.json                        daily run limit, per-run item cap, and the pause (P08-A); survives restart
 .runner/devices/<deviceId>.json         paired devices (token hash, origin, expiry)
@@ -536,7 +587,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 |---|---|
 | P03 | `server/routes/onboarding.ts`, `store/profile.ts`, `ui/onboarding.html`, `ui/profile.html`, `agent/tools/extract_claims.ts`, `agent/tools/ask_follow_up.ts`, onboarding skills |
 | P04 | `server/routes/captures.ts` (the `job_capture` handler, plus the paste/url-fetch/list/detail/re-extract routes), `store/jobs.ts`, `lib/safe-fetch.ts`, `lib/readable-text.ts`, `agent/tools/extract_job.ts` (IDs only: jobId, revision, structured fields — never a URL or raw text; it checks and returns the fields, and the route saves them after an ok turn), `ui/jobs.html` |
-| P05 | `agent/tools/prepare_application.ts`, `store/applications.ts`, `validate/`, `export/`, `ui/application.html`, preparation skills |
+| P05 | `server/routes/applications.ts` (list, detail, prepare, answer a gap question, the documents' header, downloads; queues the preparation turn through `runTurn` inside `withRun`), `store/applications.ts`, `agent/tools/prepare_application.ts` with `agent/lib/prepare-*.ts` (IDs, requirement accounts and the cited draft only — never a claim's id or text; it checks and returns, and the route saves after an ok turn and a second check), `validate/` (the deterministic validator), `export/` (Markdown, DOCX, PDF, the diff), `ui/application.html`, the five preparation skills and the resume and cover-letter templates |
 | P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
 | P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn` — free functions over `ctx`, not yet called from a real route), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
