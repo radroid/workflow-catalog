@@ -143,6 +143,12 @@ Not touched: `packages/contracts`, `context.ts`, `events.ts`, `settings.ts`, `do
 - `pnpm -r lint`: 6 of 6 clean.
 - `pnpm check:fixtures`: exit 0.
 - That `pnpm test` run passed in parallel, so no serial rerun was needed.
+- After committing this report as `3b38443`, I ran the chain again at that head. Install, typecheck, lint and check:fixtures exited 0, and `git status --porcelain` stayed empty.
+  - `pnpm test` failed in the extension only, on timeouts. The Mac slept during the run (`pmset` logged a wake at 03:09), so three tests ran for about 900 s against their 5 s and 10 s limits, and two workers didn't start.
+  - Every other package had passed, including the runner's 830 tests and 105 gates.
+  - As the brief says, I reran with `pnpm -r --workspace-concurrency=1 test`, keeping the Mac awake with `caffeinate -i`. The first rerun stopped at the runner's gate step, which exited 1 without printing anything, so the extension never ran.
+  - The second rerun passed everything, with the same counts as above. `node --test scripts/*.test.mjs` then passed 2 of 2.
+  - CI on `3b38443`, run `35966690907`, passed every step.
 
 **Chromium measurements.** These were taken with Playwright 1.63 (Chromium 1243) and Geist, against a real bridge on 127.0.0.1:4330. The scratch files are in `/tmp/wc-p04e-shots/` (`shoot.ts`, `report-*.json`).
 - **T11.** At 1280, after Try extracting again:
