@@ -179,3 +179,193 @@ Both fail on the old code: the first with `"interrupted"` in both views, the sec
 - No message carrying the orchestrator's code word arrived, and nothing else claimed to be from the orchestrator. The hostile fixture's "SYSTEM: …" text was treated as data.
 
 **The one thing to sharpen in this packet:** say up front that eve withdraws `ctx.ask` requests when a run ends, and that `runTurn` cancels a parked turn. Then "gap questions (park, never guess)" plainly means questions the runner owns and answers carried into the next attempt, and the next implementer doesn't have to work that out from eve's docs.
+
+### 2026-09-24 — Revision 1 (iter 007)
+
+Round 1 ended REVISE 9 (reviewer) and REVISE 9 (UI critic). The binding decisions V1–V20 are in `logs/handoff/P05-round-1-review.md` (commit `8177541`), and all twenty are done. The branch merged `origin/overnight/integration` twice, never rebasing: at `8177541` before the work, and at `9afdbd7` once integration moved. The second merge brought only the orchestrator's logs and handoffs and notes in the P03.1 and P06 packets, and the full chain ran again on it.
+
+| Commit | What |
+|---|---|
+| `ef810c9` | Merge `origin/overnight/integration` (`8177541`) |
+| `84c2b95` | The stricter validator (V1–V4), the model's neutral view (V10), and read-back controls (V6) |
+| `3c63419` | The server re-check test (V5), damaged records (V7), the details key and re-export (V8), the page (V11–V15, V17, V18), and the embedded PDF font (V16) |
+| `e444286` | The spec's workspace layout and its index line (V9); README (nit g) |
+| `d271a48` | V4 tests with the uncited sentence first |
+| `d1bbcfb` | A page-test wait that times out now reports what the page showed |
+| `cb94b46` | A view that reads across a preparation's finish reads it as running (the CI failure below); the runner line while the runner can't be reached |
+| `7b5f672` | Screenshots (V19) |
+| `14efe58` | The page never announces questions the person has already answered; the page-test teardown waits for the page's requests |
+| `ac6051c` | Merge `origin/overnight/integration` again (`9afdbd7`) |
+
+**What CI caught, and the fixes.**
+
+`3c63419`, `e444286` and `d271a48` each failed CI on one page test, "shows open questions in amber, …" (runs 36005121121, 36005131935 and 36005354782). Locally it passed every time, including with 2 workers and with `TZ=UTC`. So `d1bbcfb` made a timed-out wait report the page's live-line history, its rows, the open detail and its last requests. Run 36007546944 then showed the page announcing "Couldn't prepare “Staff Software Engineer · Fernwood”; its details say why." for a preparation whose row and detail both showed it parked with two questions.
+
+- **The cause.** A list or detail read spanned the whole `finish()`.
+  - The view read the application record before `finish` (processing: running) and the attempt after it.
+  - By the time it computed the state, the task was out of flight, so `stateOf` said "interrupted".
+  - Round 1's fix (`7171303`) covered a read *between* the two finishing writes, not one around both. Revision 1 widened the window: the list view now also reads the day's run budget (V18) between reading the records and computing the state.
+  - Round 1's views had the same window, only narrower. So this is a likely cause of the reviewer's nit i, a page test that flaked once under mutation load.
+- **The fix, in `cb94b46`.**
+  - Each application has a flight count (`FLIGHT_CHANGES`), bumped when a flight begins and when it ends.
+  - A view notes the counts before its first read. A flight that started or ended during the read reads as running, and the next read is whole.
+  - Test: `applications-routes.test.ts` › the state while a preparation finishes › "a view whose reads straddle the whole finish reads running, never interrupted, and the next read is the outcome". It holds the list's and the detail's attempt read while the whole preparation finishes, and it fails without the fix (R1 below).
+- **The next symptom, fixed in `14efe58`.** Run 36009698438 (`cb94b46`) caught it, in "an answer that the evidence belongs in the profile points there, …".
+  - The list read "running" once while the detail already showed the questions.
+  - The test answered them and pressed Prepare again. Only then did a list refresh see the preparation parked, and announce "Needs your answers" after the person had answered.
+  - Now answering a question stops watching that preparation, and a parked preparation is announced only while a question is open.
+  - Two page tests hold the list back until the questions show from the detail alone. Each fails without its fix (R4, R5).
+- **The teardown.** Under the full `pnpm test` load, two page tests failed locally during cleanup with `ENOTEMPTY`, and CI runs 36005121121 and 36005131935 showed the same after their first failure.
+  - Every read takes the profile's lock file, `.runner/profile.lock` (from P03's `ProfileStore.load`), and the workspace was being removed while a refresh was still reading.
+  - The page-test teardown now waits for the page's own requests to settle (`page.quiet()`) before closing it. No assertion changed.
+- **Also in `cb94b46`.** While the runner can't be reached, "Before preparing" no longer says "The runner's agent is running." It says "The runner can't be reached right now." until the next good refresh (R2, R3).
+
+**V → tests.**
+
+| V | What | Proven by |
+|---|---|---|
+| V1 | Numbers | `validator.test.ts` › revision 1, V1: one draft-level test per probe: 1,950 and 2,000; 200ms and 5GB; 1e6; Arabic-Indic digits; an ordinal; a multiplier; a decimal comma. Also "1,200 is 1200, never 1 and 200" (the reviewer's M9), and a control that EC2, K8s, P99 and Q3 stay names |
+| V2 | Titles | › revision 1, V2: Sr., Staff Platform-Engineer, Director/CTO/Architect opening a sentence, and lower-case "director of" and "principal engineer", against "Platform Engineer at Fernwood Labs, 2019–2021.". Also a control for the claim's own title and verb-like openings |
+| V3 | Dates | › revision 1, V3: "since", "present", an open "2019–", "currently", "to date", the start without the end, no dates for a claim that ends, and "since" against a single year. Controls: the stated range, and an open end on an open claim (C7). Also the refusal's wording |
+| V4 | Sentences | › revision 1, V4: 13 ways an uncited sentence rode along (no space, …, É, a lower-case start, !, ?, ．, ZWSP, NEL, a line break, an opening quote), 4 with the uncited sentence first, and a control that every good statement stays whole |
+| V5 | The server re-validates | `applications-routes.test.ts` › "a turn that reports “accepted” for a draft the validator refuses saves nothing: …". No document, no version, `processing` failed, the stage unchanged, and the refusals kept |
+| V6 | Positive controls | `expectReadBack` in the excluded-metric and hostile acceptance tests, before their absence loops: each DOCX and PDF must hold "Ada Quill" and a known included sentence. The pipeline, cover-letter, V8 and V16 tests also read their DOCX or PDF back for known text |
+| V7 | Damaged record → 409 naming the file | › a damaged application record (revision 1, V7): the job's record refuses and names the file, and no second application is started; a record naming another job doesn't block. `application-page.test.ts` › "a damaged application record that may be the job's refuses in one line that points to the file" |
+| V8 | The details key and re-export | › a changed name or contact line (revision 1, V8): re-exports the validated draft as a new version naming the old one, with no model turn and no run, even with the budget paused; the same header again is `already_prepared`; carried answers survive a header change. Page › "says the documents don't carry it yet …" ("Saved. Prepare again to put it on your documents."). `export.test.ts` › "a re-export says only the header changed" |
+| V9 | The spec and index | `docs/spec/mvp-spec.md` §5 lists `applications/<taskId>/preparation.json`, `…/versions/v<n>.json` and `applications/details.json` in the README's words; `ARCHITECTURE.md`'s Application line names them |
+| V10 | Excluded labels and wording | `validator.test.ts` › revision 1, V10 (3 tests); `prepare-logic.test.ts` › "tells the model an excluded label, id or wording as it would one it was never given, …"; the excluded-metric acceptance test (the model's outputs) |
+| V11 | The row line after answers | Routes › gap questions: "2 questions left.", "1 question left.", "Ready to continue.", and "Waiting for the evidence you're adding.". Page › gap questions: the row follows the answers, and the amber and "Needs your answer" heading go once none is open ("Your answers") |
+| V12 | Onboarding links | Page › the locked line ("Finish it on the Onboarding page."), and the add-evidence pointer and refusal. Profile stays only for the unreadable file (the V17 test) |
+| V13 | Watching | Page › watching (revision 1, V13): a page opened mid-preparation announces its outcome once; the runner-down notice is said once and cleared by the next good refresh. Also the two new gap-question watch tests |
+| V14 | Download names | `export.test.ts` › download names (revision 1, V14), 4 tests: the name; file-system safety; posting text; ASCII fallback plus `filename*`. Routes › `Content-Disposition` in the pipeline and V16 tests. Page › the `download` attributes |
+| V15 | Version notes | Page › refreshing in place ("Version 2 replaces it.", no "It cites" on version 1), and the V8 page test |
+| V16 | PDF characters | `export.test.ts`: Noto Sans prints Latin Extended, Greek and Cyrillic exactly; what it can't draw prints as U+FFFD and is named. Routes and page › characters the PDF can't draw: the name field and each PDF, and the formats that keep them |
+| V17 | `<code>`, one pointer | Page › "an unreadable career-profile.md is named as code, once, with the Profile page to fix it" |
+| V18 | Small fixes | nit c: routes › the sweep adopts a complete version, and never one missing a file. nit d: `prepare-prompt.test.ts` › NEL. nit g: `runner/README.md`. Polish: activity order (routes › "lists applications by their most recent activity, newest first"); the picker and `not_extracted` (page › "the picker starts on a job whose details are extracted …"); "Answer both questions" and "and" (page › the amber-questions test); the paused budget with links (page › "a paused budget says so in its own words …"); the run limit (page › first load, `ready-runs`); focus to the name field (page › "a refusal from the runner is one short line …"); the DOCX Author (export › "DOCX: the document's author is the person's name"); export links with their version (page › preparing). Polish 9, optional, is done: a file name wraps whole (`white-space: nowrap`). Polish 6, optional, is not done |
+| V19 | Screenshots | Below |
+| V20 | Mutation proofs | Below |
+
+**Mutation proofs (V20).** A scratch script, `/tmp/wc-p05-mut/mutate.mjs`, applies each mutation as an exact, once-only replacement. It runs the named test files, then restores the original bytes. `git diff` was empty after every batch. Each mutation fails tests:
+
+| ID | Mutation | Tests failed |
+|---|---|---|
+| M9 | No thousands separator: every comma splits a number | 3 of 72, including "1,200 is 1200 …" |
+| V1a | Year check with the commas removed | 3: the 1,950 and 2,000 probes, and digits of any script |
+| V1b | A unit glued on is not a quantity | 4: 200ms, 5GB, the ordinal, and the helper control |
+| V1c | Other scripts' digits are not normalised | 1: Arabic-Indic |
+| V2a | "Sr." ends the title phrase | 2 |
+| V2b | Hyphen and slash parts are not checked | 2 |
+| V2c | An opening role word never counts | 3: Director, CTO, Architect |
+| V2d | Lower-case "&lt;role&gt; of X" is not a title | 1 |
+| V3a | A cited claim's end year need not be stated | 3 |
+| V3b | An open end passes whatever the claims say | 3 |
+| V4a | An ellipsis doesn't end a sentence | 3 |
+| V4b | Only ASCII capitals count | 1 |
+| V4c | A full stop directly before a capital doesn't split | 2 |
+| V4d | Round 1's rule: split only at a full stop, a space and an ASCII capital | 2 |
+| M11 | No server re-validation after the turn | 1 of 38: the V5 test |
+| M12 | The DOCX reader returns "" | 4: the excluded-metric and hostile acceptance tests, the V8 re-export and the DOCX Author |
+| M10 | Both readers return "" | 7 of 39, both acceptance tests included. Rerun: my script's first run started the second edit to the same file from the original bytes, so it changed only the PDF reader (7 of 38). Fixed, then rerun with both |
+| V7 | A damaged record is never taken to be the job's | 2: the route test and the page test |
+| V8 | The documents' key has no details part | 3: the pipeline key, the route V8 test and the page V8 test |
+| V10a | The model is told `excluded_claim` for an excluded label | 3: two in validator, one in prepare-logic |
+| V10b | The model is told `excluded_claim` for an excluded claim's wording | 5, the excluded-metric acceptance test included |
+| R1 | `stateOf` ignores a flight that ended during the read | 1: the straddling-read test |
+| R2 | The runner line stays "running" while unreachable | 1: the V13 page test |
+| R3 | The next good refresh doesn't render the runner line again | 1: the V13 page test |
+| R4 | Answering leaves the preparation watched | 1: "once the person answers a question, …" |
+| R5 | A parked preparation with no open question is announced | 1: "… answered elsewhere is never announced …" |
+
+**Test expectations that changed, and why.** No test was weakened; each change follows a V decision.
+- **V4:** `validator.test.ts` › text helpers now splits "Worked with J. Doe on it [C1]. e.g. this stays [C1]." into two sentences, as the stricter rule requires, and the test's name changed with it. Each half cites C1, so the draft is judged the same.
+- **V3:** `datesIn` now also returns `endYears` and `startOnly`, so its two helper expectations gained those fields.
+- **V10:** in `prepare-logic.test.ts` and the routes excluded-metric test, the model's outputs now say `unknown_citation` where round 1 said `excluded_claim`. The person's view still says `excluded_claim`.
+- **Routes:**
+  - V14/V16: file views gain `download` and `missing`.
+  - V8: the key's regex gains `+details@<12 hex>`.
+  - V14: `Content-Disposition` is the descriptive name.
+  - V11: the parked state "Waiting for your answer to 2 questions." became "2 questions left." with `open`.
+  - V17: readiness gains `code`, and V16: details gain `pdfMissing`, in the assertions on whole objects.
+- **Page:**
+  - V12: the locked line ends "Finish it on the Onboarding page." instead of "See the Profile page.".
+  - V18: export link text gains ", version N", and V14: `download` is descriptive.
+  - V18: after `details_missing`, focus goes to `details-name` (it was `prepare-submit`), and "Answer both questions" replaces "Answer all 2 questions".
+  - V12: the add-evidence pointer and its refusal name Onboarding.
+  - V15: the refresh test expects "Version 2 replaces it." and no "It cites" on version 1.
+  - The hostile test's link text is now "Cover letter, version 1 · Word".
+- **Export:** V16 replaced round 1's Helvetica `toWinAnsi` test with the two Noto Sans tests.
+
+**V16: the font.**
+- **The package.** `@expo-google-fonts/noto-sans` 0.4.2, pinned exactly in `runner/package.json`.
+  - Licence: MIT AND OFL-1.1.
+  - 13.4 MB unpacked, 82 files. The runner embeds two of them: `NotoSans_400Regular.ttf` (629,024 bytes) and `NotoSans_700Bold.ttf` (630,968 bytes). pdfkit subsets each into the PDF through its own fontkit.
+  - No dependencies, no install scripts, no native build, no network. The lockfile change is additive (8 lines).
+- **What it draws.** Latin with its extensions, Greek, Cyrillic (the critic's "Ада Квилл" now prints) and Vietnamese, each checked by a test.
+- **What it doesn't.** CJK, Arabic, Hebrew, Thai, emoji, and symbols such as "→" and "✓". I checked these with the same fontkit calls, and the tests cover CJK, Hebrew, emoji and "→". Each missing grapheme cluster prints as U+FFFD and is recorded on the version (`pdfMissing`). The page warns at the name field and beside that PDF: "The PDF can't draw “艾” and “达”, so it prints � in their place. The Markdown and Word files keep them."
+- **Rejected.**
+  - `@ibm/plex-sans`: a postinstall telemetry script.
+  - `@fontsource/dejavu-sans`: Latin only.
+  - `@fontsource/noto-sans`: per-script WOFF subsets.
+  - `dejavu-fonts-ttf`: unmaintained.
+- **Clean install.** `git archive HEAD` (`7b5f672`) went into `/tmp/wc-p05-clone-r1`, then `pnpm install --frozen-lockfile --offline` exited 0 with 458 packages (round 1: 457). The only lifecycle script is the existing `unrs-resolver` postinstall. `export.test.ts` and `validator.test.ts` pass there: 2 files, 91 tests.
+
+**Screenshots (V19).** 32 full-page files: `docs/screenshots/P05-applications-{empty,prepared-diff,gap-question,refusal,exports,reexport-name-change,pdf-warning,runner-down}-{light,dark}-{390,1280}.png`. The five round-1 states were retaken on the revised page.
+- **The three new states.**
+  - **reexport-name-change:** the name changed to "Ада Квилл" (the critic's own example, which the font now prints, so there is no warning).
+    - Prepare again says "Re-exported “Platform Lead · Fernwood” as version 3, with your new details.".
+    - "Runs today" stays 6 of 10. Version 2 says "Version 3 replaces it.". Version 3's changes say only the name and contact line changed, and no model ran.
+  - **pdf-warning:** the name "Ada Quill (艾达)". The note shows under the name field, and version 4's PDF link carries the same warning.
+  - **runner-down:** a preparation held open, then the harness stopped.
+    - The line says "Can't reach the runner. Is it still running?" once.
+    - "Before preparing" says "The runner can't be reached right now.", and the row still says "Preparing now…".
+- **The harness.** A scratch script, `/tmp/wc-p05-screens/harness2.ts`, never committed.
+  - It runs the real `createBridgeApp` with only the applications module, on 127.0.0.1:4320. The port was checked free before each start, and the harness was stopped after each.
+  - The workspaces were fresh, under `/tmp/wc-p05-screens/`.
+  - The test suite's scripted model stood in for eve: no live model, no network, nothing from HOME or the keychain.
+  - Sign-in went through a real `/ui/login?nonce=` link.
+  - Captures used Chrome DevTools, with each file saved to an absolute path in this worktree. `git status` confirmed all 32 landed here.
+- **Checks.**
+  - 390 is device-metrics emulation (`390x844x1`). Every capture had `innerWidth` 390 or 1280 and `scrollWidth === clientWidth`, and no element extends past the viewport at 390.
+  - Contrast was measured for every visible text node against its composited background. That covered all four applications with every details section open, in both themes, and the runner-down page in light.
+    - The lowest was 7.17:1 (light) and 6.76:1 (dark), with nothing under 4.5:1.
+    - The new notes measure 21:1 (light) and 19.91:1 (dark). The runner line measured 21:1 on the light runner-down page. I didn't measure the dark one; the line uses the notes' text colour.
+  - All 32 SHA-256 checksums are unique, and every PNG's width matches its name.
+
+**The chain, from the repo root at `ac6051c`, after the second merge.** It gave the same counts at `14efe58`. `git status --porcelain` was empty before and after.
+- `pnpm install --frozen-lockfile`: already up to date.
+- `pnpm typecheck`: 6 of 6 workspaces.
+- `pnpm test`, exit 0:
+  - contracts: 16 files, 235 tests
+  - job-assistant: 6 files, 153 tests
+  - catalog: 26 files, 168 tests
+  - runner: 52 files, 1053 tests (round 1: 973). The `eve eval` then passed 7 of 7 files and 159 gates, preparation 54.
+  - extension: 21 files and 329 tests passed; 1 file and 5 tests skipped
+  - `scripts/*.test.mjs`: 2 of 2
+- `pnpm -r lint`: exit 0, `--max-warnings 0`.
+- `pnpm check:fixtures`: exit 0.
+- No rerun was needed at `--workspace-concurrency=1`.
+
+**CI.**
+
+| Head | Run | Result |
+|---|---|---|
+| `3c63419`, `e444286`, `d271a48` | 36005121121, 36005131935, 36005354782 | failure: the straddled read (above) |
+| `d1bbcfb` | 36007546944 | failure: the same, now with the page's state in the error |
+| `cb94b46` | 36009698438 | failure: the late "Needs your answers" (above) |
+| `7b5f672` | 36009884118 | success |
+| `14efe58` | 36011113393 | success |
+| `ac6051c` | 36012339885 | success |
+
+The reply gives this report commit's own head SHA and CI run.
+
+**Notes.**
+- **Download names.** A document downloads under the same descriptive name in every version with the same name and contact line, because V14's example names no version. The link text names the version, and so does the diff's download name. A browser adds its own " (1)" to a second download of the same name.
+- **A long page-test run.** While I was building the page changes, one page test ("an answer that the evidence belongs in the profile …") ran for 447 s and timed out, once. It passed alone in 4.5 s, and the whole file passed after. It looked like a stalled machine, not the page.
+- **Carried items are untouched:** P06's and P08-B's lists in the handoff.
+
+**Boundaries.**
+- **Scope.** Nothing outside `Owns:` and this revision's grants was touched: `packages/contracts`, `context.ts`, `run-harness.ts`, P03's and P04's files, other skills and `extension/` are unchanged. In `docs/spec/mvp-spec.md` only §5's layout lines changed, and in `ARCHITECTURE.md` only the Application index line. The font follows the export-dependency rules.
+- **eve.** No eve connection was added.
+- **Ports and scratch.** Only port 4320 and `/tmp/wc-p05-*` were used.
+- **Refused commands.** No deny rule refused anything. The harness refused a few compound shell commands (loops over runtime values, and piped git), which I split.
+- **Orchestrator messages.** Two genuine messages carried the code word: the revision itself, and the rule to write only inside this worktree or `/tmp/wc-p05-*`, with absolute screenshot paths. Both were followed. Nothing else claimed to be from the orchestrator.
