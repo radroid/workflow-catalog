@@ -392,6 +392,7 @@ async function listEntry(ctx: RunnerContext, summary: JobSummary) {
     ...(summary.url !== undefined ? { url: summary.url } : {}),
     ...(summary.newestReadable ? { savedAt: summary.newestReadable.capturedAt } : {}),
     unreadable: summary.unreadable,
+    ...(summary.directoryUnreadable ? { directoryUnreadable: summary.directoryUnreadable } : {}),
     extraction: extraction ?? null,
   };
 }
@@ -438,6 +439,8 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
           revisions: detail.revisions,
           extraction: extraction.map((state) => state ?? null),
           unreadable: detail.unreadable,
+          // P06.1 item 2.2: the job's own directory couldn't be listed (readJob no longer answers 404 for this).
+          ...(detail.directoryUnreadable ? { directoryUnreadable: detail.directoryUnreadable } : {}),
         });
       });
 
@@ -503,7 +506,19 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
         if (read.kind === "unreadable") {
           return errorResponse(409, "snapshot_unreadable", `That revision's file can't be read: ${jobFilePath(jobId.data, `snapshot-${revision.data}.json`)}.`);
         }
-        const extraction = await queueExtraction(ctx, jobId.data, revision.data);
+        let extraction: ShownExtractionState;
+        try {
+          extraction = await queueExtraction(ctx, jobId.data, revision.data);
+        } catch (error) {
+          // P06.1 item 2.1: queueExtraction's write of the waiting state can throw (extraction-N.json exists as a
+          // directory, say); a plain typed refusal, never an unhandled 500.
+          // K5 (round-1 revision): logged with its cause and path (the folder was otherwise undiagnosable -- the
+          // route swallowed the error entirely), and refused exactly as the snapshot_unreadable branch above does
+          // for a damaged file (T6): a 409 naming the file, never a generic 500.
+          const extractionPath = jobFilePath(jobId.data, `extraction-${revision.data}.json`);
+          ctx.log.error(`POST /api/captures/${jobId.data}/${revision.data}/extract: couldn't write ${extractionPath}: ${error instanceof Error ? error.message : String(error)}`);
+          return errorResponse(409, "extraction_state_unwritable", `Couldn't start extraction: this revision's extraction state can't be saved: ${extractionPath}.`);
+        }
         return c.json({ ok: true, extraction, job: read.snapshot });
       });
     },
