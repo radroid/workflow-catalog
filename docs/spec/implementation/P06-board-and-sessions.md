@@ -46,6 +46,7 @@ The items:
 - **From P05's round-3 critic** (`logs/handoff/P05-round-3-review.md`):
   - The combined outcome line cuts job names mid-word, even at 1280, and its counted form names none, not even the failure. Cut at a word, and name at least the failure.
   - A repeated identical refusal first announces the tag alone ("Refused"). Announce the whole line each time.
+  - The same short-name loop as P06.1's round-1 issue 3 (`logs/handoff/P06.1-round-1-review.md`). `settledMessage` names no application when every name is under 16 characters. Name each one.
 
 ## Alongside P08-B and P03.1 (iter 008)
 - **The budget pause on the board.** P08's deliverable shows a paused budget and its reason ("provider limit") on the board and in Settings. Settings already shows it (P08-A). The board is P06's: read the budget from `GET /status` or `GET /api/runs/budget`, and never edit `runs.ts`, `budget.ts` or `settings.html`.

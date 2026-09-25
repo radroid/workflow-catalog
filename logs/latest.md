@@ -1,10 +1,10 @@
 Latest: iter-007 in progress since 2026-09-24 about 08:10.
 - **P03.2** (#17): merged 47cca70 about 15:08, after three rounds (the last by an Opus escalation). The smoke test on the integrated branch is green (runner 891, evals 107 gates).
 - **P05** (#16): round 2 REVISE 5 + UI REVISE 2 (X1–X10). The first escalation pushed X5 and X7 (ce49ca9), then the orchestrator's session died. A fresh Opus escalation resumed at about 00:10 on 09-25 and finished revision 2 at 1a0f854 (CI 36083736390 green; two edited assertions, both justified). Its worktree keeps `packet/P05` for any later REVISE. Last closed: iter-006.
-- **Round 3** (fresh Opus reviewer and critic): REVISE 4 + UI REVISE 2. Revision 3 (Y1–Y8 in `logs/handoff/P05-round-3-review.md`) went to the same escalation at about 02:35. Round 4 is narrow, with the same two reviewers; new word-matching gaps of an older kind go to a follow-up packet, P05.1, not a REVISE.
-- **P06.1** was pulled forward alongside revision 3 (Sonnet, port 4380), from `logs/handoff/P06.1-prompt.md`. None of its files overlap P05's PR.
+- **Rounds 3 and 4:** round 3 gave Y1–Y8, and the same escalation did revision 3 (00ff33e, CI green). Round 4 (narrow, the same reviewers) gave REVISE 2 + UI REVISE 1. Revision 4, Z1–Z4 in `logs/handoff/P05-round-4-review.md`, went to the escalation at about 04:40. Z4 corrects the orchestrator's own Y rulings. Round 5 is narrow; older-kind validator gaps go to P05.1, created at P05's merge.
+- **P06.1** (#18, pulled forward): round 1 gave REVISE 5 + UI REVISE 7. Revision 1, K1–K12 in `logs/handoff/P06.1-round-1-review.md`, went to the same Sonnet implementer at about 04:55. Round 2 uses the same reviewer and critic, and a later REVISE goes to an Opus escalation.
 
-Next, in iter 007: round 4 when revision 3 reports. On two APPROVEs, squash-merge #16, run the smoke test, and close iter 007.
+Next, in iter 007: on two APPROVEs for #16, squash-merge it, run the smoke test, close iter 007, and start iter 008. #18 merges on its own two APPROVEs.
 - **Iter 008, when P05 merges:** P06 ∥ P08-B ∥ P03.1 (Sonnet), from `logs/handoff/{P06,P08-B,P03.1}-prompt.md`. Owns were checked; each packet has an "alongside" section. P06's Jobs- and Status-page items were split out into P06.1 (GOALS P3.H), already running.
 - **Then:** after P06, P07-C (it carries P07-B's follow-ups and the real-handler e2e) and P10-A. Then P10-B (it carries P02.2's nits).
 - **Reviews:** one Opus reviewer and one Opus UI critic per PR. After round 1, rounds are narrow and reuse the same reviewers. A REVISE goes back to the same implementer once; a second REVISE goes to a fresh Opus escalation.

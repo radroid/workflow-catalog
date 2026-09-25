@@ -1603,3 +1603,62 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **Carried:**
   - to P06: the combined line's mid-word cuts, and the repeated-refusal announcement on the Applications page;
   - to P06.1: the same repeated-refusal pattern on the Jobs page.
+
+## 2026-09-25 — P05 peer review, round 4 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (the round-3 Opus reviewer and UI critic, narrow), PR #16 at 00ff33e
+**Severity:** low. Y1–Y8 are all done. Three narrow regressions against 1a0f854 remain, and three side effects of the orchestrator's own rulings were flagged.
+
+**Verdict:** REVISE — 2 issues; UI REVISE — 1 issue.
+- **UI critic:** after a failed or interrupted attempt, Prepare again no longer retries. Y5's exemption covered only parked attempts.
+- **Reviewer:** Y3 opened two title holes: a bracketed seniority word ("Platform Engineer (Staff)"), and "I was engineering manager at …".
+
+**What holds:**
+- The r3 corpus is down to 5 mismatches from 28. They are ruled refusals and P05.1 findings.
+- Honest controls pass, and exactly the 5 listed test lines are removed.
+- All 19 mutations fail tests.
+- The chain is green, merged and unmerged (runner 1289, 161 gates), and so is CI.
+- The UI sweep is clean.
+
+**Decision:** Z1–Z4 in `logs/handoff/P05-round-4-review.md` go to the same escalation.
+- **Z4 corrects the orchestrator's own rulings:**
+  - Y2's added abbreviations count only when capitalised, so "sales rep. Shipped…" can't carry an uncited sentence;
+  - "scores of" counts only where a quantity can start;
+  - Y1's words never make a claim open, which closes the "now retired" hole.
+- **Round 5** is narrow. Only these count: an undone Z item, a regression against 00ff33e, or a weakened test.
+- **P05.1** will be created when P05 merges, to hold the recorded validator findings.
+
+**Lesson:** each validator round has fixed its list and opened one or two narrow holes next to it. Keeping later rounds narrow, and parking older-kind gaps in P05.1, is what lets the critical path converge.
+
+## 2026-09-25 — P06.1 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (an Opus reviewer and an Opus UI critic, ui14), PR #18 at e41aefd
+**Severity:** low. The contrast fixes and most items hold. Some tests don't prove what they claim, some fixes are half-done, and 16 screenshots are wrong.
+
+**Verdict:** REVISE — 5 issues; UI REVISE — 7 issues.
+- **Reviewer:**
+  1. The busy-guard test and the runner-down "clear" test pass without their fixes.
+  2. Short names aren't named in the combined message.
+  3. Only one detail section handles focus.
+  4. A failed waiting-state write lost its log line and gives a generic refusal.
+- **UI critic:**
+  1. A first-load notice never clears.
+  2. The same focus gap.
+  3. 4 Status shots are 531 px wide, and 12 Jobs shots were captured scrolled.
+  4. "Failed to fetch" is announced.
+  5. There's no visible busy state.
+  6. A damaged job gets a second name.
+  7. The folder row claims "0 revisions".
+
+**What holds:**
+- `.secondary` borders are 7.55–8.46:1 (were 1.27:1), and `.error` text is 6.29–7.59:1 (was 3.84:1).
+- No existing test was edited.
+- The chain and CI are green, and scope is clean.
+
+**Decision:**
+- K1–K12 in `logs/handoff/P06.1-round-1-review.md` go to the same Sonnet implementer, as its one revision round.
+- K11 (the pairing buttons) and K10 (long paths at 390) were the critic's "outside this round" items. They're ruled in, because P06.1 is the Status page's follow-up packet.
+- The `runner.css` grant is widened for the busy style and the path wrap.
+- P05's identical short-name loop in `settledMessage` is carried to P06.
