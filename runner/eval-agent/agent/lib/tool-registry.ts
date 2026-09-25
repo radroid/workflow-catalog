@@ -17,4 +17,7 @@ export const P03_TOOLS = ["ask_follow_up", "extract_claims"] as const;
 /** extract_job (job capture's structured extraction, mirroring P03's extract_claims). */
 export const P04_TOOLS = ["extract_job"] as const;
 
-export const REGISTERED_TOOLS: readonly string[] = [...P02_TOOLS, ...P03_TOOLS, ...P04_TOOLS].sort();
+/** prepare_application (preparation with evidence: the requirements, the cited draft, the validator). */
+export const P05_TOOLS = ["prepare_application"] as const;
+
+export const REGISTERED_TOOLS: readonly string[] = [...P02_TOOLS, ...P03_TOOLS, ...P04_TOOLS, ...P05_TOOLS].sort();

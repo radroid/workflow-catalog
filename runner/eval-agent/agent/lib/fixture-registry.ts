@@ -1,6 +1,7 @@
 import type { MockModelRequest, MockModelResponse } from "eve/evals";
 import { respond as jobsRespond } from "./fixtures/jobs.ts";
 import { respond as onboardingRespond } from "./fixtures/onboarding.ts";
+import { respond as preparationRespond } from "./fixtures/preparation.ts";
 
 /**
  * A later packet's scripted-model branch. Given the current mock-model
@@ -20,4 +21,4 @@ import { respond as onboardingRespond } from "./fixtures/onboarding.ts";
  */
 export type FixtureHandler = (request: MockModelRequest, prompt: string, done: boolean) => MockModelResponse | string | undefined;
 
-export const EXTRA_FIXTURE_HANDLERS: readonly FixtureHandler[] = [onboardingRespond, jobsRespond];
+export const EXTRA_FIXTURE_HANDLERS: readonly FixtureHandler[] = [onboardingRespond, jobsRespond, preparationRespond];

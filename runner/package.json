@@ -19,12 +19,18 @@
     "test": "vitest run && node --import ./lib/register-ts.mjs cli/eval.ts"
   },
   "dependencies": {
+    "@expo-google-fonts/noto-sans": "0.4.2",
     "@hono/node-server": "2.1.1",
     "@workflow-catalog/contracts": "workspace:*",
     "@workflow-catalog/job-assistant-eve": "workspace:*",
     "ai": "7.0.107",
+    "docx": "9.5.2",
     "eve": "0.63.0",
     "hono": "4.13.8",
+    "pdfkit": "0.20.2",
     "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "unpdf": "1.8.1"
   }
 }

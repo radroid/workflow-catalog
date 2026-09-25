@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="runner-nav" content="Applications" />
+    <title>Applications · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/application.css" />
+    <script type="module" src="/ui/assets/application.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1 id="page-title" tabindex="-1">Applications</h1>
+      <p class="lede">Prepare a resume, and a cover letter if you want one, for a saved job. Every sentence comes from a claim you confirmed, and the runner checks each one before anything is saved.</p>
+
+      <!-- The page's one persistent live region (P03's pinned "Last action" line, P04's L12): each outcome is announced once, here and nowhere else. -->
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><div class="last-action-body"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div></div>
+
+      <section class="card" aria-labelledby="ready-title">
+        <h2 id="ready-title">Before preparing</h2>
+        <ul class="ready-list" id="ready-list">
+          <li class="muted">Loading…</li>
+        </ul>
+      </section>
+
+      <section class="card" aria-labelledby="details-title">
+        <h2 id="details-title">Your name on the documents</h2>
+        <p class="muted small">The runner puts these at the top of every resume and at the end of every cover letter. The model never sees them.</p>
+        <form id="details-form" novalidate>
+          <div class="field">
+            <label for="details-name">Name</label>
+            <input id="details-name" name="name" type="text" autocomplete="name" maxlength="80" aria-describedby="details-name-error details-name-note" required />
+            <p id="details-name-error" class="field-error" hidden></p>
+            <p id="details-name-note" class="field-note small" hidden></p>
+          </div>
+          <div class="field">
+            <label for="details-contact">Contact line <span class="muted">(optional)</span></label>
+            <input id="details-contact" name="contact" type="text" autocomplete="off" maxlength="160" placeholder="Email · city" aria-describedby="details-contact-note" />
+            <p id="details-contact-note" class="field-note small" hidden></p>
+          </div>
+          <button class="button secondary" type="submit" id="details-submit" aria-disabled="false">Save</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="prepare-title">
+        <h2 id="prepare-title">Prepare a saved job</h2>
+        <p class="muted small">Choose a job you saved on the <a href="/ui/jobs">Jobs</a> page. Preparing it again with nothing changed writes nothing new.</p>
+        <form id="prepare-form" novalidate>
+          <div class="field">
+            <label for="prepare-job">Saved job</label>
+            <select id="prepare-job" name="jobId"></select>
+          </div>
+          <div class="check">
+            <input id="prepare-cover" name="coverLetter" type="checkbox" />
+            <label for="prepare-cover">Also write a cover letter</label>
+          </div>
+          <button class="button" type="submit" id="prepare-submit" aria-disabled="false">Prepare</button>
+        </form>
+        <p id="jobs-empty" class="muted" hidden>No saved jobs yet. Save one on the <a href="/ui/jobs">Jobs</a> page first.</p>
+      </section>
+
+      <section class="card" aria-labelledby="applications-title">
+        <h2 id="applications-title">Applications</h2>
+        <ul class="applications-list" id="applications-list">
+          <li class="muted">Loading…</li>
+        </ul>
+        <p id="applications-empty" class="muted" hidden>No applications yet. Prepare a saved job above.</p>
+      </section>
+
+      <section class="card" aria-labelledby="detail-title" id="detail-section" hidden>
+        <h2 id="detail-title" tabindex="-1">Application</h2>
+        <div id="detail-body"></div>
+      </section>
+    </main>
+  </body>
+</html>

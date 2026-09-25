@@ -1,25 +1,30 @@
 {{!--
   cover-letter.md.hbs — renders one prepared cover letter (mvp-spec §3 F7).
-  Same claim-citation contract as resume.md.hbs: any statement asserting
-  something about the person carries the claim ID(s) it cites. Purely
-  connective sentences (greeting, sign-off, "I'm excited about...") carry no
-  citation — see cover-letter-drafting/SKILL.md's boundary on this.
+  Same claim-citation contract as resume.md.hbs: every sentence the model
+  writes carries the claim label(s) it cites, and the validator refuses one
+  that doesn't (mvp-spec F7: "rejects any sentence that cites no confirmed
+  claim ID"). The runner's exporter renders this template, then strips the
+  citation markers.
 
-  Render context:
+  The date, greeting and sign-off are the runner's, not the model's, so
+  there is no uncited "connective" sentence: the greeting names the company
+  only when its extracted name reads as a plain name (runner/export/
+  document.ts, plainCompanyName), and says "Dear hiring team," otherwise.
+
+  Render context (runner/export/document.ts, CoverLetterModel):
     {
-      person: { name, contact },  // see resume.md.hbs — not sourced from CareerProfile
-      job: { title, company },    // from JobSnapshot.structured
-      date: string,                // ISO-8601 date this was prepared
-      greeting: string,            // e.g. "Dear Northwind Labs hiring team,"
+      person: { name, contact },  // see resume.md.hbs — typed by the person
+      date: string,                // the date this was prepared, written out:
+                                   // "September 24, 2026"
+      greeting: string,            // "Dear Northwind Labs hiring team,"
       paragraphs: [
         {
           statements: [
-            { text: string, claimIds: [string, ...] } // claimIds may be empty
-                                                         // only for a connective sentence
+            { text: string, claimIds: [string, ...] } // never empty
           ]
         }
       ],
-      signOff: string              // e.g. "Sincerely,"
+      signOff: string              // "Sincerely,"
     }
 --}}
 {{date}}
@@ -33,4 +38,6 @@
 {{signOff}}
 
 {{person.name}}
+{{#if person.contact}}
 {{person.contact}}
+{{/if}}
