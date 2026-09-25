@@ -539,3 +539,198 @@ The reply gives this report commit's own head SHA and CI run.
 - **Ports and scratch.** Only 127.0.0.1:4320 was used, and only `/tmp/wc-p05e2-*` was written: probes, scratch, mut, screens and the chain logs. The reviewers' folders, the critic's harness and `/tmp/wc-p05e2-wip/` were only read.
 - **Refused commands.** No deny rule or permission check refused anything. The harness refused three compound commands as too complex to verify: a shell loop running node over a runtime value, a `cd ..` before git, and a mkdir, heredoc, cd and node chain. I split them or used Write.
 - **Orchestrator messages.** None arrived. No message carried the code word, and nothing claimed to be from the orchestrator.
+
+### 2026-09-25 — Revision 3 (iter-007 Opus escalation)
+
+Round 3 ended REVISE 4 (reviewer) and REVISE 2 (UI critic). The binding decisions Y1–Y8 are in `logs/handoff/P05-round-3-review.md`, from `origin/overnight/integration` at `5c55e35`. The escalation that did revision 2 did all of them, starting from `1a0f854`.
+- The branch merged `origin/overnight/integration` once, never rebasing: at `629867f`, in `42f5006`. Integration's five new commits change no P05 file and no code: GOALS.md, P06's and P06.1's specs, the packet README and `logs/`. The full chain ran on the merge.
+
+| Commit | What |
+|---|---|
+| `6e4e47b` | Y1: the present, and dates counted from today |
+| `84fd103` | Y2: short abbreviations, and a way out for the rest |
+| `02ddd67` | Y3: titles wherever they stand |
+| `643ca6e` | Y4: more quantities in words |
+| `a832068` | Y6: documents dated in the runner machine's time zone |
+| `bcff8b8` | Y5: Prepare again keeps the newest version's letter choice |
+| `680d3a2` | Y7: a refused re-export has a way forward |
+| `7c9919c` | Y8: screenshots (Y5, Y7, and V19's 32 retakes) |
+| `278a784` | Y7's X5 note and Y2's listed ending, tested (new assertions only) |
+| `42f5006` | Merge `origin/overnight/integration` (`629867f`) |
+
+**Y → commit and tests.** Counts are test cases, `it.each` rows included. "Validator" is `validator.test.ts`; "routes", "page" and "export" are as in revision 2.
+
+| Y | Commit | What changed | Proven by |
+|---|---|---|---|
+| Y1 | `6e4e47b` | These are open ends wherever they are, so X4(a) applies (refused unless a cited claim is itself open): "now", "today", "presently", "nowadays", "remain(s)", "to date" (never "up to date"), "as of now", "at present", "these days", "continue(s) to" and "and beyond". `datesIn` also returns `relative`: "recently", "lately", "last/this/past year, month, week or quarter", "the last N years" and "N years ago" (N a numeral, a number word, "a", "a few", "several" and the like). A sentence with one is refused unless a cited claim's own text has the same words, and the refusal ends "Use the years they state instead." "The last year of" a degree is not last year | Validator › revision 3, Y1 (26): the 13 present-time probes against closed claims (C9, and a test-local closed C10); the 8 relative dates; "two years ago" and its message; the phrase named in the message. Passing: "Staff Engineer … since 2022, where I now lead … [C11]"; the reviewer's "… since 2022, where I now lead … [C8][C7][C1]"; "…, which I remain today [C8][C7]"; a claim's own "Recently …" ("lately" is still refused against it). The honest controls: "up to date", "up-to-date", the degree's last year, the claim's own range, no date. `datesIn` expectations |
+| Y2 | `84fd103` | X2's one-part rule stays: "it." and "UK." end a sentence. The list gains mt, ft, pt, lt, mx and rd, and sgt, capt, cpl, pvt, col, gen, maj, adm, cmdr, rev, hon, gov, sen, rep, supt, ave and blvd. An uncited sentence that ends in an unlisted one-part dotted word adds "This sentence seems to end at “Xx.”. If that's an abbreviation, write the word out.", both in the refusal and in what the model is told | Validator › revision 3, Y2 (26): the reviewer's three (Mt. and Ft., Lt., Mx.) passing; each of the 23 listed words keeping a sentence whole, capitalized and not; "it." and "UK." still splitting; the hint for "Sq.", in `refusals` and `forModel`. No hint for an ordinary sentence end, or for a listed word that really ends one ("Quill Co.", added in `278a784`) |
+| Y3 | `02ddd67` | An opening role phrase is a title before any of: "at", "of", "for", "on", "with", "in", a comma, a colon, a dash, an opening bracket, or the sentence's end. A dash or bracket reads as a comma; one inside a word or a range stays. "Lead the…" and "Head the…" still don't count. A role phrase right after "and", "then" or "later" counts before the same followers, so "then head the team" stays a verb. So does one right before "role", "position" or "title". A capitalized first word that can't be part of a title ("As", "While", "I" and the like) isn't one. Titles still compare whole, ignoring case, spaces and hyphens | Validator › revision 3, Y3 (21): the 17 issue-3 forms, refused against C9 and a sentence-case C10; the claim's own title in each place, passing. "As Senior Platform Engineer at Northwind Labs, I led … [C8][C1]." and its "While …" form pass, and "As Staff Platform Engineer …" is refused. Verbs after "and", "then" and a first word; `titlesIn` expectations |
+| Y4 | `643ca6e` | "single-digit" reads as "double-digit" does. "An order of magnitude" and "orders of magnitude" read as 10×, and quintuple(d) and sextuple(d) as double(d) does. "A couple of" and "scores of" are vague counts with their own keys, as dozens, hundreds, thousands, millions and billions already were ("a dozen" stays 12). A draft may use one only if a cited claim uses the same words | Validator › revision 3, Y4 (13): the reviewer's probes and the rest of the list (11); the keys, and what isn't a quantity ("in order of", "the couple's scores"). The honest controls: a claim's own word cited verbatim, and "tenfold" for "an order of magnitude". Never another word: "dozens" for "scores of", "double-digit" for "single-digit" |
+| Y5 | `bcff8b8` | The detail's Prepare again sends the newest version's cover-letter choice, unless it continues a parked attempt, which keeps its own | Page › Prepare again keeps the newest version's cover letter choice (revision 3, Y5) (3): the critic's r3-s7 steps, where Prepare again is "already prepared" twice, with no letter and no model turn; the other direction; a parked letter attempt continued over a resume-only newest version |
+| Y6 | `a832068` | `letterDate` (the letter's date and `diff-v<n>.md`'s "Prepared" line) formats in the runner machine's zone. X8 holds: a re-export keeps the letter's first date | Export › documents are dated in the runner machine's time zone (revision 3, Y6) (2): an evening letter in Markdown, DOCX and PDF, and a second zone. Routes › documents dated where the person is (revision 3, Y6) (1): an evening preparation, and a re-export three evenings later. Both files pin `TZ` to America/New_York and restore it afterwards |
+| Y7 | `680d3a2`, `278a784` | A re-export whose stored draft today's checks refuse is refused once. The refusal is noted on that version's record (`reexportRefused`: when, and the newest version then), and until a newer version exists, the next Prepare of the same inputs runs a fresh preparation. The server's message now ends "The documents must be prepared fresh: preparing again runs a new preparation." The page's line is "Not re-exported: its sentences no longer pass the checks; preparing again starts fresh." The detail carries `reexportRefused`, and the refused version's details note reads "Your name or contact line has changed since this version, and its sentences no longer pass the runner's checks. Prepare again runs a fresh preparation." An older version's refused re-export (X5) leaves the newest version's note alone. Prepare again keeps that version's letter choice (Y5), so it re-exports sentences the refusal didn't touch | Routes › a refused re-export has a way forward (revision 3, Y7) (2). First: tamper; the refusal, with its note on `v1.json` and nothing else written and no run; then Prepare runs fresh (a model turn and a run). Version 2 carries the new name, and its draft passes `validateDraft` against the profile and posting; then "already prepared". Second: the X5 case. Page › a refused re-export has a way forward (revision 3, Y7) (2). First: the line and the note; then Prepare again prepares version 2, and both notes clear. Second: the X5 case, where the newest version's note stays and Prepare again re-exports it. Also the edited X7 assertions below |
+| Y8 | `7c9919c`, this report | Screenshots, mutation proofs, the list of edited assertions, the chain, CI | Below |
+
+**Round-3 issues → Y and test.**
+
+| Issue | Y | Test |
+|---|---|---|
+| Reviewer 1 (a revision-2 regression): open ends and relative dates in words | Y1 | Validator › revision 3, Y1 |
+| Reviewer 2 (a revision-2 regression): honest one-part dotted words refused | Y2 | › revision 3, Y2 |
+| Reviewer 3: inflated or changed titles | Y3 | › revision 3, Y3 |
+| Reviewer 4 and the nit's quantities | Y4 | › revision 3, Y4 |
+| Reviewer nits: "As Senior Platform Engineer …"; "Remains a …" and "2019–2021 and beyond" | Y3; Y1 | › revision 3, Y3 › "passes “As Senior …”"; › revision 3, Y1 |
+| Critic 1: Prepare again flips the cover letter back | Y5 | Page › revision 3, Y5 |
+| Critic 2: documents dated in UTC | Y6 | Export and routes › revision 3, Y6 |
+| Critic polish: X7's refusal is a loop | Y7 | Routes and page › revision 3, Y7 |
+| Critic polish: V19's 32 shots show the old hint | Y8 | The 32 retakes, below |
+| Critic polish: the combined line; a repeated identical refusal's tag, here and on the Jobs page | none | Carried to P06 and P06.1; untouched |
+| Reviewer nits: X1's first-word readings; "x.com."; a tampered newest same-input version | none | As ruled, carried to P05.1, and acceptable (and Y7 now gives it a way forward) |
+
+**Checked against the reviewer's probes.** Copies of r3 to r3d in `/tmp/wc-p05e2-probes/` ran against the head after the merge.
+- **r3:** 5 mismatches (28 at `1a0f854`): the two findings below, and three refusals X4(a) ruled ("still" used of the tooling, "since" as a conjunction, "current" as an adjective), unchanged since `1a0f854`. Every other probe and honest control behaves as wanted.
+- **r3's realistic resume and cover letter** are refused at one sentence, "Shipped the on-call rotation tooling that three engineering teams now use [C3].". This is the cost Y1 names. With that sentence worded as the draft's own cover letter words it ("…used by three engineering teams [C3]."), the whole resume and letter pass (`/tmp/wc-p05e2-scratch/realistic-r3.ts`). The realistic draft pinned in `validator.test.ts` in revision 2 passes unchanged.
+- **r3b:** 0 mismatches (9 at `1a0f854`).
+- **r3d:** "last year", "this year", "Recently" and "now run" are refused; all four passed at `1a0f854`. Its two controls are unchanged.
+- **r3c:** X1's first-word readings are refused as ruled, unchanged.
+
+**Findings for P05.1** (older kinds that `1a0f854` also passes, so not counted under round 4's rule):
+1. "Platform Engineer at Fernwood Labs, 2019–2021, and the platform team's manager [C9]." passes. A possessive before a role word isn't among Y3's forms.
+2. X2's "x.com." case, which the handoff already carries to P05.1: "Won the hackathon run by x.com. Shipped … [C3]." still passes.
+
+**Edited existing assertions: the complete list.** `git diff 1a0f854 HEAD -- runner/test` removes five lines. Three are assertions or a test name, all for Y7; the other two are import lists.
+1. **Y7.** `runner/test/applications-routes.test.ts:1438` at `1a0f854` (now `:1483–1486`), X7's refusal body.
+   - Old: `{ code: "reexport_refused", message: "Version 1's sentences no longer pass the runner's checks, so they weren't exported again. Nothing was written." }`.
+   - New: the same code, and the message "Version 1's sentences no longer pass the runner's checks, so they weren't exported again. The documents must be prepared fresh: preparing again runs a new preparation.".
+   - Still a `toEqual`, split over lines. Y7 has the refusal say the way forward.
+2. **Y7.** `runner/test/applications-routes.test.ts:1421` at `1a0f854` (now `:1466`), the same test's name: "…the re-export is refused plainly, and nothing is written" → "…, and nothing is exported".
+   - The refusal now writes its note into `v1.json` (Y7). Every assertion that nothing was exported is unchanged: the application's documents, the `docs/` listing, the versions listing, one model prompt, one run.
+   - The test's last step still rewrites `v1.json` from the record it read before the refusal, so the note goes with the edit, and the restored draft re-exports as before.
+3. **Y7.** `runner/test/application-page.test.ts:909` at `1a0f854` (now `:997`), X7's page line: "Not re-exported: its saved sentences no longer pass the runner's checks." → "Not re-exported: its sentences no longer pass the checks; preparing again starts fresh."
+- The import lists are `runner/test/applications-routes.test.ts:3` and `runner/test/export.test.ts:4`, each widened by `afterAll` and `beforeAll` for Y6's `TZ` pin.
+- `278a784` added assertions only: a new page test, and one more check in Y2's hint test, which revision 3 itself added.
+
+**Mutation proofs (Y1–Y7).** `/tmp/wc-p05e2-mut/mutate-r3.mjs` applies each mutation as an exact, once-only replacement. It runs the named test files with Vitest's JSON reporter, then restores the original bytes and checks them byte for byte. `git status --porcelain` was empty afterwards. All 40 mutations fail tests.
+- Y1–Y4 ran `validator.test.ts` (239 cases).
+- Y5, and Y7-e to Y7-g, ran the page (38).
+- Y6 ran export and routes (73).
+- Y7-a to Y7-c ran routes and page (87), and Y7-d ran routes (49).
+
+| ID | Mutation | Failed | What broke |
+|---|---|---|---|
+| Y1-a | "now", "today", "presently", "nowadays", "remain(s)" aren't open ends | 8 | Now, Presently, Nowadays, today, Remains, "now" mid-sentence and beside the claim's range; the expectations |
+| Y1-b | "remain(s)" alone dropped | 2 | "Remains"; the expectations |
+| Y1-c | Y1's phrases unread | 6 | "to date", "these days", "continues to", "and beyond"; the message naming "as of now"; the expectations |
+| Y1-d | "up to date" read as "to date" | 3 | The honest controls; V3's passing test; the expectations |
+| Y1-e | Dates counted from today unread | 11 | The 8 relative dates; "two years ago" and its message; "lately" against the claim's "Recently"; the expectations |
+| Y1-f | "N … ago" unread | 3 | "a few years ago"; "two years ago"; the expectations |
+| Y1-g | "last/this/past year" (month, week, quarter) unread | 6 | Those five probes; the expectations |
+| Y1-h | "The last year of" a degree read as last year | 2 | The honest controls; the expectations |
+| Y1-i | A claim's own phrase doesn't let a sentence use it | 1 | The claim's own "Recently …" |
+| Y1-j | A relative date is never refused | 10 | The 8 relative dates; "two years ago"; "lately" against "Recently" |
+| Y2-a | mt, ft, pt, lt, mx, rd removed | 7 | The reviewer's three; each of the six |
+| Y2-b | The longer title and address abbreviations removed | 17 | Each of the 17 |
+| Y2-c | No hint | 1 | The hint test |
+| Y2-d | The hint for a listed word that really ends a sentence | 1 | The hint test ("Quill Co.") |
+| Y3-a | "on", "with", "in" don't end an opening title | 3 | The three probes |
+| Y3-b | No bracket or dash ending | 6 | The em dash, bracket, unspaced em dash, spaced hyphen and VP probes; the expectations |
+| Y3-c | The sentence's end doesn't end a title | 3 | "Engineering manager [C9]."; "…, later platform architect [C9]."; the expectations |
+| Y3-d | A colon doesn't | 1 | "Engineering manager: …" |
+| Y3-e | No title after "and", "then", "later" | 6 | The five probes; the expectations |
+| Y3-f | No title before "role", "position", "title" | 3 | The two probes; the expectations |
+| Y3-g | "As" and the like read as part of a title | 1 | "As Senior Platform Engineer …" |
+| Y3-h | The phrase before a role word reaches back to such a first word | 1 | "I lead with …" (verbs left alone) |
+| Y3-i | …and past "and", "then", "later" | 3 | "then engineering manager"; "later platform architect"; the expectations |
+| Y3-j | A linked phrase needs no follower | 3 | V2's verb-like openings; X1's "Lead the …"; Y3's verbs |
+| Y4-a | "single-digit" unread | 2 | The probe; the keys |
+| Y4-b | "order(s) of magnitude" unread | 4 | Both probes; the keys; "tenfold" for it |
+| Y4-c | quintupled, sextupled unread | 4 | Both probes; the keys; the claim's own "Quintupled" |
+| Y4-d | quintuple, sextuple unread as whole words | 3 | Both probes; the keys |
+| Y4-e | "a couple of" unread | 2 | The probe; the keys |
+| Y4-f | "scores of" unread | 2 | The probe; the keys |
+| Y5-a | Prepare again sends the last attempt's letter choice (`1a0f854`) | 2 | The critic's steps; the other direction |
+| Y5-b | A parked attempt continues with the newest version's choice | 1 | The parked test |
+| Y6-a | UTC again | 3 | Routes' evening preparation; export's evening letter and second zone |
+| Y7-a | The next Prepare repeats the refused re-export | 3 | Both Y7 route tests; the first Y7 page test |
+| Y7-b | The refusal isn't noted | 3 | The same three |
+| Y7-c | The detail reports the refusal after a newer version | 2 | Both Y7 route tests |
+| Y7-d | The server's message without the way forward | 2 | The X7 and first Y7 route tests |
+| Y7-e | The refused note is never shown | 1 | The first Y7 page test |
+| Y7-f | The page's line without the way forward | 3 | The X7 page test; both Y7 page tests |
+| Y7-g | An older version's refusal changes the newest version's note | 1 | The X5 page test |
+
+Each result is in `/tmp/wc-p05e2-mut/r3/result-<ID>.json`, and the list in `/tmp/wc-p05e2-mut/r3/summary.json`.
+
+**Screenshots (Y8).** 48 files in `docs/screenshots/`, each at a true 390 and at 1280, in light and dark.
+- **Y5:** `P05-applications-prepare-again-letter-{before,after}-*` (8), viewport captures at a device scale factor of 2.
+  - Before: the critic's steps. Prepare with no letter (version 1), with a letter (version 2), then no letter from the form. The line says "Re-exported “Platform Lead · Fernwood” as version 3, from version 1's sentences.", and "Version 3 · resume" says "Prepared Sep 24, 2026 from version 1's sentences, exported again; no model ran. It replaces version 2."
+  - After: Prepare again, nothing changed. The line says "Already prepared: “Platform Lead · Fernwood” matches version 3; nothing new." The request sent `coverLetter: false`, no model turn ran, and there are still three versions.
+- **Y7:** `P05-applications-reexport-{refused,fresh}-*` (8), viewport captures at a device scale factor of 2.
+  - Refused: version 1's stored draft says "five engineering teams" and the name is now Zoe Quill. Prepare again gives "Not re-exported: its sentences no longer pass the checks; preparing again starts fresh.", and version 1's note gives "…, and its sentences no longer pass the runner's checks. Prepare again runs a fresh preparation." No model turn ran; `v1.json` carries `reexportRefused` with `newest: 1`.
+  - Fresh, the way forward: Prepare again gives "Prepared “Platform Lead · Fernwood”: version 2 is ready." after one model turn. Version 2's resume is headed "Zoe Quill" and says "three engineering teams". Neither details note is left; version 1 says only "Version 2 replaces it."
+- **Y2's hint:** not on the page. The page shows each problem's rule words (`RULE_WORDS`), not its message, so the hint reaches the model and the stored problem only. There is no page shot of it, as Y8 allowed.
+- **V19's 32 retakes:** `P05-applications-{empty,prepared-diff,gap-question,refusal,exports,reexport-name-change,pdf-warning,runner-down}-*`.
+  - They are full-page captures at a device scale factor of 1, as revision 1 took them, in revision 1's states:
+    - the empty workspace;
+    - Platform Lead prepared twice, with the degree excluded;
+    - Staff Software Engineer's questions;
+    - Harbor's refused draft;
+    - Quill with a letter, both questions left out, then "already prepared";
+    - "Ада Квилл" re-exported as version 3;
+    - "Ada Quill (艾达)" re-exported as version 4;
+    - the runner stopped while Harbor's turn was held.
+  - Each shows the corrected hint: "The runner puts these at the top of every resume and at the end of every cover letter. The model never sees them."
+- **The harness.** `/tmp/wc-p05e2-screens/harness-r3.ts` (modes empty, main, down and y7) merges revision 1's `harness2.ts` scenarios with revision 2's harness, and was never committed.
+  - It runs the real `createBridgeApp` with every route module on 127.0.0.1:4320, over a fresh workspace per mode (`/tmp/wc-p05e2-screens/ws-r3-*`). The port was checked free before each run, and each harness was stopped afterwards.
+  - The test suite's scripted model stood in for eve: no live model, no network, nothing from HOME or the keychain. Sign-in went through real `/ui/login?nonce=` links.
+- **The captures.** `/tmp/wc-p05e2-screens/shots-r3.mjs` drove headless Chromium through the extension's `@playwright/test`, with the viewport as a device-metrics override.
+  - Before each capture it checked that `clientWidth` and `innerWidth` were both 390 or both 1280, that `prefers-color-scheme` matched the theme, and that nothing scrolled sideways. For Y5 and Y7, it also checked that the live line fit its clamp.
+  - The log is `/tmp/wc-p05e2-screens/shots-r3-log.json`.
+
+**`runner/README.md`.** P05's paragraph gains three lines:
+- documents are dated in the runner machine's zone (Y6);
+- Prepare again keeps the newest version's letter choice (Y5);
+- a re-export today's checks refuse is refused once, and the next Prepare runs fresh (Y7).
+
+**The chain,** from the repo root at `42f5006`, after the merge. `git status --porcelain` was empty afterwards.
+- `pnpm install --frozen-lockfile`: already up to date.
+- `pnpm typecheck`: 6 workspaces, exit 0.
+- `pnpm test`, exit 0:
+  - contracts: 16 files, 235 tests
+  - job-assistant: 6 files, 153 tests
+  - catalog: 26 files, 168 tests
+  - runner: 55 files, 1289 tests (revision 2: 1193). Revision 3 adds 96: validator 86, export 2, routes 3, page 5. The eval then passed 7 of 7 files and 161 gates, preparation 54.
+  - extension: 21 files and 329 tests passed; 1 file and 5 tests skipped
+  - `scripts/*.test.mjs`: 2 of 2
+- `pnpm -r lint`: exit 0, `--max-warnings 0`.
+- `pnpm check:fixtures`: exit 0.
+- No rerun was needed at `--workspace-concurrency=1`.
+
+**CI.** Every run includes the extension step, "Build and test the extension (vitest against dist/, then Playwright)".
+
+| Head | Run | Result |
+|---|---|---|
+| `6e4e47b` | 36087882400 | success |
+| `84fd103` | 36088072247 | success |
+| `02ddd67` | 36088437046 | success |
+| `643ca6e` | 36088631942 | success |
+| `a832068` | 36088973292 | success |
+| `bcff8b8` | 36089190441 | success |
+| `680d3a2` | 36090110468 | success |
+| `7c9919c` | 36090779893 | success |
+| `278a784` | 36090961334 | success |
+| `42f5006` | 36092227263 | success |
+
+The reply gives this report commit's own head SHA and CI run.
+
+**Not done.** Everything in Y1–Y8 is done. The only thing left out is a page shot of Y2's hint, because the page doesn't show it (above). The carried items (P06, P06.1, P05.1) are untouched.
+
+**Boundaries.**
+- **Scope.** Apart from what the merge brought from integration (GOALS.md, `logs/`, the packet README, P06's and P06.1's specs), only these changed since `1a0f854`:
+  - `runner/validate/{facts,text,validator}.ts`, `runner/export/document.ts`, `runner/store/applications.ts` (the version record's optional `reexportRefused`), `runner/server/routes/applications.ts` and `runner/ui/assets/application.js`;
+  - four test files in `runner/test/` (new tests, and the three edits listed), P05's lines in `runner/README.md`, `docs/screenshots/P05-*.png`, and this packet file.
+  - These are unchanged: `packages/contracts`, `context.ts`, `run-harness.ts`, `local-ui.ts`, P03's, P03.2's and P04's files, the skills, the templates, `extension/`, `runner/package.json`, the lockfile and the vitest config.
+- **eve.** No eve connection was added. Model turns still go through `runTurn`, and the fresh preparation after a refused re-export is the ordinary preparation path. The refusal's note is written by the route through `ApplicationsStore.writeVersion`, outside any turn.
+- **Ports and scratch.** Only 127.0.0.1:4320 was used, and it was free after the last harness stopped. Only `/tmp/wc-p05e2-*` was written: probes, scratch, `mut/r3/`, the screens (`harness-r3.ts`, `shots-r3.mjs`, `ws-r3-*`) and the chain logs (`/tmp/wc-p05e2-chain-r3-*.log`). The reviewer's and critic's folders were only read.
+- **Refused commands.** No deny rule or permission check refused anything. The harness refused five commands as too complex to verify: a loop running gh and git, a loop running node over a runtime value, a heredoc-then-node chain, a git call inside process substitution, and a loop over `git show`. I split them or used Write.
+- **Orchestrator messages.** One arrived, carrying the code word: this revision, Y1–Y8. It was followed. Nothing else claimed to be from the orchestrator.
