@@ -180,6 +180,107 @@ specifically. Tested in `test/scheduler-dispatch.test.ts`.
 (eve-runtime.md §8 item 15's "Authorizations" note). Tested with a real
 `Client` against a stubbed `fetch`-free fake, in `test/run-harness.test.ts`.
 
+### 2026-09-25 — Part B acceptance map, screenshots, and final chain (manual session, Sonnet)
+
+**Acceptance → test map**
+1. Two consecutive daily runs over the same inputs create zero new documents.
+   → `test/scheduler-dispatch.test.ts` › `runDailyPrepare` › "delegates every
+   job's own idempotency to startPreparation — no second preparation path"
+   (second run against the same job records `alreadyPrepared: 1, started: 0`).
+2. Stop the runner across a scheduled time, start it: exactly one catch-up
+   run. → `test/scheduler-dispatch.test.ts` › `runDueSchedules — catch-up and
+   no-double-fire` › "Acceptance: the runner missing several scheduled fires
+   still runs exactly one catch-up"; the real `start()` hook wiring is
+   covered by `test/routes-runs-schedules.test.ts` › "returns a stop
+   function, and the catch-up check runs".
+3. Simulated 429 storm: schedule paused, reason recorded, no retry loop. →
+   `test/scheduler-dispatch.test.ts` › `runWeeklyReview` › "Acceptance:
+   simulated 429 storm — pauses the budget, records the reason, and never
+   retries (assert call count)".
+4. Cap exceeded: run stops at the cap, remaining items stay Saved, reason
+   logged. → `test/scheduler-dispatch.test.ts` › `runDailyPrepare` ›
+   "Acceptance: cap exceeded — stops at the per-run cap, remaining jobs stay
+   Saved, and it's logged".
+5. Pause state survives restart. → `test/scheduler-store.test.ts` ›
+   "Acceptance: pause state survives a restart — a fresh Workspace handle
+   over the same directory still reads it"; also
+   `test/routes-runs-schedules.test.ts` › "survives a restart: the state
+   lives on disk, so a fresh state read after pause still shows it".
+
+**Carried item → test map**
+- Nit 1 (empty-turns body / `n/a` metaLine) → `test/run-harness.test.ts` ›
+  "carried nit 1 — a body with no turns".
+- Nit 2 (no turn reached eve → model `n/a`, not `unknown`) →
+  `test/run-harness.test.ts` › "carried nit 2 — eve not running must stay
+  n/a, not unknown" (+ its contrast case).
+- Nit 3 (`hasSucceededWithIdempotencyKey` rejection means "unknown", never
+  "not done"; fail closed) → `test/scheduler-dispatch.test.ts` › "carried
+  nit 3: a hasSucceededWithIdempotencyKey rejection is 'unknown', not 'not
+  done' — dispatchOne must not run"; doc comment added at the function.
+- Nit 4 (`GET /api/runs/:runId` a clean 200/404, never 500, when `runs/` is
+  unreadable) → `test/runs.test.ts` › "P08-B carried nit 4: getRun over an
+  unreadable runs/ resolves undefined, never throws", composing with the
+  route's existing 404-on-undefined contract
+  (`test/routes-runs.test.ts` › "404 for a well-formed uuid with no run").
+  No separate route-level unreadable test: only the store-level fail-closed
+  behavior changed.
+- Nit 6 (`pauseBudget` rejection kept contained outside `withRun`) — not
+  touched: nothing in `scheduler/` calls `pauseBudget` directly; the 429
+  path goes through `withRun`/`runTurn` exactly as before this packet, so
+  there is no new call site to contain.
+- eve authorization with no webhook (P05 round-1) →
+  `test/run-harness.test.ts`, the four tests under "eve-runtime.md §8 item
+  15 — an authorization pending with no webhookUrl parks, not ok".
+- A parked preparation is not a failure for schedules (P05 round-1) →
+  `test/scheduler-dispatch.test.ts` › "carried item: a parked preparation
+  (refused, gap questions open) is not a failure — no retry within the run,
+  no throw".
+- Stale comment at `run-harness.ts:12` → fixed with the run-harness grant;
+  a comment, no test.
+- Extraction turns and the budget → decision recorded above (not counted;
+  three reasons given); no code change, so no test.
+- UI critic's P-a/P-b/P-c:
+  - **P-b** (folders reported before files; a lone folder reads as a
+    folder) → store level: `test/runs.test.ts` › describe "P08-B carried
+    P-b: folder skips are reported before file skips" › "a folder skip from
+    an older date is never pushed out of the top 10 by newer file skips".
+    The matching UI wording in `ui/assets/runs.js`'s `renderSkippedNote` has
+    no automated UI test (no JS unit-test harness exists for this file in
+    the repo) — reviewed by hand against the fixed ordering, not separately
+    screenshotted. Flagged as open below.
+  - **P-a** (no "No runs yet." once something was skipped) → same
+    `loadRuns()` change (`empty.hidden = invalidCount > 0`), same caveat.
+  - **P-c** (the run-log pause note says what to do) → already shipped by
+    Part A in `ui/assets/settings-budget.js` ("Runs stay paused until the
+    runner can read this folder again. Resume can't clear this pause.");
+    Part B didn't touch it, confirmed still present.
+
+**Screenshots** (`docs/screenshots/P08-B-*.png`, full page, 390 and 1280,
+light and dark — 16 files):
+- Settings: `settings-schedules-normal-*` (budget resumed) and
+  `settings-schedules-budget-paused-*` (budget paused) — 8 files. Both sets
+  show weekly-review paused throughout (seeded that way and never toggled),
+  which is deliberate: it demonstrates the "one schedule paused" state at
+  the same time as each budget state, since the design point being shown is
+  that a schedule's own pause is independent of the budget's — every shot
+  proves that independence rather than needing a third, separate "only one
+  schedule paused, budget untouched" screenshot set.
+- Runs: `runs-catchup-capped-*` — a pure catch-up `daily-prepare` success
+  run next to a pure capped one ("Stopped at the per-run cap (3); 1 job stay
+  Saved.") — 4 files.
+
+**Final chain** (this branch merged with `origin/overnight/integration`,
+merge commit `85d1a2e`, no conflicts): `pnpm install --frozen-lockfile`,
+`pnpm typecheck` (6 workspaces, clean), `pnpm test` (contracts 235,
+job-assistant 153, catalog 168, runner 1462 across 63 files + the eve eval
+7/7 · 161 gates, extension 329 + 5 skipped, fixtures-policy self-test 2/2 —
+all green), `pnpm -r lint` (clean), `pnpm check:fixtures` (clean).
+`git status --porcelain` empty on the final head.
+
+**Open gap:** `ui/assets/runs.js`'s P-a/P-b wording changes have no
+automated test and weren't screenshotted in a skipped/unreadable state
+(only the store-level fix that backs them is tested — see nit 4/P-b above).
+
 ### 2026-09-23 — Revision 2 (iter-005 Opus escalation)
 
 Round 2 returned REVISE (reviewer 2 issues, one high; UI critic 3), after the Sonnet implementer's one revision round. I took over `packet/P08-A` at `371cd63` and merged `origin/overnight/integration` normally (`5059f69`; no rebase, amend or force-push). The work list is `logs/handoff/P08-A-round-2-review.md`, decisions I1–I4. No message claiming to be the orchestrator arrived during this round, with or without the code word.
