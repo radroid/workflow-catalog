@@ -623,10 +623,24 @@ const NOT_TITLE_OPENERS = new Set([
  * Words after which a role phrase is a title: "as a platform engineer", "became head of platform", "promoted to
  * director", and (revision 4, Z3) "was engineering manager", "I was the engineering manager". A title's words never
  * reach back past one of these (X1): "and became engineering manager" states "engineering manager". After "was", only
- * a word that names a role makes one (`namesRole`): "was developer-friendly" states no title.
+ * a word that names a role makes one (`namesRole`: "was developer-friendly" states no title), adverbs between are no
+ * part of it ("I was also engineering manager"), and after a subject other than "I" (or "My title", "My role") the
+ * phrase must end there ("Ada was engineering manager at …"), so "The biggest win was developer tooling" states none.
  */
 const TITLE_CONTEXTS = new Set(["as", "became", "become", "becoming", "named", "appointed", "promoted", "elected", "was"]);
 const ARTICLES = new Set(["a", "an", "the"]);
+
+/** Adverbs that may stand between "was" and its title without being part of it: "I was also engineering manager" (Z3). */
+const WAS_ADVERBS = new Set([
+  "also", "still", "once", "again", "already", "then", "later", "briefly", "previously", "formerly", "eventually", "officially", "initially",
+  "originally", "subsequently", "finally", "temporarily", "effectively", "ultimately", "simultaneously", "concurrently", "jointly", "nominally",
+]);
+
+/** Words before "was" that make what follows it a title however it goes on: "I was engineering manager overseeing …", "My title was …" (Z3). */
+const WAS_SUBJECTS = new Set(["i", "role", "title", "position", "job"]);
+
+/** Words that end a title after "was" when another subject comes before it, beside `PHRASE_BREAKS`: "Ada was engineering manager until 2021" (Z3). */
+const AFTER_WAS_TITLE = new Set(["until", "till", "since", "during", "before", "after", "through", "between", "when", "while", "where", "there", "here", "then", "again", "too", "also"]);
 
 /**
  * Marks for a round bracket's opening and closing while a sentence is cut into words (revision 4, Z2): two
@@ -677,13 +691,19 @@ function titleKey(words: readonly string[]): string {
     .trim();
 }
 
-/** The words before `at` (past one article) that make what follows a title, if any: "as a …", "became …", "was the …", "promoted to …". */
-function titleContextAt(lower: readonly string[], at: number): string | undefined {
+/**
+ * The words before `at` (past one article) that make what follows a title, if any, and where: "as a …", "became …",
+ * "promoted to …", and "was the …", past adverbs too ("was also the …"; Z3).
+ */
+function titleContextAt(lower: readonly string[], at: number): { readonly word: string; readonly at: number } | undefined {
   let before = at - 1;
   if (ARTICLES.has(lower[before] ?? "")) before -= 1;
   const word = lower[before] ?? "";
-  if (TITLE_CONTEXTS.has(word)) return word;
-  return word === "to" && lower[before - 1] === "promoted" ? "promoted to" : undefined;
+  if (TITLE_CONTEXTS.has(word)) return { word, at: before };
+  if (word === "to" && lower[before - 1] === "promoted") return { word: "promoted to", at: before - 1 };
+  let back = before;
+  while (back >= 0 && WAS_ADVERBS.has(lower[back]!)) back -= 1;
+  return back < before && lower[back] === "was" ? { word: "was", at: back } : undefined;
 }
 
 /** Whether the words before `at` (past one article) make what follows a title: "as a …", "became …", "promoted to …". */
@@ -784,9 +804,11 @@ function isTitlePart(part: readonly string[]): boolean {
  *   an article allowed ("director of the platform group", "engineer of the
  *   year"), or after "as", "became", "named", "appointed", "promoted to" or
  *   (revision 4, Z3) "was" ("worked as a platform engineer", "I was the
- *   engineering manager"; after "was", only a word that names a role). The
- *   words before the role word never reach back past such a word: "and
- *   became engineering manager" states "engineering manager".
+ *   engineering manager", "I was also engineering manager"; after "was",
+ *   only a word that names a role, and after a subject other than "I" only
+ *   where the phrase ends: "The biggest win was developer tooling" states
+ *   none). The words before the role word never reach back past such a
+ *   word: "and became engineering manager" states "engineering manager".
  * - A role phrase right after "and", "then" or "later", before what ends an
  *   opening title ("Platform Engineer and team lead at …", "…, later platform
  *   architect."), or right before "role", "position" or "title" ("took on the
@@ -867,6 +889,12 @@ function sentenceTitles(sentence: string): string[] {
 
   // Role phrases in lower case, and the sentence's first word whatever its case.
   const plain = (at: number) => at >= 0 && at < words.length && !PHRASE_BREAKS.has(lower[at]!) && (at === 0 || !capitalized[at]);
+  /** Whether the word at `at` is an adverb right after "was", past other such adverbs: "I was also …", "I was briefly …" (Z3). */
+  const adverbAfterWas = (at: number) => {
+    let back = at;
+    while (back >= 0 && WAS_ADVERBS.has(lower[back]!) && !punctuated[back]) back -= 1;
+    return back < at && lower[back] === "was" && !punctuated[back];
+  };
   /** A word the phrase before a role word can take: plain, or a capitalized seniority word ("a Senior platform engineer"); never past punctuation or a context word. */
   const extendsLeft = (at: number) =>
     at >= 0 &&
@@ -874,7 +902,19 @@ function sentenceTitles(sentence: string): string[] {
     !PHRASE_BREAKS.has(lower[at]!) &&
     !TITLE_CONTEXTS.has(lower[at]!) &&
     !LINKING_CONTEXTS.has(lower[at]!) &&
+    !adverbAfterWas(at) &&
     (at === 0 ? !NOT_TITLE_OPENERS.has(lower[0]!) : !capitalized[at] || SENIORITY.has(lower[at]!));
+  /**
+   * Whether "was" at `was` makes the role phrase ending at `end` a title (Z3): after "I" (or "My title", "My role") or
+   * opening the sentence, whatever follows; after another subject, only where the phrase ends ("Ada was engineering
+   * manager at …"). A role word that runs on into another word names a thing: "The biggest win was developer tooling".
+   */
+  const wasIntroduces = (was: number, end: number) => {
+    if (was === 0 || (WAS_SUBJECTS.has(lower[was - 1]!) && !punctuated[was - 1])) return true;
+    if (end === words.length - 1 || punctuated[end]) return true;
+    const next = lower[end + 1]!;
+    return PHRASE_BREAKS.has(next) || AFTER_WAS_TITLE.has(next) || /^\d/.test(next);
+  };
   for (let role = 0; role < words.length; role += 1) {
     if ((role > 0 && capitalized[role]) || !isRoleNoun(words[role]!)) continue;
     // Modifiers before the role word: up to three words.
@@ -914,9 +954,10 @@ function sentenceTitles(sentence: string): string[] {
         continue;
       }
     }
-    const contextWord = titleContextAt(lower, left);
-    // After "was", only a word that names a role is a title (revision 4, Z3): "was engineering manager", never "was developer-friendly".
-    const context = contextWord !== undefined && (contextWord !== "was" || namesRole(words[role]!));
+    const contextAt = titleContextAt(lower, left);
+    // After "was", only a word that names a role is a title, where "was" introduces one (revision 4, Z3): "I was
+    // engineering manager", never "was developer-friendly" or "The biggest win was developer tooling".
+    const context = contextAt !== undefined && (contextAt.word !== "was" || (namesRole(words[role]!) && wasIntroduces(contextAt.at, end)));
     // A phrase that opens the sentence and ends in its role word, before what ends a title (Y3: whatever of those follows).
     const opening = left === 0 && end === role && titleFollows(role);
     // Right after "and", "then" or "later", before what ends a title (Y3): "and team lead at …", ", then engineering manager, at …".

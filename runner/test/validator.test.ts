@@ -1132,6 +1132,11 @@ describe("revision 4, Z3: a title after “was”", () => {
     ["“was” mid-sentence", "At Fernwood Labs I was engineering manager from 2019 to 2021 [C9]."],
     ["“served as”", "Served as engineering manager at Fernwood Labs from 2019 to 2021 [C9]."],
     ["“worked as the”", "Worked as the engineering manager at Fernwood Labs from 2019 to 2021 [C9]."],
+    ["“I was also” and a role phrase", "I was also engineering manager at Fernwood Labs from 2019 to 2021 [C9]."],
+    ["“I was briefly the” and a role phrase", "I was briefly the engineering manager at Fernwood Labs from 2019 to 2021 [C9]."],
+    ["“I was” and a role phrase running on", "I was engineering manager overseeing the Fernwood Labs billing team from 2019 to 2021 [C9]."],
+    ["“My title was”", "My title was engineering manager at Fernwood Labs from 2019 to 2021 [C9]."],
+    ["another subject, where the title ends", "Ada was engineering manager at Fernwood Labs from 2019 to 2021 [C9]."],
   ])("refuses %s against a claim that says otherwise", (_name, statement) => {
     expect(rulesWith(claims, statement)).toEqual(["title"]);
   });
@@ -1146,9 +1151,17 @@ describe("revision 4, Z3: a title after “was”", () => {
       "I was the engineering manager at Harbor from 2021 to 2023 [C10].",
       "Served as engineering manager at Harbor from 2021 to 2023 [C10].",
       "Worked as the engineering manager at Harbor from 2021 to 2023 [C10].",
+      "I was also engineering manager at Harbor from 2021 to 2023 [C10].",
+      "I was briefly the engineering manager at Harbor from 2021 to 2023 [C10].",
     ]) {
       expect(rulesWith(claims, statement), statement).toEqual([]);
     }
+  });
+
+  it("reads no title where “was” after another subject introduces a thing a role word describes", () => {
+    expect(rules(resume("The biggest win was developer tooling for three engineering teams [C3]."))).toEqual([]);
+    expect(rules(resume("My first project at Northwind Labs was a partner integration [C1]."))).toEqual([]);
+    expect(rules(resume("Its first release was a developer preview of Ledgerkit [C5]."))).toEqual([]);
   });
 
   it("reads no title after “was” in an adjective made of a role word", () => {
