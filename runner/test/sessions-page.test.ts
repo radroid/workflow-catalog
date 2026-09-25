@@ -49,14 +49,14 @@ describe("the Sessions page: a session and a flagged result", () => {
     expect((await store.get(harbor.taskId))!.stage).toBe("ready");
     const flags = page.all(".review-item");
     expect(flags).toHaveLength(1);
-    expect(flags[0]!.querySelector(".review-text")?.textContent).toBe("“Platform Engineer · Harbor”'s tab was closed without Applied or Defer. Nothing changed; if you applied, move it on the Board.");
+    expect(flags[0]!.querySelector(".review-text")?.textContent).toBe("The tab for “Platform Engineer · Harbor” was closed without Applied or Defer. Nothing changed; if you applied, move it on the Board.");
     expect(flags[0]!.querySelector(".review-text a")?.getAttribute("href")).toBe("/ui/board");
     expect(page.visibleText()).not.toMatch(UUID);
 
     const reviewId = flags[0]!.id.replace("flag-", "review-");
     page.press(reviewId);
     await until(() => page.outcomes().length > 0, "the review");
-    expect(page.outcomes()).toEqual(["Reviewed “Platform Engineer · Harbor”'s result."]);
+    expect(page.outcomes()).toEqual(["Reviewed the result for “Platform Engineer · Harbor”."]);
     expect(page.all(".review-item")).toHaveLength(0);
     expect(page.byId("review-none").textContent).toBe("Nothing needs your review.");
     // The item it acted on left the page, so focus went to the section's heading, never to the page.

@@ -274,13 +274,15 @@ function flagMessage(flag) {
     case "item_skipped":
       return ["Your browser skipped ", named(name ?? "an application"), "."];
     case "closed":
-      return [named(name ?? "An application"), "'s tab was closed without Applied or Defer. Nothing changed; if you applied, move it on the [Board](/ui/board)."];
+      return name
+        ? ["The tab for ", named(name), " was closed without Applied or Defer. Nothing changed; if you applied, move it on the [Board](/ui/board)."]
+        : "An application's tab was closed without Applied or Defer. Nothing changed; if you applied, move it on the [Board](/ui/board).";
     case "missing":
       return ["Your browser didn't say what happened to ", named(name ?? "an application"), "."];
     case "unknown_task":
       return "Your browser reported an application that isn't in this session. Nothing was recorded for it.";
     case "conflict":
-      return ["Your browser gave two different answers for ", named(name ?? "an application"), "'s tab, so neither was recorded."];
+      return name ? ["Your browser gave two different answers for the tab for ", named(name), ", so neither was recorded."] : "Your browser gave two different answers for one tab, so neither was recorded.";
     default:
       return "Your browser reported something the runner doesn't know, so nothing was recorded.";
   }
@@ -482,7 +484,7 @@ async function reviewFlag(session, flag, node) {
       const result = await postJson(`/api/sessions/${session.sessionId}/flags/${flag.flagId}/review`);
       $("review-title").focus({ preventScroll: true });
       view = result.view;
-      lastAction(flag.jobName ? withName("Reviewed ", flag.jobName, "'s result.") : withName("Reviewed a result in ", session.title, "."), "done");
+      lastAction(flag.jobName ? withName("Reviewed the result for ", flag.jobName, ".") : withName("Reviewed a result in ", session.title, "."), "done");
     } catch (error) {
       lastAction(error?.code === "unreachable" ? CANT_REACH : "Not saved: the runner hit a problem; try again.", "refused");
     }
