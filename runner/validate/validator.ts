@@ -26,9 +26,11 @@ import { citedLabels, hasUuid, ngrams, quoteSentence, splitSentences, strayBrack
  * - `raw_id`: no claim id or other UUID in the text; labels only.
  * - `number`: every quantity is one the cited claims state.
  * - `date`: every year, and every month in a date, is one the cited claims
- *   state; a cited claim's end year ("2019–2021") is stated too; and nothing
- *   is said to be still going on ("since 2019", "2019–present") unless a
- *   cited claim is itself open (it says so, or states only a start).
+ *   state; when the sentence states a date at all, a cited claim's end year
+ *   ("2019–2021") is stated too; and nothing is said to be still going on
+ *   ("since 2019", "2019–present", "still", "to this day", or a start with no
+ *   end: "from 2019") unless a cited claim is itself open (it says so, or
+ *   states only a start).
  * - `title`: every job title equals one the cited claims state, word for
  *   word.
  * - `credential`: every degree or certification is one the cited claims
@@ -260,8 +262,9 @@ function checkSentence(sentence: string, where: DraftLocation, context: Context)
     refuse("number", `${missingNumbers.map((raw) => `“${raw}”`).join(", ")} ${missingNumbers.length === 1 ? "isn't" : "aren't"} in the claims this sentence cites${citedLabelsNote}. Use only the numbers they state.`);
   }
 
-  // Dates: every year and month the sentence states is its cited claims' own; every end year a cited claim states,
-  // the sentence states too; and it says nothing is still going on unless a cited claim does (or states only a start).
+  // Dates: every year and month the sentence states is its cited claims' own; when the sentence states a date at all,
+  // every end year a cited claim states, it states too (X4(b): a sentence with no date leaves the range out, it
+  // doesn't change it); and it says nothing is still going on unless a cited claim does (or states only a start).
   const claimDates = cited.map((claim) => ({ label: claim.label, dates: datesIn(claim.text) }));
   const sentenceDates = datesIn(facts);
   const dateProblems: string[] = [];
@@ -271,12 +274,14 @@ function checkSentence(sentence: string, where: DraftLocation, context: Context)
     const named = [...missingYears.map((year) => `“${year}”`), ...(missingMonths.length > 0 ? ["a month"] : [])].join(" and ");
     dateProblems.push(`${named} ${missingYears.length + missingMonths.length === 1 ? "isn't" : "aren't"} in the claims this sentence cites${citedLabelsNote}.`);
   }
-  for (const { label, dates } of claimDates) {
+  const statesDate = sentenceDates.years.length > 0 || sentenceDates.months.length > 0 || sentenceDates.openEnd !== undefined;
+  for (const { label, dates } of statesDate ? claimDates : []) {
     const unstated = includesAll(new Set(sentenceDates.years), dates.endYears);
     if (unstated.length > 0) dateProblems.push(`${label} ends in ${unstated.map((year) => `“${year}”`).join(" and ")}, and this sentence doesn't say so.`);
   }
   if (sentenceDates.openEnd !== undefined && !claimDates.some(({ dates }) => isOpenEnded(dates))) {
-    dateProblems.push(`“${sentenceDates.openEnd}” says it is still going on, and the claims this sentence cites${citedLabelsNote} don't.`);
+    const says = sentenceDates.openStart ? "names a start and no end, so it says it is still going on" : "says it is still going on";
+    dateProblems.push(`“${sentenceDates.openEnd}” ${says}, and the claims this sentence cites${citedLabelsNote} don't.`);
   }
   if (dateProblems.length > 0) refuse("date", `${dateProblems.join(" ")} Dates must match the claims exactly.`);
 

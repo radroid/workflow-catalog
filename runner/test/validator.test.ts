@@ -345,13 +345,15 @@ describe("revision 1, V3: dates that stay open or lose their end", () => {
     ["“currently” against a closed range", "Currently a Platform Engineer at Fernwood Labs, 2019–2021 [C9]."],
     ["“to date” against a closed range", "Platform Engineer at Fernwood Labs from 2019 to date [C9]."],
     ["the start without the end", "Platform Engineer at Fernwood Labs from 2019 [C9]."],
-    ["no dates at all for a claim that ends", "Platform Engineer at Fernwood Labs [C9]."],
     ["“since” against a single year", "Studied Computer Science since 2019 for the B.S. at Fernwood University [C6]."],
   ])("refuses %s", (_name, statement) => {
     expect(rulesWithC9(statement)).toEqual(["date"]);
   });
 
   it("passes the range as the claim states it, and an open end on a claim that is itself open", () => {
+    // Revision 2, X4(b): a sentence that states no date leaves the range out; it doesn't change it. (Revision 1
+    // refused this one, "no dates at all for a claim that ends".)
+    expect(rulesWithC9("Platform Engineer at Fernwood Labs [C9].")).toEqual([]);
     expect(rulesWithC9("Platform Engineer at Fernwood Labs, 2019–2021 [C9].")).toEqual([]);
     expect(rulesWithC9("Platform Engineer at Fernwood Labs from 2019 until 2021 [C9].")).toEqual([]);
     // C7, "Started at Northwind Labs in 2022.", states a start and no end: it is open.
@@ -655,5 +657,119 @@ describe("revision 2, X3: numbers written as words", () => {
     expect(rules(resume(`${shipped} on behalf of the payments team [C3].`))).toEqual([]);
     expect(numbersIn("double-checked the half-duplex links for a third party in the third quarter, each quarter")).toEqual([]);
     expect(numbersIn("manifold, scaffold, halfway, first-class")).toEqual([]);
+  });
+});
+
+describe("revision 2, X4: open ends, and a sentence that states no date", () => {
+  // (a) The reviewer's three probes, then the rest of the ruling's open ends and start markers, each against claims that end.
+  it.each([
+    ["“still” beside the claim's own range", "Platform Engineer at Fernwood Labs, 2019–2021, and still there [C9]."],
+    ["“to this day” against a single year", "Studying at Fernwood University from 2019 to this day [C6]."],
+    ["“onward” against a single year", "At Fernwood University from 2019 onward [C6]."],
+    ["“onwards” against a single year", "Studied Computer Science at Fernwood University from 2019 onwards [C6]."],
+    ["“and counting” against a single year", "B.S. Computer Science, Fernwood University, 2019, and counting [C6]."],
+    ["“until this day” against a single year", "Studied Computer Science at Fernwood University until this day [C6]."],
+    ["“from” and a year with no end", "Studied Computer Science at Fernwood University from 2019 [C6]."],
+    ["“starting” and a year with no end", "Starting in 2019, studied Computer Science at Fernwood University [C6]."],
+    ["“since” and a year with no end", "At Fernwood University since 2019 [C6]."],
+    ["an open end with no year against a closed range", "Platform Engineer at Fernwood Labs, still [C9]."],
+  ])("refuses %s", (_name, statement) => {
+    expect(rulesWithC9(statement)).toEqual(["date"]);
+  });
+
+  it("passes every open end when a cited claim is itself open (C7 states a start and no end)", () => {
+    for (const statement of [
+      "Senior Platform Engineer at Northwind Labs from 2022 [C8][C7].",
+      "Senior Platform Engineer at Northwind Labs from 2022 onward [C8][C7].",
+      "Still a Senior Platform Engineer at Northwind Labs [C8][C7].",
+      "Senior Platform Engineer at Northwind Labs since 2022, and counting [C8][C7].",
+      "Senior Platform Engineer at Northwind Labs to this day [C8][C7].",
+      "Starting in 2022, Senior Platform Engineer at Northwind Labs [C8][C7].",
+    ]) {
+      expect(rulesWithC9(statement), statement).toEqual([]);
+    }
+  });
+
+  it("names a start with no end as what it is", () => {
+    const [refusal] = validateDraft({ draft: resume("Studied Computer Science at Fernwood University from 2019 [C6]."), claims: WITH_C9, postingText: POSTING, coverLetterRequested: false }).refusals;
+    expect(refusal!.message).toBe("“from 2019” names a start and no end, so it says it is still going on, and the claims this sentence cites (C6) don't. Dates must match the claims exactly.");
+  });
+
+  it("never reads a range that has an end as a start with none", () => {
+    for (const statement of [
+      "Platform Engineer at Fernwood Labs from 2019 to mid-2021 [C9].",
+      "Platform Engineer at Fernwood Labs from 2019 until summer 2021 [C9].",
+      "Platform Engineer at Fernwood Labs from 2019 through Q2 2021 [C9].",
+      "Platform Engineer at Fernwood Labs from early 2019 to the end of 2021 [C9].",
+      "Platform Engineer at Fernwood Labs from March 2019 to June 2021 [C9].",
+    ]) {
+      expect(datesIn(statement).openEnd, statement).toBeUndefined();
+      expect(datesIn(statement).endYears, statement).toEqual(["2021"]);
+    }
+    // …so a claim with such a range is closed, and "since" against it is refused.
+    const harbor = confirmedClaim("C9", "title", "Staff engineer at Harbor from 2021 to mid-2023.");
+    expect(rulesWith([harbor], "Staff engineer at Harbor from 2021 to mid-2023 [C9].")).toEqual([]);
+    expect(rulesWith([harbor], "Staff engineer at Harbor since 2021 [C9].")).toEqual(["date"]);
+  });
+
+  it("reads “from” as a start only right before its year", () => {
+    // "Graduated from Fernwood University in 2019." states when something ended, not when it started: it isn't open.
+    const graduated = confirmedClaim("C9", "fact", "Graduated from Fernwood University in 2019.");
+    expect(datesIn(graduated.text)).toEqual({ years: ["2019"], months: [], endYears: [], startOnly: false });
+    expect(rulesWith([graduated], "Graduated from Fernwood University in 2019 [C9].")).toEqual([]);
+    expect(rulesWith([graduated], "At Fernwood University since 2019 [C9].")).toEqual(["date"]);
+    expect(rulesWith([graduated], "At Fernwood University from 2019 [C9].")).toEqual(["date"]);
+  });
+
+  it("reads each open end as written", () => {
+    expect(datesIn("from 2019 to this day").openEnd).toBe("to this day");
+    expect(datesIn("2019–2021, and still there").openEnd).toBe("still");
+    expect(datesIn("from 2019 onwards").openEnd).toBe("onwards");
+    expect(datesIn("three years and counting").openEnd).toBe("and counting");
+    expect(datesIn("Starting in March 2019")).toEqual({ years: ["2019"], months: [3], endYears: [], openEnd: "Starting in March 2019", openStart: true, startOnly: true });
+    expect(datesIn("from 2019 to 2021")).toEqual({ years: ["2019", "2021"], months: [], endYears: ["2021"], startOnly: false });
+  });
+
+  // (b) V3 amended: the end-year rule applies only when the sentence itself states a year, a month or an open end.
+  it("passes a sentence that states no date, and still refuses one that states half the range", () => {
+    const pipeline = confirmedClaim("C9", "fact", "Built the billing pipeline at Fernwood Labs between 2019 and 2021.");
+    expect(rulesWith([pipeline], "Built the billing pipeline at Fernwood Labs [C9].")).toEqual([]);
+    expect(rulesWith([pipeline], "Built the billing pipeline at Fernwood Labs between 2019 and 2021 [C9].")).toEqual([]);
+    expect(rulesWith([pipeline], "Built the billing pipeline at Fernwood Labs in 2019 [C9].")).toEqual(["date"]);
+    expect(rulesWith([pipeline], "Built the billing pipeline at Fernwood Labs in March 2019 [C9].")).toEqual(["date"]);
+    expect(rulesWith([pipeline], "Built the billing pipeline at Fernwood Labs, still running it [C9].")).toEqual(["date"]);
+  });
+});
+
+describe("revision 2: an honest resume and cover letter still pass every rule", () => {
+  it("passes a realistic draft built only from the fixture's confirmed claims", () => {
+    const realistic: Draft = {
+      resume: {
+        sections: [
+          { heading: "Summary", statements: ["Senior Platform Engineer at Northwind Labs since 2022, leading its payments infrastructure team [C8][C7][C1]."] },
+          {
+            heading: "Experience",
+            statements: [
+              "Senior Platform Engineer, Northwind Labs, 2022 to present [C8][C7].",
+              "Led the payments infrastructure team at Northwind Labs [C1].",
+              "Redesigned the ledger service that powers Northwind Labs' billing, e.g. its reconciliation runs [C1].",
+              "Shipped on-call rotation tooling that three engineering teams use, incl. runbooks [C3].",
+            ],
+          },
+          { heading: "Open source", statements: ["Maintainer of Ledgerkit, an open-source library for ledger reconciliation in Node.js [C5]."] },
+          { heading: "Education", statements: ["B.S. in Computer Science, Fernwood University (2019) [C6]."] },
+        ],
+      },
+      coverLetter: {
+        paragraphs: [
+          ["Since 2022 I have worked at Northwind Labs as a Senior Platform Engineer [C7][C8].", "There I led the payments infrastructure team and redesigned the ledger service behind its billing [C1]."],
+          ["I also shipped the on-call rotation tooling that three engineering teams rely on [C3].", "Outside work, I maintain Ledgerkit, an open-source ledger reconciliation library [C5]."],
+          ["I earned a B.S. in Computer Science at Fernwood University in 2019 [C6]."],
+        ],
+      },
+    };
+    const result = check(realistic, true);
+    expect(result.refusals).toEqual([]);
+    expect(result.ok).toBe(true);
   });
 });

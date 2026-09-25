@@ -263,8 +263,14 @@ export interface DateFacts {
   readonly months: readonly number[];
   /** Years that end something: the second year of a range ("2019–2021", "from 2019 to 2021", "between 2019 and 2021"), or a year after an end word ("until 2021", "left in 2021"). */
   readonly endYears: readonly string[];
-  /** The word or mark that says something is still going on ("present", "since", "current", "to date", a range left open: "2019–"), when there is one. */
+  /**
+   * The words or mark that say something is still going on ("present", "since", "current", "still", "onward", "to
+   * date", "to this day", "and counting", a range left open: "2019–"), or a start with no end ("from 2019"), when
+   * there is one.
+   */
   readonly openEnd?: string;
+  /** Set when `openEnd` is a start with no end anywhere: "from 2019", "starting in 2019" (revision 2, X4). */
+  readonly openStart?: true;
   /** Whether it states when something started and never when it ended: "Started at Northwind Labs in 2022." */
   readonly startOnly: boolean;
 }
@@ -273,14 +279,24 @@ export interface DateFacts {
 const RANGE_JOINERS = new Set(["-", "to", "until", "till", "through", "thru", "and"]);
 /** Words after which a year is when something ended. */
 const END_WORDS = new Set(["until", "till", "through", "thru", "left", "leaving", "ended", "ending"]);
-/** Words that say when something started. */
-const START_WORDS = new Set(["started", "start", "starting", "joined", "join", "joining", "began", "begin", "beginning", "from", "since"]);
-/** Words that say something is still going on, wherever they are. */
-const OPEN_WORDS = new Set(["present", "current", "currently", "ongoing", "since"]);
+/** Words that say something started, wherever they are ("from" says so only right before its year: `START_MARKERS`). */
+const START_WORDS = new Set(["started", "start", "starting", "joined", "join", "joining", "began", "begin", "beginning", "since"]);
+/** Words that say something is still going on, wherever they are ("still" and "onward(s)": revision 2, X4). */
+const OPEN_WORDS = new Set(["present", "current", "currently", "ongoing", "since", "still", "onward", "onwards"]);
+/** Words that mark a start right before its year; with no end anywhere, what started is still going on: "from 2019" (X4). */
+const START_MARKERS = new Set(["from", "starting"]);
+/** Words before "this day" that leave something open: "to this day" (X4). */
+const THIS_DAY_JOINERS = new Set(["to", "until", "till"]);
 /** Words that leave a range open when they end it: "2019 to date", "2019–now", "until today". */
 const OPEN_RANGE_ENDS = new Set(["now", "today", "date", "present", "current"]);
-/** Words that may sit between an end word or a joiner and its year: "until the end of March 2021". */
-const BEFORE_YEAR = new Set(["in", "on", "of", "the", "end", "early", "mid", "late"]);
+/**
+ * Words that may sit between an end word or a joiner and its year: "until the end of March 2021", and (X4, so a range
+ * with an end is never read as a start with none) "until summer 2021", "through Q2 2021", "to H1 2021".
+ */
+const BEFORE_YEAR = new Set(["in", "on", "of", "the", "end", "early", "mid", "late", "spring", "summer", "fall", "autumn", "winter"]);
+const QUARTER_OR_HALF = /^(?:q[1-4]|h[12])$/;
+/** "mid-2021" is "mid 2021": the word before a year, not a range (X4). */
+const PART_OF_YEAR = /(?<![\p{L}\p{N}])(early|mid|late)\s*-\s*(?=(?:19|20)\d{2}(?!\d))/giu;
 /** A year followed by a dash and then nothing, or only punctuation: "(2019–)". */
 const DANGLING_RANGE = /(?<!\d)(?:19|20)\d{2}\s*-\s*(?=[^\p{L}\p{N}\s-]|$)/u;
 
@@ -300,13 +316,15 @@ function isDay(word: string): boolean {
  * verb, so a month counts only in a date. Seasons are words, not dates.
  */
 export function datesIn(text: string): DateFacts {
-  const normalized = normalizeForChecks(text).replace(/[‐‑‒–—―−]/g, "-");
+  const normalized = normalizeForChecks(text).replace(/[‐‑‒–—―−]/g, "-").replace(PART_OF_YEAR, "$1 ");
   const words = normalized.match(/[\p{L}\p{N}]+|-/gu) ?? [];
   const lower = words.map((word) => word.toLowerCase());
   const years: string[] = [];
   const months: number[] = [];
   const endYears: string[] = [];
   let openEnd: string | undefined;
+  /** The first start marker with its year, as written: "from 2019", "starting in March 2019". */
+  let startMark: string | undefined;
   /** Whether a year sits just before `at` (past a month or a day): the start of a range. */
   const yearBefore = (at: number): boolean => {
     let back = at - 1;
@@ -331,12 +349,16 @@ export function datesIn(text: string): DateFacts {
       const anchored = joiner === "-" || joiner === "to" ? yearBefore(index - 1) : END_WORDS.has(joiner) && joiner !== "left";
       if (anchored) openEnd = joiner === "-" ? `–${lower[index]}` : `${joiner} ${lower[index]}`;
     }
+    // "to this day" and "and counting" (X4).
+    if (openEnd === undefined && lower[index] === "day" && lower[index - 1] === "this" && THIS_DAY_JOINERS.has(lower[index - 2] ?? "")) openEnd = `${lower[index - 2]} this day`;
+    if (openEnd === undefined && lower[index] === "counting" && lower[index - 1] === "and") openEnd = "and counting";
     if (!isYear(word)) continue;
 
     // Is this year the end of something? Look back past the words that may sit before a year.
     let back = index - 1;
-    while (back >= 0 && index - back <= 4 && (BEFORE_YEAR.has(lower[back]!) || monthNumber(lower[back]!) !== undefined || isDay(lower[back]!))) back -= 1;
+    while (back >= 0 && index - back <= 4 && (BEFORE_YEAR.has(lower[back]!) || QUARTER_OR_HALF.test(lower[back]!) || monthNumber(lower[back]!) !== undefined || isDay(lower[back]!))) back -= 1;
     const before = lower[back] ?? "";
+    if (startMark === undefined && START_MARKERS.has(before)) startMark = words.slice(back, index + 1).join(" ");
     if (END_WORDS.has(before)) {
       endYears.push(word);
       continue;
@@ -351,9 +373,13 @@ export function datesIn(text: string): DateFacts {
     endYears.push(word);
   }
   if (openEnd === undefined && DANGLING_RANGE.test(normalized)) openEnd = "–";
+  // A start marker with no end anywhere leaves what started open: "from 2019", "starting in 2019" (X4).
+  const openStart = openEnd === undefined && startMark !== undefined && endYears.length === 0;
+  if (openStart) openEnd = startMark;
 
-  const startOnly = years.length > 0 && endYears.length === 0 && lower.some((word) => START_WORDS.has(word));
-  return { years, months, endYears, ...(openEnd !== undefined ? { openEnd } : {}), startOnly };
+  // "Graduated from Fernwood University in 2019." states no start: "from" marks one only right before its year.
+  const startOnly = years.length > 0 && endYears.length === 0 && (startMark !== undefined || lower.some((word) => START_WORDS.has(word)));
+  return { years, months, endYears, ...(openEnd !== undefined ? { openEnd } : {}), ...(openStart ? { openStart: true as const } : {}), startOnly };
 }
 
 /** Whether a claim leaves its dates open: it says so ("present", "since", "2019–"), or states a start and no end. */
