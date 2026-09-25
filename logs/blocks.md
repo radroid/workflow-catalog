@@ -1662,3 +1662,18 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - K11 (the pairing buttons) and K10 (long paths at 390) were the critic's "outside this round" items. They're ruled in, because P06.1 is the Status page's follow-up packet.
 - The `runner.css` grant is widened for the busy style and the path wrap.
 - P05's identical short-name loop in `settledMessage` is carried to P06.
+
+## 2026-09-25 — The orchestrator's session restarted again [RESUMED]
+
+**Iter:** 007 (in progress)
+**Source:** owner
+**Severity:** info
+
+**What happened:** at about 05:57 the Claude Code process exited, and P05's and P06.1's implementers stopped with it. The owner re-kicked the loop at once.
+- **P05:** revision 4 was complete and pushed at 451398e, report included. Only its CI was still running.
+- **P06.1:** revision 1 was part-pushed at 1fa22fb.
+  - Two retaken screenshots were uncommitted, and its shot harness was orphaned on 4380 (stopped).
+  - CI at 1fa22fb failed on two K3 tests that time out intermittently. They passed at c36b18c and 28e454b.
+- **The P06.1 implementer resumed from its transcript** with a SendMessage. It was told to fix the flake at its cause (wait on the event, never raise a timeout or weaken an assertion), prove it with 10 runs in a row, and finish K12.
+
+**Owner direction** (09-25): the build is done when every task in the plan is complete.
