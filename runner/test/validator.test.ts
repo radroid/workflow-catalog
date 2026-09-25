@@ -438,3 +438,89 @@ describe("revision 1, V10: the model never learns which label, id or wording was
     expect(JSON.stringify(result.forModel)).not.toContain("excluded_claim");
   });
 });
+
+/**
+ * Revision 2 (X1–X4): every probe the round-2 reviewer found passing, each
+ * as a whole draft that must now be refused, the false refusals X2 and X4(b)
+ * rule away, and the honest controls that must still pass. Extra claims are
+ * test-local and fictional (Ada Quill at Fernwood Labs and Harbor), labelled
+ * after the fixture's eight.
+ */
+function confirmedClaim(label: string, kind: ValidationClaim["kind"], text: string): ValidationClaim {
+  const n = label.slice(1).padStart(4, "0");
+  return { label, id: `0a0b0c0d-${n}-4e0f-8a1b-2c3d4e5f6a7b`, kind, status: "confirmed", text };
+}
+
+function rulesWith(extra: readonly ValidationClaim[], ...statements: string[]): ValidationRule[] {
+  return validateDraft({ draft: resume(...statements), claims: [...LABELLED, ...extra], postingText: POSTING, coverLetterRequested: false }).refusals.map((refusal) => refusal.rule);
+}
+
+describe("revision 2, X2: an abbreviation is no longer mistaken for a sentence end", () => {
+  const degree = confirmedClaim("C9", "credential", "B.Eng. Software Engineering, Fernwood University, 2019.");
+
+  it("passes a degree cited verbatim from its claim, and with “in” after it", () => {
+    expect(rulesWith([degree], "B.Eng. Software Engineering, Fernwood University, 2019 [C9].")).toEqual([]);
+    expect(rulesWith([degree], "B.Eng. in Software Engineering at Fernwood University, 2019 [C9].")).toEqual([]);
+    expect(rulesWith([degree], "Software Engineering (B.Eng.), Fernwood University, 2019 [C9].")).toEqual([]);
+  });
+
+  it.each([
+    ["B.Tech.", "B.Tech. Computer Science, Fernwood University, 2019."],
+    ["M.Phil.", "M.Phil. Computer Science, Fernwood University, 2020."],
+    ["D.Phil.", "D.Phil. Computer Science, Fernwood University, 2023."],
+  ])("passes %s as its claim states it", (_name, text) => {
+    const claim = confirmedClaim("C9", "credential", text);
+    expect(rulesWith([claim], `${text.slice(0, -1)} [C9].`)).toEqual([]);
+    expect(splitSentences(`${text.slice(0, -1)} [C9].`)).toHaveLength(1);
+  });
+
+  it("reads each of these degrees as a credential, so one can't stand in for another", () => {
+    expect(credentialsIn("B.Tech., M.Tech., M.Phil. and D.Phil.; BTech, MPhil, DPhil")).toEqual(["btech", "mtech", "mphil", "dphil"]);
+    expect(rulesWith([degree], "D.Phil. Software Engineering, Fernwood University, 2019 [C9].")).toEqual(["credential"]);
+    expect(rulesWith([degree], "M.Phil. Software Engineering, Fernwood University, 2019 [C9].")).toEqual(["credential"]);
+  });
+
+  it.each(["incl", "esp", "excl", "yrs", "avg", "intl", "univ", "govt", "mgmt", "assoc", "al", "cf"])("keeps a sentence whole at “%s.”", (abbreviation) => {
+    expect(splitSentences(`Shipped the on-call rotation tooling ${abbreviation}. the runbooks [C3].`)).toHaveLength(1);
+    expect(splitSentences(`Shipped the on-call rotation tooling ${abbreviation}. The runbooks [C3].`)).toHaveLength(1);
+  });
+
+  it("passes the reviewer's honest sentences with incl., esp. and approx. mid-sentence", () => {
+    expect(rules(resume("Shipped the on-call rotation tooling used by three engineering teams incl. the payments team [C3]."))).toEqual([]);
+    expect(rules(resume("Led the payments infrastructure team at Northwind Labs, esp. the ledger service behind its billing [C1]."))).toEqual([]);
+    expect(rules(resume("Shipped the on-call rotation tooling used by approx. three engineering teams [C3]."))).toEqual([]);
+  });
+
+  const cited = "Shipped the on-call rotation tooling used by three engineering teams";
+  it.each([
+    ["after a cited sentence that contains an abbreviation", `${cited} incl. the payments team [C3]. Won the Fernwood award.`],
+    ["before a cited sentence, itself containing an abbreviation", `Won the Fernwood award for the ledger service incl. its runbooks. ${cited} [C3].`],
+    ["after a degree cited verbatim", "B.Eng. Software Engineering, Fernwood University, 2019 [C9]. Won the Fernwood award."],
+    ["after a degree, lower-case", "B.Eng. Software Engineering, Fernwood University, 2019 [C9]. then won the Fernwood award."],
+  ])("still refuses an uncited sentence after an ordinary full stop: %s", (_name, statement) => {
+    expect(rulesWith([degree], statement)).toEqual(["uncited"]);
+  });
+
+  // A dotted word of one part ends its sentence unless it is listed or an initial, so nothing rides along after it.
+  it.each([
+    ["“it.” and a space", `The on-call team loved it. ${cited} [C3].`],
+    ["“UK.” and a space", `${cited} in the UK. Won the Fernwood award [C3].`],
+    ["“it.” and a capital, no space", `${cited} for it.Won the Fernwood award [C3].`],
+  ])("refuses an uncited sentence that ends in a one-part dotted word: %s", (_name, statement) => {
+    expect(rules(resume(statement))).toEqual(["uncited"]);
+  });
+
+  it("never reads two words run together (“it.Won.”) as one dotted abbreviation", () => {
+    expect(splitSentences(`Loved it.Won. ${cited} [C3].`)).toEqual(["Loved it.", "Won.", `${cited} [C3].`]);
+    expect(rules(resume(`Loved it.Won. ${cited} [C3].`))).toEqual(["uncited", "uncited"]);
+  });
+
+  it("keeps the honest controls: U.S. and e.g. mid-sentence, Ph.D., an initial, and Node.js", () => {
+    expect(rules(resume("Led the payments infrastructure team at Northwind Labs for U.S. merchants [C1]."))).toEqual([]);
+    expect(rules(resume("Led the U.S. Payments infrastructure team at Northwind Labs [C1]."))).toEqual([]);
+    expect(rules(resume("Led the payments infrastructure team at Northwind Labs, e.g. redesigning the ledger service behind its billing [C1]."))).toEqual([]);
+    expect(rules(resume("Shipped the on-call rotation tooling in Node.js, served from tools.example.com, used by three engineering teams [C3]."))).toEqual([]);
+    expect(splitSentences("Worked with a Ph.D. student and J. Doe on it [C1].")).toHaveLength(1);
+    expect(splitSentences("Built ASP.NET services for the U.S.Army team [C1].")).toHaveLength(1);
+  });
+});

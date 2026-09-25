@@ -453,10 +453,12 @@ export function titlesIn(text: string): string[] {
  * Degrees, certifications and licences. Deliberately narrow, so ordinary
  * engineering words don't trip it: no "degree", "license" or "certificate"
  * (a TLS certificate is not a credential), and "master" or "bachelor" only
- * capitalized or possessive ("the master branch" is not a degree).
+ * capitalized or possessive ("the master branch" is not a degree). The
+ * dotted degrees revision 2 reads whole (X2: `B.Tech.`, `M.Phil.`, `D.Phil.`)
+ * are credentials too, so one can't stand in for another.
  */
 const CREDENTIAL_PATTERN =
-  /(?<![\p{L}.])(?:B\.\s?S\.?|B\.\s?A\.?|B\.\s?Sc\.?|B\.\s?Eng\.?|M\.\s?S\.?|M\.\s?A\.?|M\.\s?Sc\.?|M\.\s?Eng\.?|BSc|MSc|BEng|MEng|MBA|Ph\.\s?D\.?|PhD|Bachelor(?:'s)?|bachelor's|Master(?:'s)?|master's|[Dd]octorate|[Dd]octoral|[Dd]iploma|[Cc]ertified|[Cc]ertification|[Aa]ccredited|BS|BA|MS|MA)(?![\p{L}])/gu;
+  /(?<![\p{L}.])(?:B\.\s?S\.?|B\.\s?A\.?|B\.\s?Sc\.?|B\.\s?Eng\.?|B\.\s?Tech\.?|M\.\s?S\.?|M\.\s?A\.?|M\.\s?Sc\.?|M\.\s?Eng\.?|M\.\s?Tech\.?|M\.\s?Phil\.?|D\.\s?Phil\.?|BSc|MSc|BEng|MEng|BTech|MTech|MPhil|DPhil|MBA|Ph\.\s?D\.?|PhD|Bachelor(?:'s)?|bachelor's|Master(?:'s)?|master's|[Dd]octorate|[Dd]octoral|[Dd]iploma|[Cc]ertified|[Cc]ertification|[Aa]ccredited|BS|BA|MS|MA)(?![\p{L}])/gu;
 
 /** A credential term in comparable form: lowercased, periods, spaces and apostrophes dropped ("B.S." and "BS" are the same). */
 function credentialKey(term: string): string {

@@ -26,10 +26,24 @@ const STRAY_BRACKET = /\[[^\]]*\]/g;
 /** Words that end in a period without ending a sentence. Compared lowercased, without the final period. */
 const ABBREVIATIONS = new Set([
   "dr", "mr", "mrs", "ms", "prof", "st", "jr", "sr", "vs", "etc", "inc", "ltd", "co", "corp", "no", "approx", "dept", "est", "fig", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+  // Revision 2, X2.
+  "incl", "esp", "excl", "yrs", "avg", "intl", "univ", "govt", "mgmt", "assoc", "al", "cf",
 ]);
 
-/** A dotted abbreviation such as `B.S.`, `U.S.`, `e.g.`, `Ph.D.`: one or two letters, a period, repeated. */
-const DOTTED = /^(?:[A-Za-z]{1,2}\.)+$/;
+/**
+ * A dotted abbreviation (revision 2, X2): one or two letters and a period, then parts of up to five letters,
+ * each with its period: `B.S.`, `U.S.`, `e.g.`, `Ph.D.`, `B.Eng.`, `B.Tech.`, `M.Phil.`, `D.Phil.`.
+ */
+const DOTTED = /^[A-Za-z]{1,2}\.(?:[A-Za-z]{1,5}\.)*$/;
+
+/**
+ * A dotted word whose two-letter first part is followed by a longer part: two words run together ("it.Won."),
+ * never an abbreviation. A two-letter first part takes only short parts after it: `Ph.D.`, `LL.M.`, `Ed.D.`.
+ */
+const TWO_WORDS_RUN_TOGETHER = /^[A-Za-z]{2}\.[A-Za-z]{3,}\./;
+
+/** One more part of a dotted abbreviation, right after a period: the `D.` of `Ph.D.`, the `Eng.` of `B.Eng.`. */
+const DOTTED_PART = /^[A-Za-z]{1,5}\./;
 
 /**
  * What ends a sentence: a run of sentence terminals (`.`, `!`, `?`, the
@@ -106,13 +120,20 @@ export function stripCitations(text: string): string {
     .trim();
 }
 
-/** Whether `word`, ending in a period, is an abbreviation or an initial rather than the end of a sentence. */
-function isAbbreviation(word: string): boolean {
+/**
+ * Whether `word`, ending in a period, is an abbreviation or an initial rather than the end of a sentence: a
+ * listed abbreviation (`Inc.`, `incl.`), an initial (`J. Doe`), or a dotted abbreviation of two parts or more
+ * (`B.Eng.`, `e.g.`). A dotted word of one part is an ordinary word ending its sentence unless it is listed or an
+ * initial: "… for it. Shipped …" and "… in the UK. Won …" are two sentences, so the first can't ride along
+ * uncited with the second. Nor is "it.Won.", two words run together.
+ */
+export function isAbbreviation(word: string): boolean {
   const bare = word.replace(/^[\p{Ps}\p{Pi}"']+/u, "");
-  if (DOTTED.test(bare)) return true;
   const lower = bare.replace(/\.$/, "").toLowerCase();
   if (ABBREVIATIONS.has(lower)) return true;
-  return /^[A-Z]$/.test(bare.replace(/\.$/, "")); // an initial, as in "J. Doe"
+  if (/^[A-Z]$/.test(bare.replace(/\.$/, ""))) return true; // an initial, as in "J. Doe"
+  const parts = bare.split(".").length - 1;
+  return parts >= 2 && DOTTED.test(bare) && !TWO_WORDS_RUN_TOGETHER.test(bare);
 }
 
 /** The index of the first character at or after `from` that isn't an invisible format character. */
@@ -158,7 +179,10 @@ function endsSentence(text: string, start: number, match: RegExpExecArray, next:
   if (!opensSentence) return false; // a digit or a lower-case letter: 3.5, Node.js, example.com
   if (period) {
     const tokenStart = text.lastIndexOf(" ", match.index) + 1;
-    if (isAbbreviation(text.slice(tokenStart, match.index + 1))) return false; // B.S., Ph.D., U.S., St.Louis
+    // The dotted word this period is inside, through the part right after it ("Ph." and "D." in "Ph.D."): a word
+    // of one part is an abbreviation only when listed or an initial, so "it.Won" still ends a sentence (X2).
+    const part = DOTTED_PART.exec(text.slice(next))?.[0] ?? "";
+    if (isAbbreviation(`${text.slice(tokenStart, match.index + 1)}${part}`)) return false; // B.S., Ph.D., U.S., St.Louis
     if (DOTTED_NAME_TAIL.test(text.slice(next))) return false; // ASP.NET, Socket.IO
   }
   return true;
@@ -195,8 +219,10 @@ function splitLine(line: string): string[] {
  *   before one, or a citation marker follows it ("… teams.Won …"), and
  *   always right after a citation marker ("… [C3].won …").
  * - A period never ends one when it ends an abbreviation or an initial
- *   (`B.S.`, `Inc.`, `J. Doe`), sits inside a number (`3.5`) or a name
- *   (`Node.js`, `ASP.NET`).
+ *   (`B.S.`, `B.Eng.`, `Ph.D.`, `Inc.`, `incl.`, `J. Doe`), sits inside a
+ *   number (`3.5`) or a name (`Node.js`, `ASP.NET`). A dotted word of one
+ *   part ends one unless it is listed: "… for it. Shipped …" is two
+ *   sentences (revision 2, X2).
  * - Invisible format characters are looked through, never at.
  *
  * Citation markers that open a sentence (`… Labs. [C1] Maintains …`) belong
