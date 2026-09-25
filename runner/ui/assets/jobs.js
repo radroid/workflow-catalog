@@ -129,9 +129,14 @@ function plainOf(message) {
     .join("");
 }
 
+/** P06.1 item 1.3: cuts at the last whole word that fits, never mid-word ("Staff Platform Engin…"); only a single
+ * word longer than `max` itself falls back to a hard cut, since there is no earlier space to cut at. */
 function shorten(text, max) {
   const line = String(text).replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const atSpace = cut.lastIndexOf(" ");
+  return `${(atSpace > 0 ? cut.slice(0, atSpace) : cut).trimEnd()}…`;
 }
 
 /** `before“name”after`, with the name shortened so the whole sentence fits the line (T18). */
@@ -180,7 +185,11 @@ function lastAction(message, tone = "done") {
       text.title = plain; // the whole sentence for a pointer, where the line is clamped at 640 px
     });
   if (text.textContent === plain && tag.textContent === TAGS[tone]) {
+    // P06.1 item 1.7: the same outcome as last time still needs its own announcement, so the line is cleared and
+    // reapplied a frame later. Clearing only .text left .tag ("Refused", say) sitting alone for that frame, which
+    // assistive tech could read as its own announcement; clearing both leaves nothing to read in between.
     keepInPlace(() => {
+      tag.textContent = "";
       text.textContent = "";
     });
     requestAnimationFrame(apply);
@@ -569,6 +578,11 @@ let listKey = "";
 /** A row's own status lines: a damaged file (T6), and an extraction still going or not done (T11). */
 function rowStatus(entry) {
   const lines = [];
+  if (entry.directoryUnreadable) {
+    // P06.1 item 2.2: as T6 does for one damaged file, but for the job's whole directory (e.g. no read permission).
+    lines.push(el("p", { className: "job-status refused small" }, "This job's folder can't be read: ", el("code", { text: entry.directoryUnreadable })));
+    return lines; // nothing else is known about this job
+  }
   if (entry.unreadable.length > 0) {
     const [newest] = entry.unreadable;
     const more = entry.unreadable.length - 1;
@@ -609,25 +623,33 @@ function renderList() {
   });
 }
 
+/** Resolves true once the list has loaded; false (the failure announced only for the very first load) when it hasn't. */
 async function loadJobs({ announceErrors = false } = {}) {
   const seq = (listSeq += 1);
   let jobs;
   try {
     ({ jobs } = await getJson("/api/captures"));
   } catch (error) {
-    if (!announceErrors) return; // a background refresh failing is nobody's action to announce; the next one tries again
+    if (!announceErrors) {
+      // P06.1 item 1.6 (P05's V13 pattern): a background refresh failing used to be nobody's action to announce,
+      // which left the page silent for as long as the runner stayed down. Now, while it is watching a started
+      // extraction, it says so once.
+      showUnreachable(error);
+      return false;
+    }
     keepInPlace(() => {
       morphChildren($("jobs-list"), []);
       $("jobs-list").hidden = true;
       $("jobs-empty").hidden = true;
     });
     lastAction(error?.code === "unreachable" ? CANT_REACH : "Couldn't load the saved jobs; reload the page to try again.", "refused");
-    return;
+    return false;
   }
-  if (seq < listShown) return; // an older answer than the one already on screen
+  if (seq < listShown) return true; // an older answer than the one already on screen
   listShown = seq;
   jobsById = new Map(jobs.map((entry) => [entry.jobId, entry]));
   renderList();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -709,7 +731,9 @@ function renderRaw(jobId, latest) {
   return el(
     "details",
     { className: "detail-raw", attrs: { id, ...(isOpenNow(id) ? { open: "" } : {}) } },
-    el("summary", { text: "Full posting text (latest revision)" }),
+    // P06.1 item 1.4: names the revision actually shown, never an unconditional "(latest revision)" that can be
+    // wrong when the job's true latest is damaged and this is an older, readable one instead.
+    el("summary", { text: `Full posting text (revision ${latest.revision})` }),
     el("div", { className: "posting-text", text: latest.text, attrs: { tabindex: "0", role: "region", "aria-label": `Full posting text, revision ${latest.revision}` } }),
   );
 }
@@ -719,9 +743,27 @@ function renderDetail(detail) {
   const { jobId, revisions, unreadable } = detail;
   const extraction = detail.extraction ?? [];
   const latest = revisions.at(-1);
-  const title = latest ? jobDisplayName(latest) : UNREADABLE_JOB_NAME;
+  // P06.1 item 1.4: when the true latest revision is damaged, `latest` here is an older readable one; name the job
+  // the same way the list does (entryName: the url's path, never that older revision's title), so the two agree.
+  const latestIsCurrent = latest !== undefined && latest.revision === detail.latestRevision;
+  const title = !latest ? UNREADABLE_JOB_NAME : latestIsCurrent ? jobDisplayName(latest) : (urlPathName(latest.url) ?? UNREADABLE_JOB_NAME);
   if ($("detail-title").textContent !== title) $("detail-title").textContent = title;
+  // P06.1 item 1.1: a re-render never tears a focused node out from under the person (morphChildren's holdsFocus
+  // check), so if every revision just became unreadable while focus was on the retry button inside
+  // #detail-structured, that whole section would otherwise survive indefinitely: the data doesn't change again
+  // once it's fully unreadable, so showDetail's key check skips re-rendering, and the stale section is never
+  // revisited even after focus moves elsewhere. Move focus to the heading first, so the drop below actually drops it.
+  if (!latest) {
+    const structured = $("detail-structured");
+    if (structured && holdsFocus(structured)) $("detail-title").focus({ preventScroll: true });
+  }
   const children = [];
+  if (detail.directoryUnreadable) {
+    // P06.1 item 2.2: the job's whole directory couldn't be read (e.g. no read permission), not just one file in it.
+    children.push(
+      el("div", { className: "detail-unreadable small", attrs: { id: "detail-unreadable" } }, el("p", {}, "This job's folder can't be read: ", el("code", { text: detail.directoryUnreadable }), ".")),
+    );
+  }
   if (latest) {
     children.push(
       el(
@@ -839,9 +881,74 @@ function announceResult({ extraction, snapshot }) {
   return lastAction(withName("Couldn't extract ", name, "; its details say why."), "refused");
 }
 
-async function announceSettled() {
-  for (const [key, target] of [...started]) {
-    const state = await stateOf(target);
+/** How a settled extraction ended, for combining several into one message (P06.1 item 1.2). */
+function outcomeOf(state) {
+  return state.extraction?.status === "done" ? "done" : "refused";
+}
+
+/** Names in quotes, as data: “A”, “A” and “B”, “A”, “B” and “C”. */
+function namesPhrase(names, joiner) {
+  return names.flatMap((name, index) => [...(index === 0 ? [] : [index === names.length - 1 ? ` ${joiner} ` : ", "]), data(`“${name}”`)]);
+}
+
+/**
+ * Every extraction that settled in one refresh (T11, P06.1 item 1.2), as one message, each job named once: what
+ * couldn't be extracted, then what was. A single outcome keeps announceResult's own detailed wording; this is only
+ * for two or more settling together, so the first is never overwritten before it is ever shown to anyone.
+ */
+function settledMessage(outcomes) {
+  const namesOf = (kind) => outcomes.filter((outcome) => outcome.kind === kind).map((outcome) => outcome.name);
+  const refused = namesOf("refused");
+  const done = namesOf("done");
+  const sentence = (room) => {
+    const fitted = (names) => names.map((name) => shorten(name, room));
+    const clauses = [];
+    if (refused.length > 0) clauses.push(["Couldn't extract ", ...namesPhrase(fitted(refused), "or")]);
+    if (done.length > 0) clauses.push([clauses.length === 0 ? "Extracted " : "extracted ", ...namesPhrase(fitted(done), "and")]);
+    return [...clauses.flatMap((clause, index) => (index === 0 ? clause : ["; ", ...clause])), "."];
+  };
+  for (let room = Math.max(...outcomes.map((outcome) => outcome.name.length)); room >= 16; room -= 1) {
+    const message = sentence(room);
+    if (plainOf(message).length <= NAMED_LINE_MAX) return message;
+  }
+  const counts = [];
+  if (refused.length > 0) counts.push(`${refused.length} couldn't be extracted`);
+  if (done.length > 0) counts.push(`${done.length} ${done.length === 1 ? "was" : "were"} extracted`);
+  return `${plural(outcomes.length, "job")}: ${counts.join(", ")}.`;
+}
+
+/** Whether the "can't reach the runner" line is up (P06.1 item 1.6, P05's V13 pattern): announced once per outage while the page is watching a started extraction, cleared by the next good refresh. */
+let unreachableShown = false;
+
+function showUnreachable(error) {
+  if (unreachableShown || started.size === 0) return;
+  unreachableShown = true;
+  lastAction(error?.code === "unreachable" ? CANT_REACH : "Couldn't refresh the saved jobs: the runner hit a problem.", "refused");
+}
+
+/** The first good refresh after an outage: stop claiming the runner can't be reached, unless something else already replaced that line. `stillBusyName` is the name of a started extraction still running, if any. */
+function clearUnreachable(stillBusyName) {
+  if (!unreachableShown) return;
+  unreachableShown = false;
+  const text = $("last-action").querySelector(".text").textContent;
+  if (text !== CANT_REACH && text !== "Couldn't refresh the saved jobs: the runner hit a problem.") return;
+  if (stillBusyName) return lastAction(withName("Extracting ", stillBusyName, "…"), "working");
+  if (started.size === 0) lastAction("Reached the runner again.", "done");
+  // Otherwise a started extraction just stopped running; the caller's settle step, next, says how it ended.
+}
+
+/**
+ * Resolves every started extraction's state once (shared by the unreachable-notice clear and the settle
+ * announcement below, so neither re-fetches what the other just read), clears any stale "can't reach the runner"
+ * notice, then announces whatever finished, combined into one message when more than one did (P06.1 items 1.2, 1.6).
+ */
+async function settleAndClear() {
+  const resolved = [];
+  for (const [key, target] of [...started]) resolved.push({ key, state: await stateOf(target) });
+  const stillBusy = resolved.find(({ state }) => state && isBusy(state.extraction));
+  clearUnreachable(stillBusy ? jobDisplayName(stillBusy.state.snapshot) : undefined);
+  const settled = [];
+  for (const { key, state } of resolved) {
     if (!started.has(key)) continue;
     if (!state) {
       started.delete(key); // the job or revision is gone: nothing to announce
@@ -849,8 +956,12 @@ async function announceSettled() {
     }
     if (isBusy(state.extraction)) continue;
     started.delete(key);
-    announceResult(state);
+    settled.push(state);
   }
+  if (settled.length === 0) return;
+  if (settled.length === 1) return announceResult(settled[0]);
+  const outcomes = settled.map((state) => ({ kind: outcomeOf(state), name: jobDisplayName(state.snapshot) }));
+  lastAction(settledMessage(outcomes), outcomes.some((outcome) => outcome.kind === "refused") ? "refused" : "done");
 }
 
 function anyActive() {
@@ -873,9 +984,10 @@ async function refreshOnce(options) {
   clearTimeout(refreshTimer);
   refreshTimer = null;
   try {
-    await loadJobs(options);
+    const loaded = await loadJobs(options);
+    if (!loaded) return; // P06.1 item 1.6: showUnreachable, inside loadJobs, already said so if anyone is watching
     await reloadDetail();
-    await announceSettled();
+    await settleAndClear();
   } finally {
     scheduleRefresh();
   }
