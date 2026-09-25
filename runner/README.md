@@ -322,9 +322,10 @@ saved, and a running one shows them until it finishes. Each revision's
 extraction state sits beside its snapshot, in
 `jobs/<jobId>/extraction-<rev>.json`; a waiting or running state left by an
 earlier runner process reads as interrupted, and Re-extract queues it
-again. A snapshot or state file that can't be read is never a server error
-or a silent gap: the job still lists, by the address any readable revision
-records, with the damaged file's path named. Opening a job lists every revision, newest first,
+again. A snapshot or state file that can't be read, or a job's whole directory
+(no read permission, say), is never a server error or a silent gap: the job
+still lists, by the address any readable revision records, with the damaged
+file's — or the folder's — path named. Opening a job lists every revision, newest first,
 each with a line-based diff against the one before it ("What changed from
 the previous revision", collapsed to a few lines of context around each
 change — no dependency, since a posting is plain text and this is a diff to
