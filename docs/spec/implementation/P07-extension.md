@@ -1,6 +1,6 @@
 # P07 · Chrome extension
 
-Status: claimed (part C) (part A done iter 003, PR #7, squash bc55bb3; part B done iter 005, PR #12, squash e01017c)
+Status: done (part A iter 003, PR #7, squash bc55bb3; part B iter 005, PR #12, squash e01017c; part C 2026-09-25, PR #24, squash 98fa482)
 Assignee: iter-003 implementer (Sonnet), part A; revision 2 iter-003 (Opus); part B iter-004 implementer (Sonnet); part B revision 1 iter-004 implementer (Sonnet); part B revision 2 iter-005 escalation implementer (Opus); part B revision 3 iter-005 escalation implementer (Opus); part B revision 4 iter-005 escalation implementer (Opus); manual session (Opus), part C
 Blocked by: P02 (pairing and bridge), P06 (manifests and commands)
 Owns: extension/
