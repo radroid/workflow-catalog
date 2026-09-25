@@ -43,6 +43,9 @@ The items:
   - The page's requests have no timeout, so a runner that hangs rather than stops is never noticed. Reuse the Jobs page's timeout, and show the runner-down notice.
   - With focus on the runner line's Settings link, the runner going down replaces that line and drops focus to the body. Keep focus on a stable node.
   - Titles over 60 characters or 6 words are left out of download names, so two such jobs at one company collide. Cut at a word instead, and tell collisions apart.
+- **From P05's round-3 critic** (`logs/handoff/P05-round-3-review.md`):
+  - The combined outcome line cuts job names mid-word, even at 1280, and its counted form names none, not even the failure. Cut at a word, and name at least the failure.
+  - A repeated identical refusal first announces the tag alone ("Refused"). Announce the whole line each time.
 
 ## Alongside P08-B and P03.1 (iter 008)
 - **The budget pause on the board.** P08's deliverable shows a paused budget and its reason ("provider limit") on the board and in Settings. Settings already shows it (P08-A). The board is P06's: read the budget from `GET /status` or `GET /api/runs/budget`, and never edit `runs.ts`, `budget.ts` or `settings.html`.

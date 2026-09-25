@@ -29,7 +29,7 @@ Bounded work packets for the MVP in [../mvp-spec.md](../mvp-spec.md). Each packe
 | [P04 job capture](P04-job-capture.md) | P03 | P09 |
 | [P05 preparation and validator](P05-preparation-and-validator.md) | P04 | P09 |
 | [P06 board and sessions](P06-board-and-sessions.md) | P05 | P09; P08-B, P03.1 and P06.1 (Owns disjoint; see the packet's "Alongside P08-B and P03.1") |
-| [P06.1 Jobs and Status page follow-ups](P06.1-jobs-and-status-followups.md) | P05 (the runner-down notice) | P06, P08-B, P03.1, P07 (Owns disjoint) |
+| [P06.1 Jobs and Status page follow-ups](P06.1-jobs-and-status-followups.md) | — (copies P05's runner-down notice from `packet/P05` until P05 merges) | P05, P06, P08-B, P03.1, P07 (Owns disjoint) |
 | [P07 extension](P07-extension.md) | P02 (pairing), P06 (manifests) | P08, P09 |
 | [P08 schedules, runs, budget](P08-schedules-runs-budget.md) | P05 | P07, P09 |
 | [P09 catalog site](P09-catalog-site.md) | P00, P01 | everything from P02 on |
