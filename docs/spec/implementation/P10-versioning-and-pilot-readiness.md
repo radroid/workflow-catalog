@@ -1,6 +1,6 @@
 # P10 · Package versioning, upgrade, and pilot readiness
 
-Status: claimed (part B)
+Status: part B ready for review
 Assignee: manual session (Sonnet), part B
 Blocked by: P02–P09
 Owns: runner/upgrade/, runner/server/routes/upgrade.ts, runner/ui/settings.html (upgrade section), packages/job-assistant/CHANGELOG.md, docs/pilot/
@@ -34,6 +34,132 @@ Findings are in `logs/blocks.md`, "P02.2 peer review, round 2". These small edit
 - **Dropped as trivial:** R2-N3 (a test comment), R2-N4 (`forget.ts:79`'s note wording for an unset source, which no production caller builds) and R2-N6 (the order of P02.2's report sections).
 
 ## Report
+
+### 2026-09-25 — Part B (manual session)
+
+Branched `packet/P10-B` from `origin/overnight/integration`. Built the
+upgrade flow (`runner/upgrade/` — semver, checksum, a hand-rolled tar
+reader/writer, an https-only/SSRF-safe fetcher that reuses only
+`safe-fetch.ts`'s `isBlockedAddress`, and the migration runner), the route
+(`runner/server/routes/upgrade.ts`, factory-based for test injection), the
+CLI (`runner/cli/upgrade.ts`), the Settings Upgrade section
+(`runner/ui/settings.html` + `runner/ui/assets/settings-upgrade.js` +
+`settings.css`), the one shipped migration fixture
+(`packages/contracts/migrations/0001-career-profile-backfill-arrays.ts`,
+0.1.0 → 0.2.0), `packages/job-assistant/CHANGELOG.md`, the four carried
+part-B items, and 16 screenshots. Per the sequencing note, held
+`runner/package.json` and Acceptance 2 until the orchestrator confirmed
+P03.1 had merged; then merged `origin/overnight/integration` (commit
+`69401ac`), added the `"upgrade"` script (`566e555`), and ran the success
+test.
+
+**Acceptance map:**
+1. *An instance on 0.1.0 stays on 0.1.0 until confirmed; the migration
+   fixture runs forward and is idempotent; a checksum mismatch refuses; a
+   failed step leaves the workspace unchanged.*
+   - Never-applies-without-confirmation: `runner/test/upgrade-core.test.ts`
+     › "nothing changes without confirmation (F12's core guarantee)" ›
+     "checkForUpgrade alone never writes to the workspace, however many
+     times it is called"; and `upgrade-core.test.ts` › "applyUpgrade" ›
+     "never applies without a matching confirmed version: a stale
+     confirmation (the release moved on) is refused, and nothing changes".
+   - Migration fixture forward + idempotent:
+     `packages/contracts/migrations/0001-career-profile-backfill-arrays.test.ts`
+     › "0001-career-profile-backfill-arrays" › "backfills presentation and
+     revisions as [] on a profile missing them, producing a schema-valid
+     profile" and › "is idempotent: running it a second time on its own
+     output changes nothing further"; also exercised end-to-end (real file,
+     real schema) by `runner/test/upgrade-core.test.ts` › "applyUpgrade" ›
+     "runs the shipped 0.1.0 -> 0.2.0 fixture migration for real: a
+     pre-migration career-profile.json gets backfilled".
+   - Checksum mismatch refuses: `upgrade-core.test.ts` › "checkForUpgrade" ›
+     "refuses (checksum_mismatch) when the downloaded tarball does not
+     match its .sha256, and never reads it as JSON"; route-level in
+     `upgrade-route.test.ts` › "GET /api/upgrade" › "refused (200, ok:
+     false shape from checkResponse) with a plain message for a checksum
+     mismatch" and › "POST /api/upgrade/confirm" › "422s a refused
+     (checksum mismatch) confirmation with a plain message, never a raw
+     exception".
+   - A failed migration step leaves the workspace unchanged:
+     `runner/test/upgrade-migrate.test.ts` › "runMigrations" › "a failed
+     step leaves the workspace unchanged: an earlier step's write is never
+     committed either" (also: "refuses when there is a gap in the chain
+     …, and writes nothing", "refuses to migrate backward", "refuses when
+     two migrations both claim the same from version").
+2. *The success test, executed.* `docs/pilot/success-test-run.md` (new).
+   Fresh clone `/tmp/wc-p10b-clone` (`packet/P10-B` @ `566e555`), fresh
+   workspace `/tmp/wc-p10b-ws`. Passed for real: steps 1 (clone+install), 2
+   (setup, `gateway` provider substituted so no real keychain/live-model
+   touch), 3 (doctor, matches the checklist's documented pre-pairing shape),
+   5's build half, 15 (forget, dry-run then real). Blocked with cause: step
+   4 (port 3210 held by an unrelated pre-existing process on this shared
+   machine — `lsof` confirmed before the attempt; `cli/runner.ts` hard-codes
+   the port with no override; not authorized to kill another process to
+   free it), which cascades to 6–14 (all need the running bridge); 5's load
+   half and 6 additionally need branded Chrome; 10, 12's live half, 13's
+   catch-up-on-demand and 14's "Paused" case additionally need a live model
+   call, a real Chrome tab group, real wall-clock waiting, or a real
+   provider 429 respectively — none forced, per the brief's own examples of
+   what a blocked step looks like. No failed (non-blocked, non-passed)
+   steps.
+3. *All previous packets' acceptance suites green in CI.* PR head CI run:
+   see the final reply for the run id/result (recorded there once the PR is
+   open and the run completes). Latest CI on `overnight/integration`
+   itself: run `36188000551`, `success` (`gh run list --branch
+   overnight/integration --limit 1`). Local chain on the PR branch, merged
+   with current `origin/overnight/integration` (head `566e555`, before the
+   success-test-run commit): `pnpm install --frozen-lockfile` (exit 0),
+   `pnpm typecheck` (exit 0, 6/6 workspaces), `pnpm test` (contracts 244,
+   job-assistant 153, apps/catalog 168, runner 2192 + 7 evals/161 gates,
+   extension 428 passed/5 skipped, fixtures-policy script 2/2, all green,
+   no `--workspace-concurrency=1` fallback needed), `pnpm -r lint` (exit 0,
+   6/6), `pnpm check:fixtures` (exit 0). `git status --porcelain` empty
+   afterward. The gate's added reviewer check (`sh
+   /tmp/wc-manual/eve-build-check.sh <worktree-root>`) also ran clean:
+   `EVE_BUILD_EXIT=0`, `git status --porcelain` empty.
+4. *Each carried part-B item has a test or a recorded check.* See below.
+
+**Carried items (all four; edited assertions file:line, old → new, why):**
+- **R2-N1** (`runner/README.md`). `:144` "the default is always
+  `~/JobAssistant`, and `--yes` without `--workspace` always fails" →
+  distinguished first-run (true) from a re-run (the recorded workspace is
+  the default and `--yes`'s answer); dropped "revision 1" at `:144` and in
+  the Doctor section ("warn (P02.2 revision 1)" → "warn (P02.2)"). Docs-only:
+  recorded check, no test (nothing in README.md is executable).
+- **R2-N2** (doctor's case-only match). `runner/test/doctor.test.ts` new
+  test at line 255, "R2-N2: does not warn on a case-only difference, on a
+  filesystem where that names the same folder" — probes the real
+  filesystem's case sensitivity via `stat().ino`/`.dev` (macOS APFS here is
+  case-insensitive, so the test genuinely exercises the path; it no-ops on
+  a case-sensitive filesystem such as Linux CI ext4).
+- **R2-N5** (`runner/lib/eve-env.ts:22`). `evePathEnv(options.codexDir)` →
+  `evePathEnv(options.codexDir, options.processEnv.PATH)` — was silently
+  defaulting to the real global `process.env.PATH` instead of the injected
+  option. `runner/test/eve-env.test.ts` new tests: "R2-N5: takes the rest
+  of PATH from its own processEnv option, never the real process.env.PATH"
+  and "R2-N5: an injected PATH combines with codexDir the same way the real
+  process.env.PATH would".
+- **`doctor --live`'s failure line** (`cli/doctor.ts` / `lib/live-check.ts`).
+  `` `The model check failed: ${result.detail ?? "no detail"}\n` `` (capital
+  after the colon, raw detail passed through) → a new
+  `formatCheckFailure(detail)` in `lib/live-check.ts` returning `` `The
+  check failed: ${detail ?? "no detail"}` ``, with the "the model answered,
+  but not …" detail lower-cased to match `server/eve-gateway.ts`'s existing
+  convention. `runner/test/live-check.test.ts` (new): "formatCheckFailure"
+  › "matches the Status page's exact prefix" and › "falls back to 'no
+  detail', same as the Status page does for a missing detail".
+
+**Chain and CI:** see Acceptance 3 above; PR opened into
+`overnight/integration`, body and final reply carry the PR number, head SHA
+and CI run id.
+
+**Not touched, and why:** `apps/catalog`, `extension/` (beyond the one real
+build in the success test) and every other packet's files — outside this
+packet's `Owns:`.
+
+**Open questions / unfinished:** none beyond the success-test's recorded
+blocked steps (all environmental — a shared machine's port, branded
+Chrome, a live model, real wall-clock time — never this packet's own code).
 
 ### 2026-09-25 — Gate fix round 1 (manual session, Sonnet)
 
