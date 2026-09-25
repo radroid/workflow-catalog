@@ -1,6 +1,6 @@
 # P05 · Preparation with evidence, the validator, and export
 
-Status: claimed (iter 007)
+Status: done (2026-09-25, PR #16, squash fa66206)
 Assignee: iter-007 implementer (Opus)
 Blocked by: P04
 Owns:
@@ -38,6 +38,14 @@ Every sentence in a generated document cites a confirmed claim, and the person s
 Board UI beyond the application page, sessions, schedules.
 
 ## Report
+
+### 2026-09-25 — Merge gate (manual session)
+Revision 5 (Z5–Z8, 3e2c868) was merged through the manual session's gate without a report of its own; the gate review stands in for it (FOLLOW-UP F6).
+- **CI:** run 36103834808 on 3e2c868, green, including the extension e2e.
+- **Smoke test on the head merged with integration:** green. Runner 1379 tests (34 new in revision 5), eval 7 files and 161 gates, contracts 235, job-assistant 153, catalog 168, extension 329 passed and 5 skipped.
+- **Corpus check:** 440 reviewer-probe verdicts (r2 to r5c) at 451398e and at 3e2c868. 17 changed, all asked for by Z5 (7), Z6 (3), Z7 (6) or Z8 (1); none unasked. `runner/test` gains 153 lines and loses none.
+- **Acceptance → tests:** the implementation section's table stands. Each test passed in the gate run.
+- **Review:** one gate pass, no BLOCKING findings, 6 FOLLOW-UPs (`FOLLOWUPS.md`).
 
 ### 2026-09-24 — Implementation (iter 007)
 
