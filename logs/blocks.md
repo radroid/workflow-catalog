@@ -1677,3 +1677,26 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **The P06.1 implementer resumed from its transcript** with a SendMessage. It was told to fix the flake at its cause (wait on the event, never raise a timeout or weaken an assertion), prove it with 10 runs in a row, and finish K12.
 
 **Owner direction** (09-25): the build is done when every task in the plan is complete.
+
+## 2026-09-25 — P05 peer review, round 5 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (the same reviewer and critic, narrow), PR #16 at 451398e
+**Severity:** low. The critic approved, and Z1–Z4 are done. The reviewer found three narrow regressions against 00ff33e from revision 4, each with a one-line cause it confirmed.
+
+**Verdict:** REVISE — 3 issues; UI APPROVE.
+- **Z3:** "was" in the capitalised-phrase path reads "…was a Northwind Labs executive priority" as a title.
+- **Z2:** a joined bracket hides a second title, so "(Senior, then CTO)" passes.
+- **Z4(b):** "the scores of engineers" is no longer counted.
+
+**What holds:**
+- Every round-4 input is refused, and every honest control passes.
+- The r2–r3d corpora are unchanged.
+- There are 19 test lines removed, all listed.
+- All 21 mutations fail tests.
+- The chain and CI are green (runner 1345).
+
+**Decision:**
+- Z5–Z8 in `logs/handoff/P05-round-5-review.md` go to the same escalation. Z8 takes the "I am engineering manager" finding now, because it's Z5's path.
+- **Process fix:** before reporting, the implementer reruns every reviewer corpus (r2–r5c) at the old and new heads, and lists every changed verdict. Any change no decision asked for is a regression, fixed before the report. The reviewer found every regression since round 3 this way; now the implementer finds them first.
+- **Round 6** is the reviewer only, narrow. The remaining findings are in P05.1.
