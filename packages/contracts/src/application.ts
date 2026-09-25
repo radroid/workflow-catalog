@@ -22,8 +22,13 @@ export type ApplicationStage = z.infer<typeof applicationStageSchema>;
  * the stage." Kept as its own nested object (rather than folded into
  * `stage`) precisely so a failed `runId` can never overwrite `stage` by
  * construction — there is no stage value a processing failure could set.
+ *
+ * `waiting` (P06, carried from P05's review): the last preparation parked on
+ * gap questions and waits for the person's answers. It is not a failure: the
+ * run ended as designed, nothing was guessed, and the board shows "Needs your
+ * answer" rather than a failure. Like `failed`, it never moves the stage.
  */
-export const applicationProcessingStatusSchema = z.enum(["idle", "running", "failed"]);
+export const applicationProcessingStatusSchema = z.enum(["idle", "running", "waiting", "failed"]);
 export type ApplicationProcessingStatus = z.infer<typeof applicationProcessingStatusSchema>;
 
 export const applicationProcessingSchema = z

@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { uuidSchema, type Application, type ApplicationDocument, type JobSnapshot, type JobStructured, type RunKind, type RunRecord } from "@workflow-catalog/contracts";
+import {
+  applicationStageSchema,
+  uuidSchema,
+  type Application,
+  type ApplicationDocument,
+  type ApplicationStage,
+  type JobSnapshot,
+  type JobStructured,
+  type RunKind,
+  type RunRecord,
+} from "@workflow-catalog/contracts";
 import { z } from "zod";
 import { postingText, requirementsDigest, reviewPreparation } from "../../agent/lib/prepare-logic.ts";
 import { buildPreparationPrompt } from "../../agent/lib/prepare-prompt.ts";
@@ -8,12 +18,13 @@ import { actionsOutsidePreparation, preparationCall, type PrepareApplicationOutp
 import { presentationSummary, reexportNote, renderDiffMarkdown, statementDiffs, versionChanges, type SourceClaim, type StatementDiff } from "../../export/diff.ts";
 import { coverLetterModel, letterDate, resumeModel, type DocumentModel } from "../../export/document.ts";
 import { renderDocx } from "../../export/docx.ts";
-import { contentDisposition, downloadName } from "../../export/file-names.ts";
+import { contentDisposition, downloadName, jobFilePart, jobNameOrdinals, type JobNameSource } from "../../export/file-names.ts";
 import { renderMarkdown } from "../../export/markdown.ts";
 import { pdfMissing, pdfUnsupported, renderPdf } from "../../export/pdf.ts";
 import { sha256Hex } from "../../lib/crypto.ts";
 import {
   ApplicationsStore,
+  ApplicationsStoreError,
   documentsForVersion,
   GAP_ANSWERS,
   isDocumentFileName,
@@ -30,6 +41,7 @@ import {
 import { getBudgetState } from "../../store/budget.ts";
 import { JobsStore } from "../../store/jobs.ts";
 import { ProfileStore, type OnboardingProfile } from "../../store/profile.ts";
+import { SessionsStore } from "../../store/sessions.ts";
 import { readiness as profileReadiness } from "../../store/profile-reducer.ts";
 import { ProfileBusyError, serialise } from "../../store/profile-writes.ts";
 import { labelClaims } from "../../validate/claims.ts";
@@ -608,8 +620,9 @@ async function finish(ctx: RunnerContext, plan: Plan, record: RunRecord | undefi
         processing: { status: "idle", ...processingBase },
       };
     }
-    const error = outcome.kind === "parked" ? `Waiting for your answer to ${plural(outcome.questions.length, "question")}.` : outcome.error;
-    return { ...application, processing: { status: "failed", ...processingBase, error } };
+    // P06: a preparation parked on gap questions waits for the person; it isn't a failure, and it moves no stage either.
+    if (outcome.kind === "parked") return { ...application, processing: { status: "waiting", ...processingBase } };
+    return { ...application, processing: { status: "failed", ...processingBase, error: outcome.error } };
   });
   const current = await applications.readPreparation(plan.taskId);
   if (current && current !== "unreadable" && current.attemptId === plan.attemptId) {
@@ -870,7 +883,7 @@ interface NameSources {
   readonly missing: VersionRecord["pdfMissing"];
 }
 
-function fileView(taskId: string, document: ApplicationDocument, names: NameSources) {
+function fileView(taskId: string, document: ApplicationDocument, names: NameSources, jobOrdinal: number | undefined) {
   const name = path.posix.basename(document.path);
   const missing = document.format === "pdf" && document.kind !== "diff" ? (names.missing?.[document.kind] ?? []) : [];
   return {
@@ -879,9 +892,26 @@ function fileView(taskId: string, document: ApplicationDocument, names: NameSour
     name,
     label: `${KIND_LABELS[document.kind]} · ${FORMAT_LABELS[document.format]}`,
     href: `/api/applications/${taskId}/docs/${name}`,
-    download: downloadName({ person: names.person, kind: document.kind, format: document.format, version: document.version, job: names.job }),
+    download: downloadName({ person: names.person, kind: document.kind, format: document.format, version: document.version, job: names.job, ...(jobOrdinal ? { jobOrdinal } : {}) }),
     missing,
   };
+}
+
+/**
+ * Each application's job, numbered among the jobs whose downloads would share its name (P06, carried from
+ * P05's review): the name comes from the job's latest readable revision, the order from its first capture.
+ */
+async function jobOrdinals(applications: ApplicationsStore, jobs: JobsStore): Promise<Map<string, number>> {
+  const sources: JobNameSource[] = [];
+  for (const application of (await applications.list()).applications) {
+    const revisions = await jobs.revisions(application.jobId);
+    let first: JobSnapshot | undefined;
+    for (const revision of revisions) if (!first) first = await jobs.getSnapshot(application.jobId, revision);
+    const latest = await latestSnapshot(jobs, application.jobId);
+    if (!first || !latest) continue;
+    sources.push({ jobId: application.jobId, part: jobFilePart(latest.structured), firstCapturedAt: first.capturedAt });
+  }
+  return jobNameOrdinals(sources);
 }
 
 /** The latest moment anything happened to an application: a document written, or its preparation attempt updated. */
@@ -959,6 +989,70 @@ async function listView(ctx: RunnerContext) {
   };
 }
 
+/**
+ * The board (P06, F8): every application with its stage and, apart from it, its processing state (the last
+ * preparation's outcome, which never moves the stage), its revision (what a stage move names), and whether it
+ * is waiting to open in a session. Also the paired browser, how many results need review on the Sessions page,
+ * and how many changes in `inbox/` aren't synced yet.
+ */
+async function boardView(ctx: RunnerContext) {
+  const mark = flightMark(); // before any record is read
+  const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
+  const jobs = new JobsStore(ctx.workspace);
+  const sessions = new SessionsStore(ctx.workspace, ctx.clock);
+  const listed = await applications.list();
+  const now = ctx.clock.now();
+  const waiting = new Set<string>();
+  let review = 0;
+  for (const record of (await sessions.list()).sessions) {
+    const command = record.commandId ? await ctx.commands.get(record.commandId) : undefined;
+    if (SessionsStore.commandPending(record, command, now)) for (const item of record.items) waiting.add(item.taskId);
+    review += record.flags.filter((flag) => !flag.reviewedAt).length;
+  }
+  const inbox = await sessions.inbox(ctx.commands);
+  const devices = await ctx.devices.active();
+  const rows = await Promise.all(
+    listed.applications.map(async (application) => {
+      const row = await summaryView(ctx, application, jobs, applications, mark);
+      return { activity: row.activity, view: { ...row.view, revision: application.revision, processing: application.processing.status, waiting: waiting.has(application.taskId) } };
+    }),
+  );
+  rows.sort((a, b) => (a.activity === b.activity ? a.view.jobName.localeCompare(b.view.jobName) : a.activity > b.activity ? -1 : 1));
+  return {
+    applications: rows.map((row) => row.view),
+    unreadable: listed.unreadable.map((entry) => ({ path: entry.path })),
+    device: devices.length > 0 ? { paired: true, pairedAt: devices.at(-1)!.pairedAt } : { paired: false, pairedAt: null },
+    review,
+    unsynced: inbox.files.reduce((sum, file) => sum + file.events.filter((event) => event.plan === "apply").length, 0),
+  };
+}
+
+/**
+ * A stage the person chose on the board (P06): their explicit action, at the revision the board showed. A stale
+ * revision is refused, never merged: something else changed the application since the board loaded it.
+ */
+async function moveStage(ctx: RunnerContext, taskId: string, stage: ApplicationStage, expectedRevision: number): Promise<{ readonly outcome: "moved" | "unchanged" | "stale" | "missing" | "unreadable"; readonly application?: Application }> {
+  const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
+  const read = await applications.read(taskId);
+  if (read.kind !== "ok") return { outcome: read.kind };
+  let outcome: "moved" | "unchanged" | "stale" = "unchanged";
+  try {
+    const application = await applications.update(taskId, (current) => {
+      if (current.revision !== expectedRevision) {
+        outcome = "stale";
+        return undefined;
+      }
+      if (current.stage === stage) return undefined;
+      outcome = "moved";
+      return { ...current, stage };
+    });
+    return { outcome, application };
+  } catch (error) {
+    if (error instanceof ApplicationsStoreError) return { outcome: "unreadable" };
+    throw error;
+  }
+}
+
 async function detailView(ctx: RunnerContext, taskId: string) {
   const mark = flightMark(); // before any record is read
   const applications = new ApplicationsStore(ctx.workspace, ctx.clock);
@@ -980,6 +1074,7 @@ async function detailView(ctx: RunnerContext, taskId: string) {
   /** The version whose re-export was refused since the newest version was made (Y7): preparing again runs fresh. */
   const reexportRefused = versions.find((version) => version.reexportRefused !== undefined && version.reexportRefused.newest === newestAttached)?.version ?? null;
   const latest = await latestSnapshot(jobs, application.jobId);
+  const ordinal = (await jobOrdinals(applications, jobs)).get(application.jobId);
   const snapshots = new Map<number, JobSnapshot | undefined>();
   const jobAt = async (revision: number) => {
     if (!snapshots.has(revision)) snapshots.set(revision, await jobs.getSnapshot(application.jobId, revision));
@@ -1018,6 +1113,13 @@ async function detailView(ctx: RunnerContext, taskId: string) {
         const carried = detailsPartOf(version.idempotencyKey);
         const replaced = versions.find((other) => other.version === version.replaces);
         const newHeader = version.sameDraftAs !== undefined ? headerChanged(version, replaced) : null;
+        // P06 (carried from P05's review): excluding a claim keeps the profile's approved version, so two versions
+        // can both say "career profile version 1". The nearest earlier version with the same profile version and
+        // job revision but other inputs is named, so the two never read alike.
+        const sameProfileAs =
+          version.sameDraftAs === undefined
+            ? (versions.find((other) => other.version < version.version && other.profileVersion === version.profileVersion && other.jobRevision === version.jobRevision && contentKey(other.idempotencyKey) !== contentKey(version.idempotencyKey))?.version ?? null)
+            : null;
         return {
           version: version.version,
           replaces: version.replaces ?? null,
@@ -1035,7 +1137,11 @@ async function detailView(ctx: RunnerContext, taskId: string) {
           profileVersion: version.profileVersion,
           jobRevision: version.jobRevision,
           coverLetter: version.coverLetter,
-          files: application.documents.filter((document) => document.version === version.version).map((document) => fileView(taskId, document, names)),
+          /** The nearest earlier version made from the same profile version and job revision, but other claims or notes (P06); null otherwise. */
+          sameProfileAs,
+          /** Whether it leaves out sentences whose claims were excluded or changed since the version it replaces. */
+          leavesOutChanged: version.changes.some((change) => (change.noLongerConfirmed?.length ?? 0) > 0),
+          files: application.documents.filter((document) => document.version === version.version).map((document) => fileView(taskId, document, names, ordinal)),
           // Each sentence with its source claims and its presentation change, in the words diff-v<n>.md uses.
           statements: version.statements.map((statement) => ({ ...statement, presentation: presentationSummary(statement) })),
           changes: version.changes,
@@ -1054,6 +1160,8 @@ async function detailView(ctx: RunnerContext, taskId: string) {
 
 const prepareBodySchema = z.object({ jobId: z.string(), coverLetter: z.boolean() }).strict();
 const answerBodySchema = z.object({ requirement: z.number().int().positive(), answer: z.enum(GAP_ANSWERS) }).strict();
+const stageBodySchema = z.object({ stage: applicationStageSchema, expectedRevision: z.number().int().positive() }).strict();
+const MAX_STAGE_BODY_BYTES = 1024;
 
 const DOCUMENT_TYPES: Readonly<Record<string, string>> = {
   md: "text/markdown; charset=utf-8",
@@ -1150,7 +1258,8 @@ async function documentDownloadName(applications: ApplicationsStore, jobs: JobsS
   const version = await applications.readVersion(application.taskId, document.version);
   const person = version?.header?.name ?? (await applications.readDetails())?.name;
   const job = (await jobs.getSnapshot(application.jobId, document.jobRevision))?.structured;
-  return downloadName({ person, kind: document.kind, format: document.format, version: document.version, job });
+  const jobOrdinal = (await jobOrdinals(applications, jobs)).get(application.jobId);
+  return downloadName({ person, kind: document.kind, format: document.format, version: document.version, job, ...(jobOrdinal ? { jobOrdinal } : {}) });
 }
 
 export default defineRouteModule({
@@ -1192,12 +1301,29 @@ export default defineRouteModule({
       return c.json({ ok: true, outcome: started.outcome, ...version, ...reexported, application: await detailView(ctx, started.taskId) });
     });
 
+    // P06's board. Registered before /:taskId, though "board" could never pass as a task id anyway.
+    router.get("/board", async (c) => c.json(await boardView(ctx)));
+
     router.get("/:taskId", async (c) => {
       const taskId = c.req.param("taskId");
       if (!uuidSchema.safeParse(taskId).success) return errorResponse(404, "not_found", "No such application.");
       const detail = await detailView(ctx, taskId);
       if (!detail) return errorResponse(404, "not_found", "No such application.");
       return c.json(detail);
+    });
+
+    router.post("/:taskId/stage", async (c) => {
+      const taskId = c.req.param("taskId");
+      if (!uuidSchema.safeParse(taskId).success) return errorResponse(404, "not_found", "No such application.");
+      const body = await readBoundedJson(c.req.raw, MAX_STAGE_BODY_BYTES);
+      if (!body.ok) return body.response;
+      const parsed = stageBodySchema.safeParse(body.value);
+      if (!parsed.success) return validationErrorResponse(parsed.error);
+      const moved = await moveStage(ctx, taskId, parsed.data.stage, parsed.data.expectedRevision);
+      if (moved.outcome === "missing") return errorResponse(404, "not_found", "No such application.");
+      if (moved.outcome === "unreadable") return errorResponse(409, "application_unreadable", "This application's record can't be read, so its stage can't change.");
+      if (moved.outcome === "stale") return errorResponse(409, "stale_revision", "This application changed since the board showed it, so nothing moved.");
+      return c.json({ ok: true, moved: moved.outcome === "moved", stage: moved.application!.stage, revision: moved.application!.revision });
     });
 
     router.post("/:taskId/answers", async (c) => {

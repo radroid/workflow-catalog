@@ -544,6 +544,14 @@ applications/<taskId>/versions/v<n>.json one prepared version (P05): the validat
                                          couldn't draw
 applications/<taskId>/docs/              resume-v<n> and cover-v<n> (.md, .docx, .pdf), diff-v<n>.md (P05)
 applications/details.json                the name and contact line on every document (P05); never sent to the model
+sessions/<sessionId>.json                a session's manifest (P06): the SessionManifest the extension reads, one
+                                         stored job URL per Ready application; written once
+sessions/<sessionId>/state.json          what became of it (P06): its command, each tab the browser reported, the
+                                         person's Applied or Defer, each change's intent before its write, and the
+                                         results flagged for review
+sessions/inbox-ledger.json               which inbox/ files and events were imported, and which were refused (P06)
+outbox/application-session.json          a session for the extension to import by hand, when no browser is paired
+inbox/*.json                             results the extension exported, imported on the Sessions page (P06)
 runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
 runs/budget.json                        daily run limit, per-run item cap, and the pause (P08-A); survives restart
 .runner/devices/<deviceId>.json         paired devices (token hash, origin, expiry)
@@ -626,7 +634,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 | P03 | `server/routes/onboarding.ts`, `store/profile.ts`, `ui/onboarding.html`, `ui/profile.html`, `agent/tools/extract_claims.ts`, `agent/tools/ask_follow_up.ts`, onboarding skills |
 | P04 | `server/routes/captures.ts` (the `job_capture` handler, plus the paste/url-fetch/list/detail/re-extract routes), `store/jobs.ts`, `lib/safe-fetch.ts`, `lib/readable-text.ts`, `agent/tools/extract_job.ts` (IDs only: jobId, revision, structured fields — never a URL or raw text; it checks and returns the fields, and the route saves them after an ok turn), `ui/jobs.html` |
 | P05 | `server/routes/applications.ts` (list, detail, prepare, answer a gap question, the documents' header, downloads; queues the preparation turn through `runTurn` inside `withRun`), `store/applications.ts`, `agent/tools/prepare_application.ts` with `agent/lib/prepare-*.ts` (IDs, requirement accounts and the cited draft only — never a claim's id or text; it checks and returns, and the route saves after an ok turn and a second check), `validate/` (the deterministic validator), `export/` (Markdown, DOCX, PDF with its embedded Noto Sans, the diff, the download names), `ui/application.html`, the five preparation skills and the resume and cover-letter templates |
-| P06 | `server/routes/{applications,sessions,commands}.ts` (the `application_status_changed` and `browser_command_result` handlers), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts`. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
+| P06 | `server/routes/applications.ts`'s board (`GET /board`) and stage move (`POST /:taskId/stage`, at the revision the board showed), `server/routes/sessions.ts` (the `application_status_changed` handler; start a session, the Sessions view, write to the outbox, import from `inbox/`, mark a flag reviewed), `server/routes/commands.ts` (the `browser_command_result` handler), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts` (task IDs only; each resolves to the job URL the runner stored). Only the person's explicit Applied, or a board move, changes a stage; a tab report never does. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
 | P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn`, and the `classifyTurn` P03.2 split out of `runTurn` — free functions over `ctx`, now called from `routes/onboarding.ts`'s extraction route and `eve-gateway.ts`'s `checkModel`), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
 | P08-B | `agent/schedules/`, `scheduler/` (catch-up + fallback trigger), the schedules section of `ui/settings.html`, and `server/routes/runs.ts`'s `status()` for `schedules` and `start()` (catch-up). Calls into `run-harness.ts`'s `withRun` to actually run something. |
@@ -647,13 +655,15 @@ commands.
 
 `open_application_group` runs inside eve's process (`eve start`), not the
 bridge's, so there is no `ctx` and no `ctx.commands` there. The tool
-enqueues through the workspace files, with the same store:
-`new CommandQueue(await Workspace.open(process.env.RUNNER_WORKSPACE), systemClock).enqueue(command)`.
+enqueues through the workspace files, with the same stores:
+`new SessionsStore(workspace, systemClock).create({ taskIds }, new CommandQueue(workspace, systemClock))`,
+over `await Workspace.open(process.env.RUNNER_WORKSPACE)`. The board's Start button calls the same `create`.
 eve's process has `RUNNER_WORKSPACE`, because the launcher passes the
 settings in its environment. This is safe across processes:
 
 - An enqueue only creates a new file, exclusively (`link(2)`), which appears
-  whole.
+  whole. So does a session's record and manifest; with no paired browser,
+  `outbox/application-session.json` is replaced by an atomic rename.
 - Only the bridge leases and acknowledges, serialised in its one process.
 
 ## Privacy

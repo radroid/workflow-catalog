@@ -59,6 +59,21 @@ describe("applicationSchema", () => {
     }
   });
 
+  // P06: a preparation parked on gap questions is `waiting`, not `failed`, and like a failure it leaves the stage alone.
+  it("accepts a waiting processing state (parked on gap questions) beside an unmoved stage", () => {
+    const app = { ...validApplication(), processing: { status: "waiting" as const, runId: "1b1b1b1b-58cc-4372-a567-0e02b2c3d479" } };
+    const result = applicationSchema.safeParse(app);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.stage).toBe("saved");
+      expect(result.data.processing.status).toBe("waiting");
+    }
+  });
+
+  it("rejects a processing status outside idle, running, waiting and failed", () => {
+    expect(applicationSchema.safeParse({ ...validApplication(), processing: { status: "parked" } }).success).toBe(false);
+  });
+
   it("rejects an invalid stage", () => {
     expect(applicationSchema.safeParse({ ...validApplication(), stage: "submitted" }).success).toBe(false);
   });
