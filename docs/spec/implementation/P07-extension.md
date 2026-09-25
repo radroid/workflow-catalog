@@ -39,6 +39,210 @@ Findings: `logs/handoff/P07-B-round-4-review.md` and `logs/handoff/P07-B-round-5
 
 ## Report
 
+### 2026-09-25 — Part C (manual session)
+
+Manual session (Opus), branch `packet/P07-C` from `origin/overnight/integration` (P06 merged as 3e04e01, done commit de0019c), PR #24. Commits:
+- the claim;
+- the sessions code and its unit tests (`c0bd4d8`);
+- the carried-item tests, the manifest diff test and the iframe fixture (`66b8b9d`);
+- the e2e (`49c1e5b`);
+- the screenshots (`63e05a5`);
+- the README and checklist (`15f0e17`);
+- a merge of `origin/overnight/integration` at `0f62ba7`, which brought P08-B and P10-A (`d7657c1`);
+- this report.
+
+Files touched: `extension/**`, `docs/screenshots/P07-C-*.png` and this file. Nothing under `runner/` or `packages/` changed. The e2e imports the runner's real route modules (`loadRouteModules(ROUTES_DIR)` and `startModules`) and its stores, the way the harness already imported `Workspace`.
+
+**What shipped**
+- **Sessions** (`src/session/receive.ts`, `poll-alarm.ts`):
+  - When they poll: `GET /commands` when the side panel opens, on **Check for sessions**, and on the worker's `session-poll` alarm. The alarm runs every 15 minutes and is recreated at every worker start.
+  - What a poll does: each command is stored as a waiting session in `storage.local`. The poll opens nothing.
+  - Dedupe: every commandId is remembered, so a command sent again is never taken in again. Sessions are deduplicated by sessionId across the bridge and the file import, and a command for a session first imported by file attaches to it.
+  - Caps (gate 7, oversized): a poll takes at most 20 commands. A title is kept to one line of 80 characters.
+- **The command policy** (`policy.ts`): what the extension checks beyond the contract schema:
+  - the command is for this device, isn't expired, and names `job-assistant@0` (P06 note 9);
+  - it has at most 20 items, and names each task once;
+  - every URL is https to a public host. The IP ranges mirror the runner's `isBlockedAddress`; single-label and local-only names, and URLs with credentials, are refused too.
+  - A refused command is kept, and the panel says why. When it was addressed here and is live, it is reported `failed` with every item `skipped`, so the runner flags it and stops sending it.
+- **The tab group** (`open.ts`). Only a click opens one: **Start applying**, **Open the N missing tabs**, or **Reopen session**. The worker's alarm calls nothing in this file. The checkpoints:
+  1. take the session's open Web Lock;
+  2. journal phase `opening` and the attempt (`storage.local`);
+  3. per item, check the URL again, create the tab, then record its ID (`storage.session`);
+  4. group the recorded tabs, record the group ID, then name the group;
+  5. set phase `open`, with the report queued in the same write;
+  6. send the report.
+
+  Recovery: a session whose journal says `opening` while nobody holds its lock is marked `interrupted`. The panel and the worker's startup both check for this. The panel then offers **Open the N missing tabs** or **Keep what opened**; keeping reports the rest `skipped`.
+- **Reports and choices** (`report.ts`):
+  - Every event is written to the session before it is sent. It is sent again, with the same eventId, until the runner answers.
+  - A session's events go out in order. The first `browser_command_result` names every task; a later one names only its tabs.
+  - The answer's `result.items[].revision` is stored, and it is the `expectedRevision` Applied/Defer names (P06 note 1). `bridge-client.postEvent` now keeps `result`.
+  - A 409 `stale_revision` is shown and never retried. **Refresh** queues a new later report, whose answer carries the current revision (P06 note 3).
+  - When a pairing is refused or the runner is down, the event waits. When the runner refuses the event itself (`task_not_for_device`, `stage_moved_on`), it is marked refused.
+  - A 410 on the first report stops every later event on that session.
+- **Closed tabs** (`tabs.ts`, the worker's `tabs.onRemoved` and `onReplaced`):
+  - A recorded tab that closes is reported `closed` in a later report, and nothing else.
+  - No page is ever read: there is no content script and no `tabs` permission.
+  - A restored tab's ID was never recorded, so closing it does nothing.
+- **The side panel** (`src/sidepanel/`):
+  - The runner connection and **Check for sessions**.
+  - The current application: its address, the prepared-documents link to `/ui/application`, the four remaining steps, and **Applied** / **Defer**. **Go to its tab** uses `tabs.update`, which needs no `tabs` permission.
+  - Every session, with its next step: Start applying; the interrupted choices; or Reopen session with the same-title warning and "Open a new group anyway" / Cancel.
+  - One persistent live region says each outcome. Focus returns to the control, or moves to the application's heading.
+  - The current application follows the active tab only when you switch tabs, so **Show** isn't undone by a redraw.
+- **The file bridge** (Settings):
+  - An imported `application-session.json` is added to the side panel, ready to open. Its unsafe addresses are marked, and a copy of a session already there changes nothing.
+  - **Export session updates** writes `completion-events.json` (`{ events }`, refused ones left out) for `inbox/`. The block is added to the section only when there is something to export.
+  - A choice on a file session is recorded locally, and the panel asks the person to mark it on the Board too. See open question 1.
+- **The worker**: the poll alarm, the tab listeners, and `recoverInterrupted` at startup, all registered at module scope.
+
+**The nine gates → tests** (browser-boundary.md, "Acceptance gates worth prioritizing")
+1. **Replay.**
+   - `e2e/sessions-e2e.spec.ts` › "gate 1 (replay): a command the runner sends again after its lease lapsed is taken in once and opened once; a replayed report and choice change nothing". It uses the real P06 lease: the clock is moved 6 minutes. Then both stored events are re-posted from the extension's own origin and token; both answer `duplicate: true`, and the revision, results and changes are unchanged.
+   - Unit: `src/session/receive.test.ts` › "gate 1 (replay): …" (3 tests).
+   - `src/session/open.test.ts` › "a second click while one context is opening the session is refused as busy, never a second group".
+2. **Killed between journal and record.**
+   - `e2e/sessions-e2e.spec.ts` › "gate 2: the side panel closed while opening, in the gap between creating a tab and recording its ID, …". Fault injection wraps `chrome.tabs.create` in the opening page so the second tab is created and never answered, then the page is closed. The new panel shows "Opening stopped partway", "1 of 3 tabs were recorded" and both choices. **Keep what opened** reaches the runner as `partial` with two `item_skipped` flags, and nothing opens again.
+   - Unit, one test per checkpoint: `src/session/open.test.ts` › "gate 2: the opening context killed after each checkpoint". The checkpoints are:
+     - before the journal;
+     - after the journal;
+     - the create/record gap (settle, and resume);
+     - before group;
+     - before name;
+     - while the report is being sent.
+   - Unit: `src/session/poll-alarm.test.ts` › "marks an opening a killed side panel left behind as interrupted, and still opens nothing".
+3. **Restart with restored tabs.**
+   - `e2e/sessions-e2e.spec.ts` › "gate 3: after a restart (tab IDs gone, Chrome's restored tabs and group still there), …". `storage.session` is wiped (IDs and pairing) while the tabs and group stay. The session and its earlier Applied remain. A restored tab closing reports nothing. Reopen warns about the same-title group, and "Open a new group anyway" opens a second group without adopting a restored tab.
+   - Unit: `src/session/tabs.test.ts` › "gate 3: …" (3 tests).
+   - A real Chrome session restore is in the checklist.
+4. **Offline and reconnect.**
+   - `e2e/sessions-e2e.spec.ts` › "gate 4 and 9: offline, a choice waits and says so; …". The bridge is closed. Check says "Can't reach the runner", and Applied says it isn't recorded yet. The runner queues two more sessions. Then the bridge is back and the real worker alarm fires with no page open. It delivers the choice (stage `applied`, revision +1) and takes both sessions in as waiting, with no new tab. The alarm is then periodic at 15 minutes again.
+   - Unit: `src/session/poll-alarm.test.ts` › "gate 4: waking to a queue of commands after being offline takes them all in and opens no tab, no group".
+   - `src/worker/index.test.ts` › "F9/gate 4: the poll alarm takes a waiting session in and opens no tab".
+   - `src/session/report.test.ts` › "the runner unreachable: the choice waits as pending and goes again later as the same event; …".
+5. **Capture after navigation, a denial, the iframe fallback.**
+   - Navigation: `e2e/real-popup.spec.ts` › "refuses to save when the tab navigates between reading its URL and reading its text (SPA route change, review issue 2)" (part A).
+   - Denial: `e2e/extension.spec.ts` › "the popup, opened without a genuine activeTab grant, shows the no-readable-address fallback …" (part A).
+   - Iframe (new):
+     - `e2e/real-popup.spec.ts` › "gate 5 (P07 part C): a posting inside an embedded frame gets the fallback, never the careers page around it" (fixture `extension/fixtures/posting-iframe.html`);
+     - `src/capture/extractor.test.ts` › "P07 part C, gate 5: …" (5 tests);
+     - `src/popup/main.test.ts` › "P07 part C" › "gate 5: a posting inside an embedded frame gets the fallback, and nothing to save".
+   - How the fallback works: the extractor answers `posting_in_frame` when the page names no JobPosting of its own and a visible frame covers at least 40% of the viewport.
+6. **Two devices, then revoke, then an expired token.**
+   - `e2e/sessions-e2e.spec.ts` › "gate 6: another device's sessions never reach this browser; a revoked pairing and an expired one stop every command and every choice". The steps:
+     1. A second device's session never arrives here.
+     2. After a revoke, Applied is refused (401), the pairing is dropped, and the stage is unchanged.
+     3. Paired again as a new device, the waiting choice is refused by the runner (`task_not_for_device`), and a new press says "sent to this browser's earlier pairing".
+     4. An expired token (the clock moved past `DEVICE_TOKEN_TTL_MS`) gets "Your pairing expired or was revoked".
+   - Unit:
+     - `src/session/report.test.ts` › "gate 6: after pairing again as another device, …";
+     - `src/session/report.test.ts` › "gate 6: a revoked token (401) keeps the choice pending …";
+     - `src/session/receive.test.ts` › "keeps another device's command and an expired one as refused, …".
+   - Part B's `e2e/bridge-e2e.spec.ts` › "status (gate 6): …" still covers Settings.
+7. **Hostile, oversized and privileged inputs.**
+   - `e2e/sessions-e2e.spec.ts` › "gate 7 and 9: hostile commands from whatever answers on the bridge's port -- …". A stand-in on 4310 sends:
+     - privileged and private addresses: metadata, loopback, localhost, RFC 1918, IPv4-mapped IPv6, credentials, http;
+     - another device's command and a stale workflow version (`job-assistant@9`);
+     - a title in markup, shown as text in the panel and in the group name;
+     - an unknown command type, and `javascript:`/`chrome:`/`file:` items, which make the whole answer refused;
+     - an answer over 1 MiB.
+
+     Only the one public https address opens, and only on the click. The two refusals addressed here are reported `failed`/`skipped`.
+   - Unit:
+     - `src/session/policy.test.ts` (8 tests);
+     - `src/session/receive.test.ts` › "gate 6 and gate 7: …" and "gate 7, oversized: …";
+     - `src/shared/bridge-client.test.ts` › "P07 part C, gate 7: an answer larger than MAX_RESPONSE_CHARS is never parsed …";
+     - `src/sidepanel/render.test.ts` › "a session title and an address are data: shown as text, never as markup";
+     - `src/session/tabs.test.ts` › "the extension has no way to read a tab's page: …".
+   - Part A's hostile-posting test in `real-popup.spec.ts` covers posting text.
+8. **A closed tab and a success-looking page.**
+   - `e2e/sessions-e2e.spec.ts` › "gate 8: a closed tab is reported closed and nothing else; a page that says the application was submitted changes nothing". The tabs show "Thank you for applying!" with a hidden instruction, and nothing moves. Closing one reaches the runner as `closed` with a `closed` flag, the stage stays Ready, and there are no changes.
+   - Unit: `src/session/tabs.test.ts` › "gate 8: …" (6 tests).
+9. **Local only.**
+   - Runner not running: covered in the gate-4 e2e.
+   - Another program on the port and a stale workflow version: covered in the gate-7 e2e.
+   - Part B's `bridge-e2e.spec.ts` covers the wrong extension ID and Settings' local states.
+   - Sleeping laptop: the checklist.
+
+**The other acceptance items**
+- F9's flow: `e2e/sessions-e2e.spec.ts` › "F9: a poll shows the session ready to open and opens nothing; Start applying opens one titled group and reports every tab; Applied moves the stage, Defer doesn't". The runner's command is acknowledged, its session record shows three `opened` tabs and no flags, Applied bumps the revision by 1, and Defer moves nothing.
+- The manifest diff test: `src/manifest.test.ts` › "manifest.json, the part-C diff test: the whole file is exactly this". It has two tests: the whole manifest key for key, and the six permissions in order with no optional permissions, `externally_connectable` or `web_accessible_resources`. Part A's exact-set tests are unchanged.
+- The checklist: `extension/MANUAL-GATES.md`, one line per step:
+  - the real side panel;
+  - each gate on branded Chrome;
+  - a real restart with "Continue where you left off";
+  - a real sleep and wake;
+  - a second profile.
+
+**Carried items → tests**
+- **The Pairing card's expired notice.** `syncPairingSection` now compares the device id and whether the browser has paired before. If neither changed, it only re-derives the notice from `pairingExpired`, set or cleared silently.
+  - `src/options/part-c.test.ts` › "carried into part C: the Pairing card's expired notice …" (3 tests): a card that never showed paired, a never-paired card, and a notice cleared after a pair and un-pair elsewhere.
+  - Screenshot: `P07-C-options-expired-notice-*` (e2e › "carried: the Pairing card that never showed the paired state …").
+  - `forgetPairing` now also remembers that this browser was paired. Before this, a card built right after an Un-pair (`everPaired: true`) disagreed with storage, and the new comparison rebuilt it. The existing storage test already expected `getPairedBefore()` true after `forgetPairing`.
+- **A half-typed code survives a rebuild.** `src/options/part-c.test.ts` › "carried into part C: a half-typed code survives a rebuild" (2 tests): the text, the caret and focus carry over, and only from the focused field.
+- **K4's second sentence in the popup.** `src/popup/main.test.ts` › "P07 part C" › "carried (round-5 nit 1): a capture the contracts refuse for something other than its address gets K4's second plain sentence".
+- **The `forgetInvalidToken` window.** `forgetInvalidToken`, `flagOriginMismatch`, `recordPairing` and `forgetPairing` now run under one Web Lock (`PAIRING_LOCK`, `src/shared/locks.ts`), shared by every extension context.
+  - Test: `src/shared/storage.test.ts` › "P07 part C (carried): the forgetInvalidToken window is closed by the pairing lock" (2 tests).
+  - Mutation proof: with `withLock` mocked to run the work directly, both tests fail. The pairing is lost, and the flag lands after the Un-pair.
+  - The README's "Known limitations" entry for it is replaced.
+- **Opening stored URLs.**
+  - `src/session/policy.test.ts` › "opening stored URLs (carried into part C: …)" (5 tests).
+  - `src/session/open.test.ts` › "checks every URL again right before opening it: …".
+  - The gate-7 e2e.
+- **The e2e reaches the real handlers.**
+  - `startBridgeHarness({ modules: "real" })` now loads every route module and runs its start hooks. The default stays the bare bridge, for the vitest real-bridge test.
+  - `e2e/bridge-e2e.spec.ts` uses it for every test.
+  - "job_capture (gate 1): Save shows a single success state, against the real bridge" now also asserts that `JobsStore.findJobIdByUrl` finds the capture, with revisions `[1]` and the posting's text.
+  - The sessions e2e runs on it too.
+
+**Edited existing assertions**
+- `extension/src/worker/index.test.ts:187,196`:
+  - title: "does not arm any alarm at startup when nothing is queued" → "does not arm the retry alarm at startup when nothing is queued";
+  - assertion: `expect(fake.alarms.size).toBe(0)` → `expect(fake.alarms.has("job-capture-retry")).toBe(false)`.
+  - Why: part C's session poll alarm is armed at every start, as the brief requires. The retry-alarm half is unchanged, and the new test "arms the 15-minute session poll alarm at every start" asserts the other alarm exactly. The file's fake chrome also gained `storage.local`, `tabs.onRemoved/onReplaced` and a `getCommands` mock.
+- `extension/e2e/extension.spec.ts:175,183`:
+  - title: "the side panel placeholder renders …" → "the side panel renders …";
+  - assertion: `getByRole("heading", { name: "Coming soon" })` → `{ name: "Applications" }`.
+  - Why: the placeholder became the panel.
+- Not assertions, but existing tests whose setup changed:
+  - `e2e/bridge-e2e.spec.ts:136`: `startBridgeHarness()` → `startBridgeHarness({ modules: "real" })`, the carried item.
+  - `e2e/bridge-e2e.spec.ts:1324,1377`: the two stand-in tests that swap tokens from the side panel page now open it with `openQuietStoragePage()`, which waits for the panel's first check to finish. The panel now checks the runner when it opens, and a token stored during that check could otherwise be the one it uses.
+  - `playwright.config.ts`: two projects. The files that bind 4310 run one at a time.
+  - `e2e/real-bridge-harness.ts`: the scratch prefix is now `wc-p07-bridge-`, and `WC_E2E_SCRATCH_DIR` can choose the scratch folder.
+
+**Chain** (repo root, merged with `origin/overnight/integration` at `0f62ba7`, head `d7657c1`):
+- `pnpm install --frozen-lockfile`: ok.
+- `pnpm typecheck`: ok.
+- `pnpm test`:
+
+  | Package | Tests passed |
+  | --- | --- |
+  | contracts | 237 |
+  | job-assistant | 153 |
+  | catalog | 168 |
+  | runner | 2023, plus 7 eval results and 161 gates |
+  | extension | 433 |
+
+- `pnpm -r lint`: ok.
+- `pnpm check:fixtures`: ok.
+- `git status --porcelain`: empty.
+- Extension e2e (`playwright test`, after `pnpm build`): 47 passed in 2.7 min. That is the 9 sessions tests, 1 new real-popup test, and the existing tests.
+- CI: run `36181569659` on `d7657c1`, success. The extension step's Playwright run passed 47 in 4.1 min.
+
+**Screenshots**: `docs/screenshots/P07-C-*.png`, 20 files. Each is at 1280 and a true 390 (`document.documentElement.clientWidth` asserted before every capture), light and dark. Each is checked with axe in both themes and a `[hidden]` check first. Rewritten only with `P07C_UPDATE_SCREENSHOTS=1`.
+- `sidepanel-documents`: a task with its prepared documents.
+- `sidepanel-applied`, `sidepanel-deferred`: after Applied, after Defer.
+- `sidepanel-reopen-same-title`: Reopen session with the same-title warning.
+- `options-expired-notice`: the Pairing card's expired notice, on a card that never showed paired.
+
+**Skipped, and open questions**
+1. A choice on a file-imported session can't reach the runner. The manifest carries no application revision, and the runner took that session for no device (P06 notes 2 and 4; FOLLOW-UP F1). So the panel records the choice locally and asks the person to mark it on the Board. Completion export carries only bridge sessions' events. A contract change (a revision in `SessionManifest`) would let a file session's Applied go to `inbox/`; that isn't this packet's to make.
+2. Gate 3 on a real session restore isn't automated. Playwright's persistent context can't be relaunched with Chrome's own restore reliably. The e2e wipes `storage.session` while the tabs and group stay, which is what the extension can observe of a restart. The real restore is in the checklist.
+3. The e2e drives the side panel as an extension page in a tab: Chrome opens the real side panel only on a gesture Playwright can't make. Its clicks are real input events, and the real panel is in the checklist.
+4. The e2e answers the fictional employer pages with a browser-level CDP `Fetch` interception. A context route missed tabs the extension created before Playwright attached to them.
+
+**Cleanup**: every server was stopped, and 127.0.0.1:4310 is free. Scratch is in `/tmp/wc-p07c-*` only.
+
 ### 2026-09-23 — Revision 4 (part B, iter-005)
 
 Round 4 reviewed head `9529761`. The reviewer approved, with two nits. The
