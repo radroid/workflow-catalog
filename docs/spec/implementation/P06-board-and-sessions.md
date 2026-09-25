@@ -1,6 +1,6 @@
 # P06 · Application board and application sessions
 
-Status: blocked: the real-build check (GATE.md, added 2026-09-25) couldn't run. The harness refuses any command that sets HOME. May I run the adapter build and `eve build` in `runner/` without a temp HOME, where they would see the real HOME and any provider credentials read from it? Or will the orchestrator run that check? Everything else is done; see the Report.
+Status: done (2026-09-25, PR #21, squash 3e04e01). The real-build check the implementer could not run (the harness refuses a temp HOME) was run by the orchestrator on d5a5ff3 merged with integration: `eve build` exit 0, tree clean.
 Assignee: manual session (Opus)
 Blocked by: P05
 Owns: runner/store/sessions.ts, runner/server/routes/{applications,sessions,commands}.ts, runner/ui/board.html, runner/ui/sessions.html, runner/agent/tools/open_application_group.ts
