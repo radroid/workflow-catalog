@@ -1,8 +1,9 @@
 Latest: iter-007 in progress since 2026-09-24 about 08:10.
 - **P03.2** (#17): merged 47cca70 about 15:08, after three rounds (the last by an Opus escalation). The smoke test on the integrated branch is green (runner 891, evals 107 gates).
-- **P05** (#16): round 2 REVISE 5 + UI REVISE 2, then an Opus escalation (X1–X10, `logs/handoff/P05-round-2-review.md`) pushed X5 and X7 (ce49ca9, CI green) before the orchestrator's session died. About 00:10 on 09-25, a fresh Opus escalation resumed from ce49ca9 (`P05-escalation-resume-prompt.md`; the unfinished X2 diff is at `/tmp/wc-p05e2-wip/`). Port 4320. Last closed: iter-006.
+- **P05** (#16): round 2 REVISE 5 + UI REVISE 2 (X1–X10). The first escalation pushed X5 and X7 (ce49ca9), then the orchestrator's session died. A fresh Opus escalation resumed at about 00:10 on 09-25 and finished revision 2 at 1a0f854 (CI 36083736390 green; two edited assertions, both justified). Its worktree keeps `packet/P05` for any later REVISE. Last closed: iter-006.
+- **Round 3** started at about 01:57 on 09-25: a fresh Opus reviewer (port 4330 if needed) and UI critic (4340/4350), from `logs/handoff/P05-round-3-prompts.md`.
 
-Next, in iter 007: round 3 for P05, with a fresh Opus reviewer and UI critic (round 2's died with the session), from `logs/handoff/P05-round-3-prompts.md`.
+Next, in iter 007: on two APPROVEs, squash-merge #16, run the smoke test, close iter 007. A REVISE goes back to the same escalation.
 - **Iter 008, when P05 merges:** P06 ∥ P08-B ∥ P03.1 (Sonnet), from `logs/handoff/{P06,P08-B,P03.1}-prompt.md`. Owns were checked; each packet has an "alongside" section. P06's Jobs- and Status-page items were split out into the new P06.1 (GOALS P3.H), which starts as soon as there's room.
 - **Then:** after P06, P07-C (it carries P07-B's follow-ups and the real-handler e2e) and P10-A. Then P10-B (it carries P02.2's nits).
 - **Reviews:** one Opus reviewer and one Opus UI critic per PR. After round 1, rounds are narrow and reuse the same reviewers. A REVISE goes back to the same implementer once; a second REVISE goes to a fresh Opus escalation.

@@ -44,7 +44,7 @@ Messages from the orchestrator may arrive mid-task, sometimes attached to a tool
 2. **X5 and X7.** Ada, then Zoe, then Ada: version 3 carries Ada, and the notice clears. A re-export whose stored draft fails `validateDraft` is refused plainly, and writes nothing.
 3. **X6, X8 and X9,** as tested behaviour. The UI critic judges the page itself.
 4. **Existing tests.**
-   - Diff every test file from 6a4354d to the head.
+   - Diff every test file over revision 2's own commits. `git diff 6a4354d <head>` also carries what the two integration merges (70853fa, d9e07a6) brought in, P03.2's changes among them. So use the non-merge commits: `git log --no-merges -p 6a4354d..<head> -- runner/test packages/job-assistant`.
    - Every removed or changed assertion must be on the report's list of edited assertions, with an X that justifies it. X4(b)'s amendment is the one expected change.
    - An unlisted or weakened assertion is an issue.
 5. **Mutations.** The report's mutation proofs for X1–X7 must each fail a test. Rerun at least X1, X3, X4(a), X5 and X7 yourself in your clone, and restore each one.
@@ -55,7 +55,7 @@ Messages from the orchestrator may arrive mid-task, sometimes attached to a tool
    - `pnpm -r lint`
    - `pnpm check:fixtures`
    Also check `gh run view <CI run id>`: green, including the extension e2e.
-7. **Scope.** Every changed file since 6a4354d is inside P05's Owns, or one of its grants.
+7. **Scope.** Every file in `gh pr diff 16 --name-only` is inside P05's Owns, or one of its grants.
 
 **Rules:**
 - Never a live model or the real network in a test.
@@ -114,6 +114,7 @@ Messages from the orchestrator may arrive mid-task, sometimes attached to a tool
    - A contact-line character outside the font is warned about.
    - At the daily run limit, Prepare refuses up front and names the limit.
 4. **X10's screenshots.** Look at every new or changed `docs/screenshots/P05-*.png`. Each must be at a true 390 or 1280, in the right theme, and show its named state.
+   - The report says revision 1's 32 screenshots (V19) weren't retaken, so those showing the details card still carry the old hint line. Say whether any committed screenshot now misrepresents the page.
 5. **The regression sweep,** in light and dark, at 390 and 1280:
    - one live region, with each outcome announced exactly once;
    - focus never lost, and a focused node never rebuilt;
