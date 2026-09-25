@@ -65,6 +65,35 @@ describe("manifest.json (P07 packet Decisions: exact permission/host sets)", () 
   });
 });
 
+describe("manifest.json, the part-C diff test: the whole file is exactly this", () => {
+  // P07 part C opens tab groups and reads nothing from the tabs it opens, with the same six permissions
+  // part A shipped. Any change to the manifest -- a seventh permission, `tabs`, a content script, a host,
+  // an externally_connectable, a web_accessible_resources, a CSP -- fails here and has to be argued for.
+  it("equals the reviewed manifest, key for key", () => {
+    expect(manifest).toStrictEqual({
+      manifest_version: 3,
+      name: "Workflow Catalog Job Assistant",
+      version: "0.1.0",
+      description: "Capture job postings and open prepared application sessions for the workflow-catalog job-assistant workflow.",
+      minimum_chrome_version: "120",
+      permissions: ["activeTab", "scripting", "tabGroups", "storage", "sidePanel", "alarms"],
+      host_permissions: ["http://127.0.0.1:4310/*"],
+      background: { service_worker: "worker.js", type: "module" },
+      action: { default_popup: "src/popup/index.html", default_title: "Save this job" },
+      options_ui: { page: "src/options/index.html", open_in_tab: true },
+      side_panel: { default_path: "src/sidepanel/index.html" },
+    });
+  });
+
+  it("asks for exactly activeTab, scripting, tabGroups, storage, sidePanel and alarms, in that order, and nothing optional", () => {
+    expect(manifest.permissions).toStrictEqual(["activeTab", "scripting", "tabGroups", "storage", "sidePanel", "alarms"]);
+    expect(manifest).not.toHaveProperty("optional_permissions");
+    expect(manifest).not.toHaveProperty("optional_host_permissions");
+    expect(manifest).not.toHaveProperty("externally_connectable");
+    expect(manifest).not.toHaveProperty("web_accessible_resources");
+  });
+});
+
 describe("manifest.json paths resolve inside the built extension (when dist/ exists)", () => {
   const distDir = path.resolve(path.dirname(manifestPath), "dist");
   const built = existsSync(distDir);
