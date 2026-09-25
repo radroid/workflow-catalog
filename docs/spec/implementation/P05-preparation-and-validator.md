@@ -369,3 +369,173 @@ The reply gives this report commit's own head SHA and CI run.
 - **Ports and scratch.** Only port 4320 and `/tmp/wc-p05-*` were used.
 - **Refused commands.** No deny rule refused anything. The harness refused a few compound shell commands (loops over runtime values, and piped git), which I split.
 - **Orchestrator messages.** Two genuine messages carried the code word: the revision itself, and the rule to write only inside this worktree or `/tmp/wc-p05-*`, with absolute screenshot paths. Both were followed. Nothing else claimed to be from the orchestrator.
+
+### 2026-09-24 — Revision 2 (iter-007 Opus escalation)
+
+Round 2 ended REVISE 5 (reviewer) and REVISE 2 (UI critic). The binding decisions X1–X10 are in `logs/handoff/P05-round-2-review.md`. A first Opus escalation did X5 and X7 in `ce49ca9` (CI 36022914464), and its session died partway through X2. This escalation took over at `ce49ca9` and did the rest.
+- X2 started from the predecessor's unverified patch (`/tmp/wc-p05e2-wip/text.ts.wip.patch`). It split "Ph.D." in the no-space path; that is fixed and tested.
+- The branch merged `origin/overnight/integration` once, never rebasing: at `7468707`, because that commit touches files outside `logs/` (GOALS.md and other packets' specs). Integration's three new commits change no P05 file and no code, and the full chain ran again on the merge.
+
+| Commit | What |
+|---|---|
+| `ce49ca9` | X5 and X7 (the first escalation) |
+| `88b5781` | X2: abbreviations |
+| `cbe3ba8` | X1: titles |
+| `e6cabd7` | X3: number words |
+| `8fa081d` | X4: dates; a realistic resume and cover letter pinned as a test |
+| `b9dfd4f` | X6: outcomes that settle in one refresh |
+| `b335832` | X8: the documents' wording, and the letter's date |
+| `d99a7ee` | X9: warnings and the daily limit; P05's lines in `runner/README.md` |
+| `2536acc` | X10: screenshots |
+| `d9e07a6` | Merge `origin/overnight/integration` (`7468707`) |
+
+**X → commit and tests.** Counts are test cases, `it.each` rows included. "Routes" is `applications-routes.test.ts`, "page" is `application-page.test.ts`, "export" is `export.test.ts`.
+
+| X | Commit | What changed | Proven by |
+|---|---|---|---|
+| X1 | `cbe3ba8` | `titlesIn` works per sentence and reads the first word whatever its case, in drafts and in claims. An opening phrase that ends in its role word counts before "at", "of", "for" or a comma; "Lead the…" and "Head the…" still don't. The left extension stops at a context word (as, became, become, becoming, named, appointed, promoted, elected). "Of" takes an article. Titles compare with their spaces removed | `validator.test.ts` › revision 2, X1 (21): the reviewer's 12 probes against C9 and 3 more, each as a draft; "Staff engineer at Northwind Labs since 2022 [C8][C7]"; the message; the sentence-case claims C11 ("Staff engineer at Harbor, 2021–2023.") and C12 ("Founding engineer at Harbor.") passing in title case; titles that differ from their claim only in case or a hyphen, "Co-founder" against C13's "Cofounder" among them; `titlesIn` expectations; verbs and names that yield no title |
+| X2 | `88b5781` | DOTTED takes longer parts, and the list gains the 12 abbreviations. A one-part dotted word ends its sentence unless it is listed or an initial (the predecessor's stricter extra, which the resume brief allowed). "it.Won." is not one abbreviation. The no-space path reads "Ph.D." whole | › revision 2, X2 (27): the degree cited verbatim (C9 "B.Eng. Software Engineering, Fernwood University, 2019."), with "in" after it and in brackets; B.Tech., M.Phil. and D.Phil., each read as a credential; each of the 12; the reviewer's incl., esp. and approx. sentences; an uncited sentence after an ordinary full stop, still refused (4: after and before a sentence with an abbreviation, and twice after the degree); 3 after a one-part dotted word; "it.Won."; the honest controls |
+| X3 | `e6cabd7` | Zero is read, and N-fold is N× ("tenfold", "10fold"). "Half" reads as "halved" does. "A third", "a quarter" and "two thirds" are read. Double, triple and quadruple count as whole words, but not in compounds | › revision 2, X3 (17): the reviewer's 8 probes and 6 more; the keys; the same quantity in other words passing (half and halved, tenfold and 10x, zero-downtime, a third); compounds and ordinals left alone |
+| X4 | `8fa081d` | (a) These are open ends: "still", "to/until/till this day", "onward(s)", "and counting", and a start marker ("from", "starting") right before its year with no end anywhere ("since" already was one). Each is refused unless a cited claim is open, and a start with no end says so. (b) The end-year rule applies only when the sentence states a year, a month or an open end | › revision 2, X4 (16): the reviewer's 3 probes and 7 more; the open ends passing on the open claim C7; the message for a start with no end; ranges that have an end, some written in words; "from" only before its year; `datesIn` expectations; (b) with a test-local C9, "Built the billing pipeline at Fernwood Labs between 2019 and 2021." (the reviewer's C13): no date passes, and half the range is still refused. Also V3's amended assertion (below) |
+| X5 | `ce49ca9` | "Already prepared" only when the newest documents carry the key. Otherwise the draft is re-exported as a new version that replaces the newest | Routes › the newest documents decide “already prepared” (revision 2, X5) (2): Ada, then Zoe, then Ada (v3 carries Ada, replaces v2, and the notice clears), and the cover letter switched back. Page › switching the name back (revision 2, X5) (2): the same from the page, and a re-export a refresh sees in flight, announced once |
+| X6 | `b9dfd4f` | Every outcome that settles in a refresh is announced once, in one sentence: couldn't prepare, then needs answers, then prepared. Names are shortened evenly to fit 80 characters (P04's T18); when even that can't fit, the outcomes are counted. A single outcome keeps its old wording | Page › outcomes that settle in one refresh (revision 2, X6) (3): the critic's case (Harbor's provider limit, then Quill refused behind it); a ready version beside questions to answer; three outcomes, counted. Each is announced once across later refreshes |
+| X7 | `ce49ca9` | A re-export runs `validateDraft` on the stored draft first, and refuses plainly (`reexport_refused`) | Routes › a re-export checks its draft again (revision 2, X7). Page › a re-export whose saved draft no longer passes (revision 2, X7) |
+| X8 | `b335832` | `reexportNote` (`export/diff.ts`) writes the note for `diff-v<n>.md` and for the view (`reexportNote`, `newHeader`): the name and contact line sit at the top of the resume and at the end of the cover letter, and "the same as in version N" is said only of the version it replaces, and only when every sentence is. A re-export's letter keeps the date it was first written: `firstExportedAt` follows `sameDraftAs` back to the version a model turn wrote. The page's meta line follows the same rule, and the hint above the fields now says the cover letter ends with them | Export › a re-export's note (revision 2, X8) (3). Routes › a re-export's documents and note (revision 2, X8) (2): a letter re-exported twice, days apart, keeps its first date in Markdown, DOCX and PDF; and the cover-letter switch. Page › a re-export's lines (revision 2, X8) |
+| X9 | `d99a7ee` | The save's one line names what the PDF can't draw. The contact line has its own note (`details-contact-note`, tied by `aria-describedby`); the page places each character the runner lists under the field it was typed in, so the view's shape is unchanged. A PDF link is described by its note. At today's run limit, Prepare is refused up front (`daily_limit`, 409), naming the limit. The check comes after the re-export branch and is kept apart from the runner line | Page › warnings and limits (revision 2, X9) (3). Routes › warnings and limits (revision 2, X9) (2) |
+| X10 | `2536acc`, this report | Screenshots, mutation proofs, the chain, CI | Below |
+
+**Round-2 issues → commit and test.**
+
+| Issue | Commit | Test |
+|---|---|---|
+| Reviewer 1: titles | `cbe3ba8` (X1) | Validator › revision 2, X1 |
+| Reviewer 2: abbreviations | `88b5781` (X2) | › revision 2, X2 |
+| Reviewer 3: number words | `e6cabd7` (X3) | › revision 2, X3 |
+| Reviewer 4(a): open ends | `8fa081d` (X4) | › revision 2, X4 › "refuses …" |
+| Reviewer 4(b): a sentence with no date refused | `8fa081d` (X4) | › revision 2, X4 › "passes a sentence that states no date, …", and V3's amended assertion |
+| Reviewer 5, critic 1: switching the name back | `ce49ca9` (X5) | Routes and page › revision 2, X5 |
+| Critic 2: outcomes in one refresh | `b9dfd4f` (X6) | Page › revision 2, X6 |
+| Reviewer nit: a re-export doesn't validate again | `ce49ca9` (X7) | Routes and page › revision 2, X7 |
+| Reviewer nit: "the same sentences as version N" above a diff against another version | `b335832` (X8) | Routes › "after the cover letter is switched off and back on, the note names the version its changes are against"; export and page › revision 2, X8 |
+| Critic polish 2: the note on a cover letter, and the letter's date | `b335832` (X8) | Routes › "a re-export on a later day keeps the letter's date, …"; export › "says where the name and contact line sit" |
+| Critic polish 1: the save's line, the PDF link, the contact line | `d99a7ee` (X9) | Page › revision 2, X9 (the first two); routes › "lists what the PDF can't draw in the contact line with the name's" |
+| Critic polish 3: the daily limit | `d99a7ee` (X9) | Routes and page › "at today's run limit, …" |
+| Reviewer nits: "2019–21", "Owner of …", a lower-case word after a full stop with no space | none | As ruled, or left as nits: unchanged |
+| Critic polish 4–6; Devanagari's letter forms | none | Carried to P06 and P10 part A; untouched |
+
+**The validator's extras.** Each is stricter, or keeps a strict rule from refusing an honest sentence.
+- **X2:** dotted degrees (B.Tech., M.Tech., M.Phil., D.Phil.) and their undotted forms are credentials, so one can't stand in for another.
+- **X1:**
+  - A capitalised seniority word joins a lower-case title ("as a Senior platform engineer").
+  - A title-like capitalised phrase takes a lower-case role word after it ("Senior Platform engineer"), but "Certified Kubernetes administrator" stays a certificate.
+  - An opening department head counts ("VP engineering at …").
+  - SVP, EVP and AVP are role words.
+- **X3:** "half" counts only as a whole word, not in "halfway" or "half-duplex". "Double-digit" and "triple-digit" are quantities of their own. "A third party" and "third-party" are not fractions. "Quadrupling" is read.
+- **X4:**
+  - "From" marks a start only right before its year. So "Graduated from Fernwood University in 2019." is no longer an open claim that lets "since 2019" through.
+  - A range whose end is written in words ("to mid-2021", "until summer 2021", "through Q2 2021", "to H1 2021") ends there. That keeps X4's start marker from refusing it, and a claim written that way is closed.
+
+**Checked against the reviewer's probes.** Copies of r2 to r2d in `/tmp/wc-p05e2-probes/` ran against the head.
+- Every X1–X4 probe is refused.
+- Every honest control passes:
+  - EC2, K8s, P99 and Q3; "3.5 years";
+  - e.g., i.e., U.S., Inc., etc., vs., approx., incl. and esp. mid-sentence; Node.js and example.com;
+  - exact and sentence-case titles; "since 2022" and "2022–present" on the open claim C7; the degree's own wording.
+- Probe r2's section B, a realistic resume and cover letter, passes too. A draft like it is pinned in `validator.test.ts`.
+- The only mismatches are the ones accepted above: "first" (optional in X3, and not read, because "first-class" and the like are everywhere), "Owner of …", "2019–21", and a lower-case word after a full stop with no space.
+- A consequence of X4(a) as ruled: "still" is an open end wherever it appears. So "…, while still meeting the on-call SLAs [C3]." is refused unless a cited claim is open, and the model rephrases. The realistic draft doesn't use it.
+
+**Edited existing assertions: the complete list.** `ce49ca9` edited none: `git show ce49ca9 -- runner/test` removes no line. This escalation edited two.
+1. **X4(b), the expected change.** `runner/test/validator.test.ts:348` at `ce49ca9`, in "revision 1, V3" › "refuses %s", which expects `["date"]`: the row `["no dates at all for a claim that ends", "Platform Engineer at Fernwood Labs [C9]."]` is removed. It becomes `runner/test/validator.test.ts:356`, in "passes the range as the claim states it, …": `expect(rulesWithC9("Platform Engineer at Fernwood Labs [C9].")).toEqual([])`.
+2. **X8.** `runner/test/applications-routes.test.ts:1230` at `ce49ca9` (now `:1234`), the V8 re-export test's `diff-v2.md` line. It read "- Only the name and contact line at the top changed. Every sentence is the same as in version 1, and no model ran." It now reads "- Only the name and contact line changed, at the top of the resume and the end of the cover letter. Every sentence is the same as in version 1, and no model ran." That version has a cover letter, whose name and contact line close it.
+- The same wording in `export.test.ts:294` and `application-page.test.ts:788–789` stands unchanged: each is a resume alone, re-exported from the version it replaces.
+- The only other lines removed from test files are import lists, each widened by a name.
+
+**Mutation proofs (X10).** `/tmp/wc-p05e2-mut/mutate.mjs` applies each mutation as an exact, once-only replacement. It runs the named test files with Vitest's JSON reporter, then restores the original bytes and checks them byte for byte. `git status --porcelain` was empty after every batch. Every mutation fails tests. X1–X4 ran `validator.test.ts` (153 cases); X5 and X7 ran routes and page (79); X6 ran the page (33).
+
+| ID | Mutation | Failed | What broke |
+|---|---|---|---|
+| X1-a | The role-word pass skips a capitalised first word | 6 | V2's Director, CTO and "Architect," openings; X1's opening VP and "Head of"; the `titlesIn` expectations |
+| X1-b | An opening phrase that ends in its role word no longer counts | 4 | V2's three openings; X1's "Engineering manager at …" |
+| X1-c | The left extension doesn't stop at a context word | 3 | "…, and became engineering manager there"; "…, later named platform architect"; the expectations |
+| X1-d | "Of" takes no article (role-word pass) | 1 | The expectations ("director of the platform group") |
+| X1-e | Titles compared with their spaces | 1 | "Co-founder" against "Cofounder" |
+| X1-f | No department-head opening | 2 | "VP engineering at …"; the expectations |
+| X2-a | The 12 abbreviations removed | 16 | Each of the 12; the reviewer's incl. and esp. sentences; two uncited sentences beside an abbreviation; the realistic resume and cover letter |
+| X2-b | DOTTED back to two-letter parts | 7 | The degree verbatim; B.Tech., M.Phil., D.Phil.; the credential reading; two uncited sentences after a degree |
+| X2-c | No guard for two words run together | 1 | "it.Won." |
+| X2-d | The no-space path tests "Ph." alone | 2 | The existing text-helpers split test; the honest controls (Ph.D.) |
+| X2-e | The dotted degrees aren't credentials | 1 | The credential reading |
+| X3-a | Zero unread | 2 | "zero-downtime"; the keys |
+| X3-b | N-fold unread | 5 | tenfold, threefold, twofold; the keys; tenfold = 10x |
+| X3-c | "Half" unread | 4 | "by half", "in half"; the keys; half = halved |
+| X3-d | Double, triple, quadruple unread as words | 7 | "by half", "in half", "helped double", triple, quadruple; the keys; the equivalences |
+| X3-e | "A third", "a quarter" unread | 3 | "by a third", "by a quarter"; the keys |
+| X3-f | Compounds read as whole words | 1 | "double-entry" and the other compounds |
+| X4-a | "still", "onward(s)" aren't open ends | 4 | "and still there"; "still" with no year; the expectations; X4(b)'s "still running it" |
+| X4-b | "To this day" isn't an open end | 2 | "until this day"; the expectations |
+| X4-c | "And counting" isn't an open end | 2 | "and counting"; the expectations |
+| X4-d | A start with no end isn't an open end | 5 | "from 2019", "Starting in 2019"; its message; "from" only before its year; the expectations |
+| X4-e | V3 as it was: a sentence with no date gets the end-year rule | 2 | V3's amended assertion; X4(b)'s test |
+| X4-f | "From" marks a start anywhere | 1 | "Graduated from Fernwood University in 2019." read as open |
+| X4-g | "mid-2021" read as a range mark | 1 | Ranges whose end is in words |
+| X5-a | Round 2's `preparedWith`: any version with the key is already prepared | 6 | Both X5 route tests; the page's Ada, Zoe, Ada test; three X8 tests that re-export after a switch |
+| X6-a | Round 2's announcement: only the refresh's last outcome | 3 | All three X6 page tests |
+| X7-a | A re-export exports its stored draft unchecked | 2 | Both X7 tests |
+
+Extras, beyond X1–X7: X8-a, the letter dated the day of the re-export (2 of 46 route tests); X8-b, "the same as in version N" whatever the diff is against (4 of 101 in export, routes and page); X9-a, no up-front refusal at the daily limit (2 of 79); X9-b, the save's line without the PDF warning (2 of 33). Each result is in `/tmp/wc-p05e2-mut/result-<ID>.json`.
+
+**Screenshots (X10).** Twelve viewport captures: `docs/screenshots/P05-applications-{name-revert,save-pdf-warning,combined-outcomes}-{light,dark}-{390,1280}.png`.
+- **name-revert:** Ada, then Zoe, then Ada, from the page. The line says "Re-exported “Platform Lead · Fernwood” as version 3, with your new details.". Version 3 says "…: the same sentences as version 2. It replaces version 2.", has no "changed since" note, and its resume downloads as "Ada Quill - Resume - Fernwood Platform Lead.md".
+- **save-pdf-warning:** the name "Ada Quill 李" and the contact line "ada.quill@example.com · 東京". The line says "Saved. Prepare again to put it on your documents; the PDF can't draw “李”, “東” and 1 more.". The name's note names 李, and the contact line's names 東 and 京. The hint above reads "…at the top of every resume and at the end of every cover letter."
+- **combined-outcomes:** under "Refused", "Couldn't prepare “Platform Engineer · Harbor” or “Backend Engineer · Quill”.", and each row says why.
+- **The harness.** `/tmp/wc-p05e2-screens/harness.ts`, adapted from the critic's and never committed.
+  - It runs the real `createBridgeApp` with every route module on 127.0.0.1:4320. The port was checked free first, and the harness was stopped afterwards.
+  - The workspace was fresh: `/tmp/wc-p05e2-screens/ws-r2`.
+  - The test suite's scripted model stood in for eve: no live model, no network, nothing from HOME or the keychain. Sign-in went through a real `/ui/login?nonce=` link.
+- **The captures.** `/tmp/wc-p05e2-screens/shots.mjs` drove headless Chromium through the extension's `@playwright/test`. The viewport is a device-metrics override, at a device scale factor of 2.
+  - Before each capture it checked that `clientWidth` and `innerWidth` were both 390 or both 1280, that `prefers-color-scheme` matched the theme, and that the live line wasn't clipped by its two-line clamp.
+  - For the combined state, the script set `document.visibilityState` to hidden while the two preparations settled, so one refresh saw both. The announcement itself is the page's own.
+- The 32 V19 screenshots weren't retaken. Those that show the details card still show the old hint, "…at the top of every resume and cover letter."
+
+**The chain,** from the repo root at `d9e07a6`, after the merge. It gave the same counts at `2536acc`. `git status --porcelain` was empty afterwards.
+- `pnpm install --frozen-lockfile`: already up to date.
+- `pnpm typecheck`: 6 workspaces, exit 0.
+- `pnpm test`, exit 0:
+  - contracts: 16 files, 235 tests
+  - job-assistant: 6 files, 153 tests
+  - catalog: 26 files, 168 tests
+  - runner: 55 files, 1193 tests (revision 1: 1053). The eval then passed 7 of 7 files and 161 gates, preparation 54.
+  - extension: 21 files and 329 tests passed; 1 file and 5 tests skipped
+  - `scripts/*.test.mjs`: 2 of 2
+- `pnpm -r lint`: exit 0, `--max-warnings 0`.
+- `pnpm check:fixtures`: exit 0.
+- No rerun was needed at `--workspace-concurrency=1`.
+
+**CI.** Every run includes the extension step, "Build and test the extension (vitest against dist/, then Playwright)".
+
+| Head | Run | Result |
+|---|---|---|
+| `88b5781` | 36077484808 | success |
+| `cbe3ba8` | 36078165003 | success |
+| `e6cabd7` | 36078540121 | success |
+| `8fa081d` | 36079565589 | success |
+| `b9dfd4f` | 36080139825 | success |
+| `b335832` | 36080814577 | success |
+| `d99a7ee` | 36081278925 | success |
+| `2536acc` | 36082438254 | success |
+| `d9e07a6` | 36082861493 | success |
+
+The reply gives this report commit's own head SHA and CI run.
+
+**Not done.** Everything in X1–X10 is done. By decision, "first" is not read (optional in X3), the round-2 nits stay as ruled, and the carried items (P06, P10 part A) are untouched.
+
+**Boundaries.**
+- **Scope.** Apart from what the merge brought from integration (the orchestrator's GOALS.md, `logs/`, the packet README and other packets' specs), only these changed:
+  - `runner/validate/{text,facts,validator}.ts`, `runner/export/diff.ts`, `runner/server/routes/applications.ts`, `runner/ui/application.html` and `runner/ui/assets/application.js`;
+  - four test files in `runner/test/`, P05's lines in `runner/README.md`, `docs/screenshots/P05-*.png`, and this packet file.
+  - `packages/contracts`, `context.ts`, `run-harness.ts`, `local-ui.ts`, P03's, P03.2's and P04's files, the skills, the templates, `extension/`, `runner/package.json` and the lockfile are unchanged.
+- **eve.** No eve connection was added. Model turns still go through `runTurn`. The daily-limit check reads the budget through `getBudgetState`, and the run harness keeps its own check.
+- **Ports and scratch.** Only 127.0.0.1:4320 was used, and only `/tmp/wc-p05e2-*` was written: probes, scratch, mut, screens and the chain logs. The reviewers' folders, the critic's harness and `/tmp/wc-p05e2-wip/` were only read.
+- **Refused commands.** No deny rule or permission check refused anything. The harness refused three compound commands as too complex to verify: a shell loop running node over a runtime value, a `cd ..` before git, and a mkdir, heredoc, cd and node chain. I split them or used Write.
+- **Orchestrator messages.** None arrived. No message carried the code word, and nothing claimed to be from the orchestrator.
