@@ -263,6 +263,20 @@ describe("POST /sources/:category/url", () => {
     expect(await readdir(path.join(bridge.workspace.root, "sources"))).toEqual([]);
   });
 
+  it("wires the production default to the real safeFetch, not a fake: a literal loopback address is refused without any injected fetchUrl", async () => {
+    // Unlike every other test in this block, realBridge() here takes no fetchUrl override, so
+    // createOnboardingRouteModule() falls through to its real default parameter -- proving that
+    // default is actually wired to lib/safe-fetch.ts's real safeFetch, not bypassed. A literal
+    // loopback IP is refused by safeFetch's own address check before any connection is attempted,
+    // so this never touches the real network.
+    const bridge = await realBridge();
+    const response = await post(bridge, "/sources/portfolioSite/url", { url: "https://127.0.0.1/admin" });
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("url_blocked_address");
+    expect(await readdir(path.join(bridge.workspace.root, "sources"))).toEqual([]);
+  });
+
   it("maps a non-https scheme to a 400 (the same refusal a redirect to one would get, per safeFetch's own re-check on every hop)", async () => {
     const bridge = await realBridge(fakeFetch({ ok: false, reason: "scheme_not_https", message: "The runner only fetches https:// URLs." }));
     const response = await post(bridge, "/sources/portfolioSite/url", { url: "http://ada-quill.example/portfolio" });
