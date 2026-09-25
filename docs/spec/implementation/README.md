@@ -28,6 +28,7 @@ Bounded work packets for the MVP in [../mvp-spec.md](../mvp-spec.md). Each packe
 | [P03.2 onboarding and model-turn follow-ups](P03.2-onboarding-and-turn-followups.md) | P04 (turn events) | P05 (Owns disjoint) |
 | [P04 job capture](P04-job-capture.md) | P03 | P09 |
 | [P05 preparation and validator](P05-preparation-and-validator.md) | P04 | P09 |
+| [P05.1 validator follow-ups](P05.1-validator-followups.md) | P05 | P06, P06.1, P08-B, P03.1, P07 (Owns disjoint: `runner/validate/` only) |
 | [P06 board and sessions](P06-board-and-sessions.md) | P05 | P09; P08-B, P03.1 and P06.1 (Owns disjoint; see the packet's "Alongside P08-B and P03.1") |
 | [P06.1 Jobs and Status page follow-ups](P06.1-jobs-and-status-followups.md) | — (copies P05's runner-down notice from `packet/P05` until P05 merges) | P05, P06, P08-B, P03.1, P07 (Owns disjoint) |
 | [P07 extension](P07-extension.md) | P02 (pairing), P06 (manifests) | P08, P09 |
