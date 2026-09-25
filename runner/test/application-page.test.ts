@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,7 +6,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
-import applicationsModule, { waitForPreparationQueue } from "../server/routes/applications.ts";
+import applicationsModule, { INTERRUPTED_MESSAGE, waitForPreparationQueue } from "../server/routes/applications.ts";
 import { ApplicationsStore } from "../store/applications.ts";
 import { pauseBudget, setBudgetLimits } from "../store/budget.ts";
 import { JobsStore } from "../store/jobs.ts";
@@ -889,24 +890,25 @@ describe("Applications page: switching the name back (revision 2, X5)", () => {
   });
 });
 
+/** The cover-letter choice of every prepare request the page sends, in order (revision 3, Y5). */
+function letterChoices(): { readonly intercept: Intercept; readonly sent: boolean[] } {
+  const sent: boolean[] = [];
+  const intercept: Intercept = (input, init) => {
+    if (input === "/api/applications/prepare" && init.method === "POST") sent.push((JSON.parse(init.body ?? "{}") as { coverLetter: boolean }).coverLetter);
+    return undefined;
+  };
+  return { intercept, sent };
+}
+
+/** Prepares `jobId` from the form, as a person would, and waits for `outcome` in the page's line. */
+async function prepareFromForm(page: Page, jobId: string, coverLetter: boolean, outcome: string): Promise<void> {
+  const before = page.outcomes().length;
+  pressPrepare(page, jobId, coverLetter);
+  await until(() => page.outcomes().slice(before).includes(outcome), outcome, 10_000);
+  await page.quiet();
+}
+
 describe("Applications page: Prepare again keeps the newest version's cover letter choice (revision 3, Y5)", () => {
-  /** The cover-letter choice of every prepare request the page sends, in order. */
-  function letterChoices(): { readonly intercept: Intercept; readonly sent: boolean[] } {
-    const sent: boolean[] = [];
-    const intercept: Intercept = (input, init) => {
-      if (input === "/api/applications/prepare" && init.method === "POST") sent.push((JSON.parse(init.body ?? "{}") as { coverLetter: boolean }).coverLetter);
-      return undefined;
-    };
-    return { intercept, sent };
-  }
-
-  async function prepareFromForm(page: Page, jobId: string, coverLetter: boolean, outcome: string): Promise<void> {
-    const before = page.outcomes().length;
-    pressPrepare(page, jobId, coverLetter);
-    await until(() => page.outcomes().slice(before).includes(outcome), outcome, 10_000);
-    await page.quiet();
-  }
-
   it("the critic's steps: no letter, a letter, no letter again from the form; then Prepare again, nothing changed, is already prepared", async () => {
     const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
     const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
@@ -973,6 +975,99 @@ describe("Applications page: Prepare again keeps the newest version's cover lett
     expect(sent).toEqual([false, true, true]);
     await until(() => all(page, ".version").length === 2, "version 2 in the detail");
     expect(all(page, ".version h4")[0]!.textContent).toBe("Version 2 · resume and cover letter");
+    expect(model.prompts).toHaveLength(3);
+  });
+});
+
+describe("Applications page: Prepare again retries a failed or interrupted attempt as it asked (revision 4, Z1)", () => {
+  const FAILED = "The model's turn failed, so nothing was saved. Try again; the Runs page has the details.";
+  const ALREADY = "Already prepared: “Backend Engineer · Quill” matches version 1; nothing new.";
+
+  /** The critic's first steps: Quill without a letter asks its two questions; both left out, it is version 1. */
+  async function quillWithoutLetter(page: Page, jobId: string): Promise<string> {
+    await prepareFromForm(page, jobId, false, "Needs your answers: “Backend Engineer · Quill”.");
+    const taskId = taskIdOf(page);
+    for (const requirement of [1, 2]) {
+      await until(() => page.document.getElementById(`answer-${taskId}-${requirement}-leave_out`) !== null, `question ${requirement}`);
+      press(page, `answer-${taskId}-${requirement}-leave_out`);
+      await until(() => page.outcomes().at(-1) === `Answered: requirement ${requirement} will be left out.`, `answer ${requirement}`);
+    }
+    await until(() => page.byId("detail-prepare").getAttribute("aria-disabled") === "false", "Continue preparing to be enabled");
+    const before = page.outcomes().length;
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().slice(before).includes("Prepared “Backend Engineer · Quill”: version 1 is ready."), "version 1", 10_000);
+    await page.quiet();
+    return taskId;
+  }
+
+  it("the critic's steps: after a letter's attempt fails, Prepare again retries it with a letter and a model turn", async () => {
+    // Quill's first letter turn fails; every other turn is honest.
+    let letterTurns = 0;
+    const planner: Planner = (prompt, attempt) => (prompt.coverLetter && (letterTurns += 1) === 1 ? { skills: ["claim-matching"], end: "failed" } : honest(HOSTILE)(prompt, attempt));
+    const { bridge, model } = await bridgeAndModel(planner);
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, fixtureJob(HOSTILE_JOB));
+    const { intercept, sent } = letterChoices();
+    const page = await openPage(bridge, { intercept });
+    await quillWithoutLetter(page, jobId);
+
+    // A letter from the form; the model's turn fails, and the note says to try again.
+    await prepareFromForm(page, jobId, true, "Couldn't prepare “Backend Engineer · Quill”; its details say why.");
+    await until(() => page.document.getElementById("detail-state")?.textContent === FAILED, "the failure note");
+    expect(page.byId("detail-prepare").textContent).toBe("Prepare again");
+
+    // Prepare again retries that attempt, with its letter: a model turn, which asks Quill's questions again.
+    const before = page.outcomes().length;
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().slice(before).includes("Needs your answers: “Backend Engineer · Quill”."), "the retry", 10_000);
+    expect(page.outcomes().slice(before)).not.toContain(ALREADY);
+    expect(sent).toEqual([false, false, true, true]);
+    expect(model.prompts).toHaveLength(4);
+    await page.quiet();
+    expect(page.document.getElementById("detail-state")).toBeNull();
+  });
+
+  it("the same steps with the letter's attempt interrupted (the runner stopped during it): Prepare again retries it with a letter", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(HOSTILE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, fixtureJob(HOSTILE_JOB));
+    const { intercept, sent } = letterChoices();
+    const page = await openPage(bridge, { intercept });
+    const taskId = await quillWithoutLetter(page, jobId);
+
+    // A letter's attempt a stopped runner left running, as the route test for interruptions writes one.
+    const store = new ApplicationsStore(bridge.workspace, bridge.clock);
+    const done = await store.readPreparation(taskId);
+    if (!done || done === "unreadable") throw new Error("no attempt");
+    const letterKey = done.idempotencyKey.replace("+resume+inputs@", "+resume+cover+inputs@");
+    expect(letterKey).not.toBe(done.idempotencyKey);
+    const now = bridge.clock.now().toISOString();
+    await store.writePreparation(taskId, {
+      attemptId: randomUUID(),
+      status: "running",
+      owner: "another-runner-process",
+      idempotencyKey: letterKey,
+      jobId: done.jobId,
+      jobRevision: done.jobRevision,
+      profileVersion: done.profileVersion,
+      coverLetter: true,
+      claims: done.claims,
+      requirementsDigest: done.requirementsDigest,
+      requirementCount: done.requirementCount,
+      answers: [],
+      questions: [],
+      problems: [],
+      startedAt: now,
+      updatedAt: now,
+    });
+    await store.update(taskId, (current) => ({ ...current, processing: { status: "running" } }));
+    page.refreshNow();
+    await until(() => page.document.getElementById("detail-state")?.textContent === INTERRUPTED_MESSAGE, "the interrupted note");
+    await page.quiet();
+
+    const before = page.outcomes().length;
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().slice(before).includes("Needs your answers: “Backend Engineer · Quill”."), "the retry", 10_000);
+    expect(page.outcomes().slice(before)).not.toContain(ALREADY);
+    expect(sent).toEqual([false, false, true]);
     expect(model.prompts).toHaveLength(3);
   });
 });
