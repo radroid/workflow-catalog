@@ -1,15 +1,15 @@
 Latest: iter-007 in progress since 2026-09-24 about 08:10.
 - **P03.2** (#17): merged 47cca70 about 15:08, after three rounds (the last by an Opus escalation). The smoke test on the integrated branch is green (runner 891, evals 107 gates).
-- **P05** (#16): revision 1 (6a4354d), then round 2 REVISE 5 + UI REVISE 2. A fresh Opus escalation took over `packet/P05` about 15:23, with X1–X10 in `logs/handoff/P05-round-2-review.md` (prompt: `P05-escalation-prompt.md`). Port 4320. Last closed: iter-006.
+- **P05** (#16): round 2 REVISE 5 + UI REVISE 2, then an Opus escalation (X1–X10, `logs/handoff/P05-round-2-review.md`) pushed X5 and X7 (ce49ca9, CI green) before the orchestrator's session died. About 00:10 on 09-25, a fresh Opus escalation resumed from ce49ca9 (`P05-escalation-resume-prompt.md`; the unfinished X2 diff is at `/tmp/wc-p05e2-wip/`). Port 4320. Last closed: iter-006.
 
-Next, in iter 007: round 3 for P05 reuses the same reviewer and UI critic. When P05 merges, the rulebook's P06 row says P06 extends `routes/applications.ts`, and iter 008 can run P06 ∥ P08-B ∥ P03.1 (check Owns for overlap).
+Next, in iter 007: round 3 for P05, with a fresh Opus reviewer and UI critic (round 2's died with the session), using `P05-round-2-review.md` as the checklist. When P05 merges, the rulebook's P06 row says P06 extends `routes/applications.ts`, and iter 008 can run P06 ∥ P08-B ∥ P03.1 (check Owns for overlap).
 - **Then:**
   - after P05: P08-B (it carries P08-A's follow-ups and the extraction-budget question) and P06 (it carries P04's follow-ups);
   - after P03.2 and P05: P03.1;
   - after P06: P07-C (it carries P07-B's follow-ups and the real-handler e2e). Then P10 (part B carries P02.2's nits).
 - **Reviews:** one Opus reviewer and one Opus UI critic per PR. After round 1, rounds are narrow and reuse the same reviewers. A REVISE goes back to the same implementer once; a second REVISE goes to a fresh Opus escalation.
 
-If this session dies: every agent pushes its branch at green steps, starting with its claim on `packet/P05` or `packet/P03.2`. Spawn fresh agents from the pushed branches with `git switch packet/PNN`, once no worktree holds that branch.
+If this session dies: every agent pushes its branch at green steps. Save a dead agent's uncommitted diff to /tmp, run `git switch --detach` in its worktree to free the branch, then spawn a fresh agent that runs `git switch packet/PNN`.
 
 Must-carry (see "Rules and lessons learned" in the pause handoff):
 - **Every prompt:**
