@@ -169,6 +169,19 @@ describe("POST /sources/:category/file", () => {
     expect(await readdir(path.join(bridge.workspace.root, "sources"))).toEqual([]);
   }, 20_000);
 
+  it("413s a decoded file just over 10 MB even when its base64 body is well under the 14 MB JSON-body cap (isolates the decoded-bytes cap from the outer body cap)", async () => {
+    const bridge = await realBridge();
+    // 10.2 MB decoded -> ~13.6 MB of base64, comfortably under boundedBinaryBody's 14 MB cap, so only the
+    // decoded-bytes check (MAX_BINARY_UPLOAD_BYTES) can be what refuses this one.
+    const justOversized = Buffer.alloc(10 * 1024 * 1024 + 200 * 1024, 0x41).toString("base64");
+    expect(Buffer.byteLength(justOversized, "utf8")).toBeLessThan(14 * 1024 * 1024);
+    const response = await post(bridge, "/sources/resume/file", { fileName: "big.pdf", contentBase64: justOversized });
+    expect(response.status).toBe(413);
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    expect(body.error).toEqual({ code: "body_too_large", message: "That's over 10 MB. Upload a smaller file." });
+    expect(await readdir(path.join(bridge.workspace.root, "sources"))).toEqual([]);
+  }, 20_000);
+
   it("422s a malformed PDF with a plain message, saving nothing", async () => {
     const bridge = await realBridge();
     const response = await post(bridge, "/sources/resume/file", { fileName: "broken.pdf", contentBase64: await fixtureBase64("malformed.pdf") });
