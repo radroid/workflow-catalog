@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { BudgetStatus } from "@workflow-catalog/contracts";
+import type { BudgetStatus, ScheduleStatus } from "@workflow-catalog/contracts";
+import { scheduleById } from "../../scheduler/config.ts";
+import { startScheduler } from "../../scheduler/index.ts";
+import { pauseSchedule, resumeSchedule } from "../../scheduler/store.ts";
+import { scheduleSummaries, scheduleStatuses } from "../../scheduler/status.ts";
 import {
   BUDGET_UNAVAILABLE_REASON,
   DAILY_RUN_LIMIT_MAX,
@@ -28,14 +32,25 @@ import { defineRouteModule } from "../route-modules.ts";
  *   GET  /api/runs/budget          the full internal budget state (limits, usage, pause)
  *   POST /api/runs/budget          { dailyRunLimit, itemCap }: saves new limits, preserving any pause
  *   POST /api/runs/budget/resume   clears the stored pause; adds `restoredDefaults`
+ *   GET  /api/runs/schedules              both schedules' state for Settings (ScheduleSummary[])
+ *   POST /api/runs/schedules/:id/pause    pauses one schedule (its own pause, distinct from the budget's)
+ *   POST /api/runs/schedules/:id/resume   resumes it
  *
- * The literal /budget routes are registered before the /:runId route so a
- * request for "budget" is never mistaken for a run id (it wouldn't validate
- * as a uuid anyway, but this keeps route resolution obvious either way).
+ * The literal /budget and /schedules routes are registered before the
+ * /:runId route so a request for either is never mistaken for a run id (it
+ * wouldn't validate as a uuid anyway, but this keeps route resolution
+ * obvious either way).
  *
  * G8 (round-1 revision): every run record here also carries `absolutePath`
  * (store/runs.ts) — local-API-only, never part of `GET /status`'s `budget`
  * contribution below, which stays a plain `BudgetStatus` with no run data.
+ * `status()` also contributes `schedules` (P08-B): a plain `ScheduleStatus[]`
+ * (bridge-http.ts), no run or job data either.
+ *
+ * `start()` (P08-B) wires the scheduler's catch-up-on-start and its
+ * recurring fallback trigger (`../../scheduler/index.ts`'s `startScheduler`)
+ * — see that module's header for what fires a schedule and why no fire can
+ * run twice.
  */
 
 /** Well under the 1 KiB a `{dailyRunLimit, itemCap}` body ever needs; bounds the request before it is parsed. */
@@ -95,6 +110,26 @@ export default defineRouteModule({
       return c.json({ ...budgetResponse(state), restoredDefaults });
     });
 
+    router.get("/schedules", async (c) => {
+      return c.json({ schedules: await scheduleSummaries(ctx) });
+    });
+
+    router.post("/schedules/:id/pause", async (c) => {
+      const id = c.req.param("id");
+      if (!scheduleById(id)) return errorResponse(404, "schedule_not_found", "No such schedule.");
+      await pauseSchedule(ctx.workspace, ctx.clock, id, "paused from Settings");
+      ctx.log.info(`Paused the ${id} schedule from Settings.`);
+      return c.json({ schedules: await scheduleSummaries(ctx) });
+    });
+
+    router.post("/schedules/:id/resume", async (c) => {
+      const id = c.req.param("id");
+      if (!scheduleById(id)) return errorResponse(404, "schedule_not_found", "No such schedule.");
+      await resumeSchedule(ctx.workspace, id);
+      ctx.log.info(`Resumed the ${id} schedule from Settings.`);
+      return c.json({ schedules: await scheduleSummaries(ctx) });
+    });
+
     router.get("/", async (c) => {
       const { records, invalidCount, skippedFiles } = await listRuns(ctx.workspace, ctx.clock);
       return c.json({ runs: records, invalidCount, skippedFiles });
@@ -115,6 +150,17 @@ export default defineRouteModule({
       ctx.log.error(`GET /status: the budget could not be computed (${error instanceof Error ? error.message : String(error)}); reporting it as paused.`);
       budget = { dailyRunLimit: DEFAULT_DAILY_RUN_LIMIT, runsUsedToday: 0, paused: true, pausedReason: BUDGET_UNAVAILABLE_REASON };
     }
-    return { budget };
+    let schedules: ScheduleStatus[];
+    try {
+      schedules = [...(await scheduleStatuses(ctx))];
+    } catch (error) {
+      ctx.log.error(`GET /status: schedules could not be computed (${error instanceof Error ? error.message : String(error)}); reporting none.`);
+      schedules = [];
+    }
+    return { budget, schedules };
+  },
+  // P08-B: catch-up on start, then the recurring fallback trigger (scheduler/index.ts).
+  start(ctx) {
+    return startScheduler(ctx);
   },
 });
