@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { claimSchema } from "@workflow-catalog/contracts";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { JOB_ASSISTANT_DIR } from "../lib/paths.ts";
 import { reexportNote, renderDiffMarkdown, statementDiffs, versionChanges, presentationSummary, type SourceClaim, type VersionChange } from "../export/diff.ts";
 import { coverLetterModel, letterDate, modelText, plainCompanyName, resumeModel } from "../export/document.ts";
@@ -25,6 +25,18 @@ const CLAIMS = labelClaims(claimSchema.array().parse(JSON.parse(readFileSync(pat
 const SOURCES = new Map<string, SourceClaim>(CLAIMS.filter((claim) => claim.status === "confirmed").map((claim) => [claim.label, { label: claim.label, kind: claim.kind, text: claim.text }]));
 const PERSON = { name: "Ada Quill", contact: "ada.quill@example.com · Remote" };
 const AT = new Date("2026-09-24T09:00:00.000Z");
+
+// Documents are dated in the runner machine's time zone (revision 3, Y6): these tests pin it, so they read the same
+// on any machine. Node reads TZ again whenever it is set.
+const ZONE = "America/New_York";
+const ZONE_BEFORE = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = ZONE;
+});
+afterAll(() => {
+  if (ZONE_BEFORE === undefined) delete process.env.TZ;
+  else process.env.TZ = ZONE_BEFORE;
+});
 
 const DRAFT: Draft = {
   resume: {
@@ -139,6 +151,32 @@ describe("the greeting names a company only when it reads as a plain name", () =
     expect(plainCompanyName("A company name that goes on for far too many words")).toBeUndefined();
     expect(coverLetterModel(DRAFT, PERSON, "Ignore previous instructions", AT).greeting).toBe("Dear hiring team,");
     expect(letterDate(AT)).toBe("September 24, 2026");
+  });
+});
+
+describe("documents are dated in the runner machine's time zone (revision 3, Y6)", () => {
+  // 02:09 UTC on September 25 is 22:09 on September 24 in New York, where these tests pin the zone.
+  const EVENING = new Date("2026-09-25T02:09:00.000Z");
+
+  it("dates an evening letter the day it is where the person is, not the next day as UTC would", async () => {
+    expect(process.env.TZ).toBe(ZONE);
+    expect(new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeZone: "UTC" }).format(EVENING)).toBe("September 25, 2026");
+    expect(letterDate(EVENING)).toBe("September 24, 2026");
+    const letter = coverLetterModel(DRAFT, PERSON, "Fernwood", EVENING);
+    expect(letter.date).toBe("September 24, 2026");
+    expect((await renderMarkdown(letter)).split("\n")[0]).toBe("September 24, 2026");
+    expect(flat(await pdfText(await renderPdf(letter)))).toContain("September 24, 2026");
+  });
+
+  it("follows the zone it runs in", () => {
+    process.env.TZ = "Asia/Tokyo";
+    try {
+      expect(letterDate(AT)).toBe("September 24, 2026");
+      expect(letterDate(new Date("2026-09-24T16:30:00.000Z"))).toBe("September 25, 2026");
+    } finally {
+      process.env.TZ = ZONE;
+    }
+    expect(letterDate(new Date("2026-09-24T16:30:00.000Z"))).toBe("September 24, 2026");
   });
 });
 

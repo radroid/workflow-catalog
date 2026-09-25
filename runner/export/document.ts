@@ -81,9 +81,13 @@ export function plainCompanyName(company: string | undefined): string | undefine
   return name;
 }
 
-/** "September 24, 2026", in UTC, so the date never depends on the machine's time zone. */
+/**
+ * "September 24, 2026", in the runner machine's time zone (revision 3, Y6). The runner runs on the person's own
+ * machine, so that is their zone, and the page, which dates things in the browser's, says the same day: at 22:09 on
+ * September 24 in Toronto, the letter says September 24, where UTC would already say September 25.
+ */
 export function letterDate(at: Date): string {
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeZone: "UTC" }).format(at);
+  return new Intl.DateTimeFormat("en-US", { dateStyle: "long" }).format(at);
 }
 
 export function coverLetterModel(draft: Draft, person: PersonHeader, company: string | undefined, at: Date): CoverLetterModel {

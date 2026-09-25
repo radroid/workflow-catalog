@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { actionsOutsidePreparation, requestedActions } from "../agent/lib/prepare-schema.ts";
 import { letterDate } from "../export/document.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
@@ -51,6 +51,18 @@ import {
 const COOKIE = `${UI_COOKIE}=${UI_TOKEN}`;
 const SAME_ORIGIN = { cookie: COOKIE, origin: BRIDGE, "content-type": "application/json", "sec-fetch-site": "same-origin" };
 const MODULES: readonly LoadedRouteModule[] = [{ name: "applications", module: applicationsModule }];
+
+// Documents are dated in the runner machine's time zone (revision 3, Y6): these tests pin it, so every date they
+// read is the same on any machine. Node reads TZ again whenever it is set.
+const ZONE = "America/New_York";
+const ZONE_BEFORE = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = ZONE;
+});
+afterAll(() => {
+  if (ZONE_BEFORE === undefined) delete process.env.TZ;
+  else process.env.TZ = ZONE_BEFORE;
+});
 
 // --- The views the tests read ---------------------------------------------------
 
@@ -1414,6 +1426,35 @@ describe("a re-export's documents and note (revision 2, X8)", () => {
       reexportNote: "Only the name and contact line changed, at the top of the resume and the end of the cover letter. Every sentence is the same as in version 3, and no model ran.",
     });
     expect(firstLine(await documentText(bridge, taskId, "cover-v4.md"))).toBe(writtenOn);
+  });
+});
+
+describe("documents dated where the person is (revision 3, Y6)", () => {
+  const DAY = 86_400_000;
+  const firstLine = (text: string) => text.split("\n")[0];
+
+  it("an evening preparation dates the letter and the diff the day it is in the runner's zone, and a re-export keeps the letter's date", async () => {
+    const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    // 22:09 on September 24 in New York, where these tests pin the zone; UTC already says September 25.
+    bridge.clock.advance(new Date("2026-09-25T02:09:00.000Z").getTime() - bridge.clock.now().getTime());
+    expect(process.env.TZ).toBe(ZONE);
+    const taskId = (await prepare(bridge, jobId, true)).body.application.taskId;
+
+    expect(firstLine(await documentText(bridge, taskId, "cover-v1.md"))).toBe("September 24, 2026");
+    for (const format of ["docx", "pdf"]) {
+      const text = flat(await documentText(bridge, taskId, `cover-v1.${format}`));
+      expect(text, format).toContain("September 24, 2026");
+      expect(text, format).not.toContain("September 25, 2026");
+    }
+    expect(await documentText(bridge, taskId, "diff-v1.md")).toContain("Prepared September 24, 2026 from career profile version 1 and job revision 1.");
+
+    // X8 holds: re-exported three evenings later, the letter keeps the day it was written; the diff is dated its own day.
+    bridge.clock.advance(3 * DAY);
+    await post(bridge, "/details", { name: "Zoe Quill", contact: "zoe.quill@example.com · Remote" });
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "reexported", version: 2, sameDraftAs: 1 });
+    expect(firstLine(await documentText(bridge, taskId, "cover-v2.md"))).toBe("September 24, 2026");
+    expect(await documentText(bridge, taskId, "diff-v2.md")).toContain("Prepared September 27, 2026 from career profile version 1 and job revision 1. It replaces version 1.");
   });
 });
 
