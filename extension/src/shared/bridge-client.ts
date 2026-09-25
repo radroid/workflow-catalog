@@ -54,6 +54,12 @@ export interface PostEventResult {
    * job_capture sent twice must show "saved" once, not an error the second
    * time. */
   readonly duplicate: boolean;
+  /** P07 part C: the handler's own answer (runner/server/events.ts
+   * `result`), present only when the handler returned one. For
+   * `browser_command_result` it names each application's stage and
+   * revision; for `application_status_changed`, the outcome and the new
+   * revision (P06). Unvalidated here: the caller that needs it parses it. */
+  readonly result?: unknown;
 }
 
 export interface BridgeClient {
@@ -298,11 +304,11 @@ export function createBridgeClient(options: CreateBridgeClientOptions = {}): Bri
       // real ever received. `eventId` echoing the one just sent, not just
       // `ok: true`, additionally rules out a genuine bridge response meant
       // for a different, unrelated request.
-      const value = result.value as { ok?: unknown; eventId?: unknown; duplicate?: unknown } | undefined;
+      const value = result.value as { ok?: unknown; eventId?: unknown; duplicate?: unknown; result?: unknown } | undefined;
       if (value?.ok !== true || value.eventId !== event.eventId) {
         return { ok: false, error: invalidResponse() };
       }
-      return { ok: true, value: { duplicate: value.duplicate === true } };
+      return { ok: true, value: { duplicate: value.duplicate === true, ...(value.result !== undefined ? { result: value.result } : {}) } };
     },
 
     async getCommands(since) {

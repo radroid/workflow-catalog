@@ -25,6 +25,9 @@ import {
 import { applyColorScheme } from "../shared/theme-init";
 import { FLASH_CLASS, type Tone } from "../shared/tone";
 import { checkImportFileSize, parseSessionManifestFile } from "../file-bridge/session-import";
+import { describeCommandRefusal, describeUrlProblem } from "../session/policy";
+import { importManifest, type ImportOutcome } from "../session/receive";
+import { isSessionStorageKey, listSessions, type SessionEvent } from "../session/store";
 import "./style.css";
 
 applyColorScheme();
@@ -156,6 +159,11 @@ async function hasPairedBefore(current: StoredDeviceToken | null): Promise<boole
  * unpaired) -- lets `syncPairingSection` rebuild it only when storage has
  * actually moved on. */
 let pairingShownFor: string | null = null;
+/** Whether the card on screen was built for a browser that has paired
+ * before (its label names `npm run pair`, and it says "Not paired." rather
+ * than "Not paired yet."). P07 part C: a pairing made and dropped in
+ * another tab changes this without changing the device id. */
+let pairingShownEverPaired = false;
 
 /**
  * `everPaired` (P07-B revision 1, E3/B12): the code field's own label
@@ -330,7 +338,21 @@ function showPairing(current: StoredDeviceToken | null, everPaired: boolean): HT
   const fresh = pairingSection(current, everPaired);
   replaceSection("pairing", fresh);
   pairingShownFor = current?.deviceId ?? null;
+  pairingShownEverPaired = everPaired;
   return fresh;
+}
+
+/**
+ * P07 part C (carried from the P07-B round-5 reviews): the notice follows
+ * the `pairingExpired` flag on every sync, set or cleared silently, even
+ * when the card itself stays. Revision 4 set it only while rebuilding the
+ * card, so a card that never showed the paired state missed it, and a
+ * notice outlived a pair and un-pair made in another tab.
+ */
+function syncPairingNotice(expired: boolean): void {
+  const showing = pairingNotice.textContent === PAIRING_EXPIRED_LINE;
+  if (expired && !showing) showPairingExpired();
+  else if (!expired && showing) pairingNotice.replaceChildren();
 }
 
 /**
@@ -355,10 +377,18 @@ function showPairing(current: StoredDeviceToken | null, everPaired: boolean): HT
  */
 async function syncPairingSection(): Promise<void> {
   const current = await getDeviceToken();
-  if ((current?.deviceId ?? null) === pairingShownFor) return;
   const expired = current === null && (await getPairingExpired());
   const everPaired = await hasPairedBefore(current);
-  const hadFocus = app!.querySelector('[data-section="pairing"]')?.contains(document.activeElement) ?? false;
+  if ((current?.deviceId ?? null) === pairingShownFor && everPaired === pairingShownEverPaired) {
+    syncPairingNotice(expired);
+    return;
+  }
+  const oldCard = app!.querySelector('[data-section="pairing"]');
+  const hadFocus = oldCard?.contains(document.activeElement) ?? false;
+  // P07 part C (carried, UI polish 2): a code half-typed in the old card's
+  // field goes into the new one, so a rebuild never drops it.
+  const focusedField = hadFocus && document.activeElement instanceof HTMLInputElement && document.activeElement.type === "text" ? document.activeElement : null;
+  const typed = focusedField?.value ?? "";
   if (expired) showPairingExpired();
   else clearPairingStatus();
   const fresh = showPairing(current, everPaired);
@@ -366,7 +396,12 @@ async function syncPairingSection(): Promise<void> {
     // The control that had focus is gone with the old card. With nothing
     // paired, the code field is next; its description carries the notice.
     const next = current ? '[data-action="unpair"]' : 'input[type="text"]';
-    fresh.querySelector<HTMLElement>(next)?.focus();
+    const target = fresh.querySelector<HTMLElement>(next);
+    if (target instanceof HTMLInputElement && typed !== "") {
+      target.value = typed;
+      target.setSelectionRange(typed.length, typed.length);
+    }
+    target?.focus();
   }
 }
 
@@ -639,16 +674,52 @@ async function refreshOutboxLine(): Promise<void> {
   statusView.setOutboxLine(outboxSummaryText(entries, context));
 }
 
-function renderSessionSummary(manifest: SessionManifest): HTMLElement {
-  const itemRows = manifest.items.map((item) =>
-    el("div", { className: "item-row" }, [
+/** What importing the file did, under its summary (P07 part C). */
+function importOutcomeNodes(outcome: ImportOutcome): HTMLElement[] {
+  if (outcome.kind === "already_here") {
+    return [el("p", { className: FLASH_CLASS.info, attrs: { "data-import-outcome": "" }, text: "This session is already in the side panel, so nothing changed." })];
+  }
+  if (outcome.kind === "refused") {
+    const reason = outcome.session.refusal ? describeCommandRefusal(outcome.session.refusal) : "It can't be opened.";
+    return [el("p", { className: FLASH_CLASS.act, attrs: { "data-import-outcome": "" }, text: `Added to the side panel, but it won't be opened. ${reason}` })];
+  }
+  const openButton = el("button", { attrs: { type: "button" }, text: "Open the side panel" }) as HTMLButtonElement;
+  const note = el("p", { className: "small" });
+  openButton.addEventListener("click", () => {
+    void (async () => {
+      try {
+        const current = await chrome.windows.getCurrent();
+        if (current.id === undefined) throw new Error("no window");
+        await chrome.sidePanel.open({ windowId: current.id });
+      } catch {
+        note.textContent = "Open it from Chrome's side panel menu instead, and choose Job Assistant.";
+      }
+    })();
+  });
+  return [
+    el("p", {
+      className: FLASH_CLASS.ok,
+      attrs: { "data-import-outcome": "" },
+      text: "Added to the side panel, ready to open. Nothing opens until you choose Start applying there.",
+    }),
+    el("div", { className: "row" }, [openButton]),
+    note,
+  ];
+}
+
+function renderSessionSummary(manifest: SessionManifest, outcome: ImportOutcome): HTMLElement {
+  const problems = new Map(outcome.session.items.map((item) => [item.taskId, item.urlProblem]));
+  const itemRows = manifest.items.map((item) => {
+    const problem = problems.get(item.taskId);
+    return el("div", { className: "item-row" }, [
       el("div", {}, [
         el("div", { text: `Task ${item.taskId}` }),
         el("div", { className: "url", text: item.url }),
+        ...(problem ? [el("div", { className: "small", text: describeUrlProblem(problem) })] : []),
       ]),
       el("div", { className: "small", text: `rev ${item.jobRevision}` }),
-    ]),
-  );
+    ]);
+  });
 
   return el("div", { className: "card pad stack" }, [
     el("dl", { className: "kv" }, [
@@ -662,8 +733,62 @@ function renderSessionSummary(manifest: SessionManifest): HTMLElement {
       el("dd", { text: String(manifest.items.length) }),
     ]),
     el("div", { className: "item-list" }, itemRows),
-    el("p", { className: "small", text: "Read-only preview. Opening tabs arrives in a later version." }),
+    ...importOutcomeNodes(outcome),
   ]);
+}
+
+/** The file name the runner's Sessions page expects in `inbox/` (any *.json there is read). */
+const COMPLETION_EVENTS_FILE = "completion-events.json";
+
+/**
+ * P07 part C, the file bridge's last leg: "export completion events". Every
+ * event this browser made for a session the runner sent (the tab reports
+ * and the person's choices, each with its eventId), in order, as one
+ * `{ events: [...] }` file for the workspace's `inbox/` folder. The
+ * runner's Sessions page imports it through the same rules as the bridge,
+ * so an event the bridge already delivered changes nothing (P06). Refused
+ * events are left out. A session imported from a file has no events: its
+ * manifest names no application revision, so a choice made on it is
+ * recorded in this browser only, and the person marks it on the Board.
+ */
+async function completionEvents(): Promise<{ events: SessionEvent[]; localChoices: number }> {
+  const events: SessionEvent[] = [];
+  let localChoices = 0;
+  for (const session of [...(await listSessions())].reverse()) {
+    for (const entry of session.events) if (entry.state !== "refused") events.push(entry.event);
+    localChoices += session.items.filter((item) => item.choice?.outcome === "local").length;
+  }
+  return { events, localChoices };
+}
+
+function completionBlock(exportStatus: HTMLElement): { node: HTMLElement; refresh: () => Promise<void> } {
+  const summary = el("p", { className: "small" });
+  const exportButton = el("button", { attrs: { type: "button" }, text: "Export session updates" }) as HTMLButtonElement;
+  const localNote = el("p", { className: "small" });
+  const node = el("div", { className: "stack", attrs: { "data-completion-export": "" } }, [summary, el("div", { className: "row" }, [exportButton]), localNote]);
+  node.hidden = true;
+  exportButton.addEventListener("click", () => {
+    void (async () => {
+      const { events } = await completionEvents();
+      if (events.length === 0) return;
+      downloadJson(COMPLETION_EVENTS_FILE, { events });
+      exportStatus.textContent = `Exported ${COMPLETION_EVENTS_FILE}. Put it in your workspace's inbox/ folder, then import it on the runner's Sessions page.`;
+    })();
+  });
+  const refresh = async () => {
+    const { events, localChoices } = await completionEvents();
+    const updates = `${events.length} session update${events.length === 1 ? "" : "s"}`;
+    summary.textContent = `${updates} from this browser: which tabs opened or closed, and your Applied and Defer choices. If the runner couldn't be reached, export them for its inbox/ folder.`;
+    exportButton.hidden = events.length === 0;
+    summary.hidden = events.length === 0;
+    localNote.textContent =
+      localChoices > 0
+        ? `${localChoices} choice${localChoices === 1 ? "" : "s"} on sessions from a file ${localChoices === 1 ? "is" : "are"} kept in this browser only. Mark ${localChoices === 1 ? "it" : "them"} on the runner's Board.`
+        : "";
+    localNote.hidden = localChoices === 0;
+    node.hidden = events.length === 0 && localChoices === 0;
+  };
+  return { node, refresh };
 }
 
 /** A short, plain-sentence summary always shown directly; the full
@@ -756,14 +881,25 @@ function fileBridgeSection(hasLastCapture: boolean): HTMLElement {
         mount(importResult, renderImportError(parsed.summary, parsed.detail));
         return;
       }
-      mount(importResult, renderSessionSummary(parsed.manifest));
+      // P07 part C: an imported session goes to the side panel, waiting for Start applying. A copy of one
+      // already there (by sessionId, however it came) changes nothing.
+      const outcome = await importManifest(parsed.manifest);
+      mount(importResult, renderSessionSummary(parsed.manifest, outcome));
     })();
+  });
+
+  const completion = completionBlock(exportStatus);
+  const refreshCompletion = () => completion.refresh().catch(() => undefined);
+  void refreshCompletion();
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && Object.keys(changes).some(isSessionStorageKey)) void refreshCompletion();
   });
 
   const section = el("section", {}, [
     el("h2", { text: "File bridge" }),
     el("div", { className: "card pad stack" }, [
       el("div", { className: "stack" }, [exportButton, exportStatus]),
+      completion.node,
       el("div", { className: "stack" }, [fileLabel, fileInput, importResult]),
     ]),
   ]);
@@ -796,8 +932,10 @@ async function render(): Promise<void> {
   // saying so -- the same notice a rebuild on this page would set, and
   // like it never announced on top of Status's alert (revision 4, K1).
   if (current === null && (await getPairingExpired())) showPairingExpired();
-  const pairing = pairingSection(current, await hasPairedBefore(current));
+  const everPaired = await hasPairedBefore(current);
+  const pairing = pairingSection(current, everPaired);
   pairingShownFor = current?.deviceId ?? null;
+  pairingShownEverPaired = everPaired;
   const lastCapture = await getLastJobCapture();
   const fileBridge = fileBridgeSection(lastCapture !== null);
   statusView.show({ kind: "checking" });
