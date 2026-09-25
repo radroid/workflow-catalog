@@ -903,9 +903,13 @@ describe("revision 3, Y2: short abbreviations a claim may state, and a way out f
     expect(result.refusals.map((refusal) => [refusal.rule, refusal.sentence])).toEqual([["uncited", "Ran the Harbor ops desk on Quill Sq."]]);
     expect(result.refusals[0]!.message).toBe(`Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out. ${hint}`);
     expect(result.forModel[0]!.message).toBe(result.refusals[0]!.message);
-    // An ordinary sentence end gets no hint.
+    // An ordinary sentence end gets no hint, nor does a listed abbreviation that really ends one.
     const plain = check(resume(`Won the Fernwood award. ${cited} [C3].`));
     expect(plain.refusals[0]!.message).toBe("Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out.");
+    const listed = check(resume("Shipped the on-call rotation tooling for Quill Co."));
+    expect(listed.refusals.map((refusal) => [refusal.rule, refusal.message])).toEqual([
+      ["uncited", "Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out."],
+    ]);
   });
 });
 
