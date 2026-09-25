@@ -1,7 +1,7 @@
 # P10 · Package versioning, upgrade, and pilot readiness
 
-Status: open
-Assignee: none
+Status: claimed (part A)
+Assignee: manual session (Sonnet), part A
 Blocked by: P02–P09
 Owns: runner/upgrade/, runner/server/routes/upgrade.ts, runner/ui/settings.html (upgrade section), packages/job-assistant/CHANGELOG.md, docs/pilot/
 Spec: F12, §10 definition of done
