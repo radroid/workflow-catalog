@@ -62,6 +62,10 @@ const loadingText = new Set();
 const openPanels = new Set();
 const fieldErrors = new Map(); // control id -> message
 const busy = new Set(); // ids of buttons whose request is in flight
+// P03.1: GET /api/onboarding/github/status's last answer ({ available, source } | null); absent until
+// fetched, the same lazy, once-per-panel-open pattern as savedText/loadSavedText below.
+let githubStatus = null;
+let githubStatusLoading = false;
 
 // ---------------------------------------------------------------------------
 // Words
@@ -79,6 +83,26 @@ function quote(text, max = 60) {
 
 function messageOf(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * P03.1 (carried from P03.2's round-3 critic, item 2): a page-load failure's line used to
+ * concatenate the raw error message with " Reload the page to try again." unconditionally. Two
+ * problems: with the runner not answering at all, the message is the browser's own wording,
+ * "Failed to fetch" -- no closing period -- so the sentences ran together as "...Failed to fetch
+ * Reload the page to try again."; and with the profile busy, the message is already "The profile
+ * is busy. Try again in a moment." (store/profile-writes.ts's PROFILE_BUSY_MESSAGE), so appending
+ * the reload sentence said "try again" twice in a row. This closes the message with a full stop
+ * first when it doesn't already end with one, and only adds the reload sentence when the message
+ * doesn't already tell the person to try again -- the server's own wording, kept at its own
+ * capitalization (unlike a refusal's afterColon(), which lower-cases it), is instruction enough.
+ */
+const SUGGESTS_RETRY = /try again/i;
+function pageLoadErrorText(subject, error) {
+  const raw = messageOf(error);
+  const message = /[.!?]$/.test(raw) ? raw : `${raw}.`;
+  const reloadHint = SUGGESTS_RETRY.test(message) ? "" : " Reload the page to try again.";
+  return `${subject} couldn't load: ${message}${reloadHint}`;
 }
 
 /**
@@ -453,9 +477,38 @@ function afterColon(message) {
   return /^[A-Z][a-z]/.test(message) ? `${message[0].toLowerCase()}${message.slice(1)}` : message;
 }
 
-async function refused(error, id, field) {
+/**
+ * P03.1 (carried from P03.2's round-3 review, "outside this round"): this
+ * used to `await load()` — reloading the page's state — *before* showing
+ * the refusal. A "profile busy" refusal (503, the write that just failed)
+ * reloads into the very same lock, so the message sat unshown for as long
+ * as the lock stayed busy (about 10 s in the reviewer's probe): a person
+ * would see nothing happen for that long, then the refusal, instead of an
+ * immediate answer. The refusal is now announced immediately, from whatever
+ * `view` is already on screen (a refused write changes nothing server-side,
+ * so the markdownError check below reads the same either way, stale or
+ * not).
+ *
+ * Gate fix round 1, B1 (regression): "no reload after it" went too far.
+ * career-profile.md can be hand-edited to something unreadable *while the
+ * page is already open* (`ui-pages.test.ts`'s `damageMarkdown`), so `view`
+ * can be stale in a way that matters: the write that just discovered the
+ * break refuses with "…See the note at the top." (MARKDOWN_UNREADABLE_REFUSAL,
+ * server/routes/onboarding.ts), but that note's visibility comes only from
+ * `view.markdownError`, which a fresh `GET /api/onboarding` sets — the
+ * refusal's own response never carries it (that route's own comment: "the
+ * file's problem is on the page already; a refused write only says so").
+ * Without a reload, the message points at a note that never appears. The
+ * fix reloads, but only when the message itself promises that note, and
+ * only *after* announcing (never before, so the announcement never again
+ * waits on the write's own lock): a plain busy refusal doesn't mention the
+ * note, so `onboarding-carried-items.test.ts`'s "no follow-up GET" case is
+ * unaffected -- the lock scenario there never matches SEES_MARKDOWN_NOTE.
+ */
+const SEES_MARKDOWN_NOTE = /see the note/i;
+
+function refused(error, id, field) {
   const message = messageOf(error);
-  await load().catch(() => undefined);
   // Q7 (revision 1, reviewer 6 and critic 2): unlike a client-side refusal (refuseAt's other call sites,
   // each hand-authoring its own short focusedReason distinct from the fuller detail next to the field), the
   // server gives only one message -- already short, plain and code-free (J5, Q3) -- so there is no separate
@@ -463,10 +516,21 @@ async function refused(error, id, field) {
   // use (S8: in lower case, see afterColon), keeps the line's own shape (what happened, then why) for a
   // server refusal too: the upload's 413, or a statement's Enter refused by the server (the profile lock's
   // 503), while the field never loses focus for a screen reader to re-read the field error from.
-  if (field && !view?.markdownError) return refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${afterColon(message)}`);
-  lastAction(message, "refused");
-  // Focus stays where the person acted (the button, or the field they pressed Enter in); only a lost focus goes to the button.
-  render(document.activeElement && document.activeElement !== document.body ? undefined : id);
+  if (field && !view?.markdownError) refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${afterColon(message)}`);
+  else {
+    lastAction(message, "refused");
+    // Focus stays where the person acted (the button, or the field they pressed Enter in); only a lost focus goes to the button.
+    render(document.activeElement && document.activeElement !== document.body ? undefined : id);
+  }
+  // B1: reload (in the background, not awaited by run()'s caller) only to reveal a note this refusal
+  // just promised, and only when `view` doesn't already carry it -- when the page loaded already
+  // damaged, the initial load() already set view.markdownError, so the note is already showing and a
+  // second reload here would be pure overhead: e.g. it would needlessly re-touch the workspace after
+  // a test's own cleanup has already run (a real, observed flake: the reload's own read still goes
+  // through profile-writes.ts's cross-process lock file, which can race a test harness's rmdir of its
+  // temp workspace once nothing in the test is left to await this background work). render() with no
+  // focusPlan keeps focus exactly where refuseAt/lastAction left it.
+  if (SEES_MARKDOWN_NOTE.test(message) && !view?.markdownError) void load().then(() => render()).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -663,6 +727,24 @@ function statusBadge(status) {
 function openPanel(category) {
   openPanels.add(category);
   loadSavedText(category);
+  if (category === "repositories") loadGithubStatus();
+}
+
+/** P03.1: fetches whether a GitHub token is available (and from where), once, the first time the repositories panel opens. */
+function loadGithubStatus() {
+  if (githubStatus !== null || githubStatusLoading) return;
+  githubStatusLoading = true;
+  getJson("/api/onboarding/github/status")
+    .then((data) => {
+      githubStatus = data;
+    })
+    .catch(() => {
+      githubStatus = { available: false, source: null };
+    })
+    .finally(() => {
+      githubStatusLoading = false;
+      render();
+    });
 }
 
 /** Fetches the text box's saved text, raw, the first time its panel opens (D13). */
@@ -765,7 +847,8 @@ function providedDetails(category, label) {
   }
   const toggle = el("button", {
     className: "button secondary",
-    text: open ? "Hide the text box" : "Add or edit text",
+    // P03.1: this panel now offers every mode (paste, file, URL, GitHub), not just the text box.
+    text: open ? "Hide" : "Add a source",
     attrs: { type: "button", id: toggleId, "aria-expanded": String(open), "aria-controls": panelId },
   });
   toggle.onclick = () => {
@@ -780,6 +863,9 @@ function providedDetails(category, label) {
 function sourcePanel(category, label, panelId, open) {
   const textId = `source-text-${category}`;
   const fileId = `source-file-${category}`;
+  const binaryFileId = `source-binary-file-${category}`;
+  const urlId = `source-url-${category}`;
+  const urlButtonId = `source-url-import-${category}`;
   const hintId = `source-text-hint-${category}`;
   const extractId = `source-extract-${category}`;
   const loading = !savedText.has(category);
@@ -799,6 +885,18 @@ function sourcePanel(category, label, panelId, open) {
     const input = event.currentTarget;
     run(fileId, () => upload(category, input), { id: fileId, outcome: "Not uploaded." });
   };
+  // P03.1: a second, separate file input for the binary modes -- kept apart from the .txt/.md one above so
+  // each keeps its own accept list and its own plain refusal for the wrong kind of file.
+  const binaryFile = el("input", { attrs: { type: "file", id: binaryFileId, accept: ".pdf,.docx,.zip" } });
+  if (fieldErrors.has(binaryFileId)) {
+    binaryFile.setAttribute("aria-invalid", "true");
+    binaryFile.setAttribute("aria-describedby", fieldErrorId(binaryFileId));
+  }
+  binaryFile.onchange = (event) => {
+    const input = event.currentTarget;
+    run(binaryFileId, () => uploadBinary(category, input), { id: binaryFileId, outcome: "Not uploaded." });
+  };
+  const urlInput = textControl("input", urlId, "", { placeholder: "https://…" });
   add(
     panel,
     el("label", { text: `Text for ${label}`, attrs: { for: textId } }),
@@ -806,6 +904,22 @@ function sourcePanel(category, label, panelId, open) {
     box,
     fieldError(textId),
     el("div", { className: "upload-row" }, el("label", { text: "Or upload a .txt or .md file", attrs: { for: fileId } }), file, fieldError(fileId)),
+    el(
+      "div",
+      { className: "upload-row" },
+      el("label", { text: "Or upload a .pdf, .docx or .zip file", attrs: { for: binaryFileId } }),
+      binaryFile,
+      fieldError(binaryFileId),
+    ),
+    el(
+      "div",
+      { className: "upload-row" },
+      el("label", { text: "Or import a public page by its address", attrs: { for: urlId } }),
+      urlInput,
+      actionButton(urlButtonId, "Import", { secondary: true }, () => importUrl(category, label, urlId, urlButtonId)),
+      fieldError(urlId),
+    ),
+    category === "repositories" ? githubSection(label) : null,
     el("div", { className: "form-row" }, actionButton(extractId, "Save & extract claims", {}, () => saveAndExtract(category, label, extractId))),
   );
   return panel;
@@ -830,6 +944,106 @@ async function upload(category, input) {
   await load();
   lastAction(outcome.message, "done");
   render(fileId);
+}
+
+/**
+ * P03.1: a PDF, DOCX or ZIP is read as bytes in the browser, base64-encoded, and sent to
+ * `/sources/:category/file`, which extracts its text locally (`lib/document-text.ts` / `lib/archive-text.ts`
+ * -- `unpdf` and `fflate` are runner dependencies, never bundled here) and confines the raw file the same
+ * way P03's .txt/.md uploads are confined.
+ */
+async function uploadBinary(category, input) {
+  const fileId = input.id;
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = "";
+  if (!/\.(pdf|docx|zip)$/i.test(file.name)) {
+    return refuseAt(
+      fileId,
+      `“${file.name}” is not a .pdf, .docx or .zip file. Upload a .txt or .md file above instead, or paste the text.`,
+      "Not uploaded.",
+      "Not uploaded: only .pdf, .docx or .zip files can be uploaded here.",
+    );
+  }
+  const contentBase64 = await fileToBase64(file);
+  const outcome = await postJson(`/api/onboarding/sources/${category}/file`, { fileName: file.name, contentBase64 });
+  await load();
+  lastAction(outcome.message, "done");
+  render(fileId);
+}
+
+/** Base64-encodes a File's bytes in chunks, so a file up to the 10 MB cap never blows String.fromCharCode's argument-count limit. */
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  return window.btoa(binary);
+}
+
+/** P03.1: a public page's readable text, imported and saved the same way an upload is. */
+async function importUrl(category, label, urlId, buttonId) {
+  const value = (drafts.get(urlId) ?? "").trim();
+  if (!value) return refuseAt(urlId, `Type the address to import for ${label}.`, "Not imported.");
+  const outcome = await postJson(`/api/onboarding/sources/${category}/url`, { url: value });
+  drafts.delete(urlId);
+  await load();
+  lastAction(outcome.message, "done");
+  render(buttonId);
+}
+
+/** P03.1: the repositories category's GitHub import -- a token from `gh auth token` or the keychain, and the import button, or a one-time paste-a-token form when neither exists yet. */
+function githubSection(label) {
+  const tokenId = "github-token-input";
+  const saveTokenId = "github-token-save";
+  const importId = "github-import";
+  const wrap = el("div", { className: "source-details github-section" });
+  if (githubStatus === null) {
+    wrap.append(el("p", { className: "muted small", text: "Checking for a GitHub token…", attrs: { "aria-busy": "true" } }));
+    return wrap;
+  }
+  if (githubStatus.available) {
+    add(
+      wrap,
+      el(
+        "p",
+        { className: "muted small" },
+        el("span", { text: githubStatus.source === "gh-cli" ? "Signed in with the gh CLI." : "A GitHub token is saved in your OS keychain." }),
+      ),
+      el("div", { className: "form-row" }, actionButton(importId, "Import from GitHub", { secondary: true }, () => importGithub(importId))),
+    );
+  } else {
+    add(
+      wrap,
+      el("p", {
+        className: "muted small",
+        text: "No GitHub token yet. Sign in with the gh CLI (gh auth login), or paste a fine-grained personal access token below (read-only; kept in your OS keychain, never in this workspace).",
+      }),
+      el("label", { text: `GitHub token for ${label}`, attrs: { for: tokenId } }),
+      textControl("input", tokenId, ""),
+      fieldError(tokenId),
+      el("div", { className: "form-row" }, actionButton(saveTokenId, "Save token", { secondary: true }, () => saveGithubToken(tokenId, saveTokenId))),
+    );
+  }
+  return wrap;
+}
+
+async function importGithub(importId) {
+  const outcome = await postJson("/api/onboarding/sources/repositories/github", {});
+  await load();
+  lastAction(outcome.message, "done");
+  render(importId);
+}
+
+async function saveGithubToken(tokenId, saveTokenId) {
+  const token = (drafts.get(tokenId) ?? "").trim();
+  if (!token) return refuseAt(tokenId, "Paste the token first.", "Not saved.");
+  await postJson("/api/onboarding/github/token", { token });
+  drafts.delete(tokenId);
+  githubStatus = null; // re-check availability (and its source) now that a token may exist
+  loadGithubStatus();
+  lastAction("GitHub token saved. It's kept in your OS keychain, never in this workspace.", "done");
+  render(saveTokenId);
 }
 
 /** J3: what Save & extract says when career-profile.md can't be read; the text box's own file doesn't depend on it. */
@@ -1069,6 +1283,6 @@ refresh()
   })
   .catch((error) => {
     const node = $("page-error");
-    node.textContent = `The onboarding page couldn't load: ${messageOf(error)} Reload the page to try again.`;
+    node.textContent = pageLoadErrorText("The onboarding page", error);
     node.hidden = false;
   });

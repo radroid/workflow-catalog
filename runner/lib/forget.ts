@@ -2,6 +2,7 @@ import { access, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Workspace } from "../store/workspace.ts";
+import { GITHUB_TOKEN_SECRET_NAME } from "./github-source.ts";
 import { API_KEY_SECRET_NAME, EVE_SECRET_NAMES, EVE_SECRET_SERVICE, RUNNER_SECRET_SERVICE, type SecretStore } from "./secret-store.ts";
 import { realpathNearest } from "./setup.ts";
 import type { RunnerSettings } from "./settings.ts";
@@ -15,7 +16,7 @@ import type { RunnerSettings } from "./settings.ts";
  *   runner/.nitro/                    (session content, traces, logs: personal data)
  *   runner/eval-agent/.eve/, .output/ the fixture agent's build (no personal data)
  *   the workspace folder              your data (only when its workspace.json is valid)
- *   OS keychain, "workflow-catalog-runner": openai-key, anthropic-key, ai-gateway-key
+ *   OS keychain, "workflow-catalog-runner": openai-key, anthropic-key, ai-gateway-key, github-token
  *   OS keychain, "eve": chatgpt, openai-key, anthropic-key, ai-gateway-key, vercel
  *   ~/.eve/connection.json, ~/.eve/auth/chatgpt.json
  *                                     eve's own sign-in state; shared by every eve
@@ -103,7 +104,9 @@ export async function planForget(deps: ForgetDeps): Promise<ForgetPlan> {
   }
 
   if (deps.secrets.available) {
-    for (const name of Object.values(API_KEY_SECRET_NAME)) {
+    // P03.1: the GitHub token (`github-token`) lives under the same service as the provider API keys, so
+    // it is found and removed here too, never as a separate keychain namespace.
+    for (const name of [...Object.values(API_KEY_SECRET_NAME), GITHUB_TOKEN_SECRET_NAME]) {
       if (await deps.secrets.has(RUNNER_SECRET_SERVICE, name).catch(() => false)) {
         items.push({ owner: "runner", label: `keychain entry ${RUNNER_SECRET_SERVICE} / ${name}`, secret: { service: RUNNER_SECRET_SERVICE, name } });
       }

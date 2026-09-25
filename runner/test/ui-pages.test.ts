@@ -1,8 +1,8 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SOURCE_CATEGORIES } from "@workflow-catalog/contracts";
+import { Window as HappyDomWindow } from "happy-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
@@ -25,11 +25,11 @@ import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
  *   with no field error; Discard clears every field error; a field error goes
  *   with the next action; the Profile editor keeps unsaved text.
  *
- * happy-dom is not a runner dependency: adding it would change
- * runner/package.json and pnpm-lock.yaml, outside this packet's Owns. The
- * workspace already installs it for the extension (extension/package.json),
- * so it is resolved from there. The same behaviour is also checked in
- * Chromium by the packet's screenshot harness (see the P03 report).
+ * happy-dom (P03.1: a runner devDependency now, imported directly below) is
+ * only enough DOM surface for `DomWindow`/`DomDocument`/`DomNode` below; the
+ * runner's tsconfig has no DOM lib, so `Window`'s real, much larger type is
+ * narrowed to that minimal shape by the cast. The same behaviour is also
+ * checked in Chromium by the packet's screenshot harness (see the P03 report).
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -72,9 +72,7 @@ interface DomWindow {
   readonly happyDOM: { close(): Promise<void> };
 }
 
-const { Window } = createRequire(path.join(HERE, "..", "..", "extension", "package.json"))("happy-dom") as {
-  Window: new (options: { url: string; width: number; height: number }) => DomWindow;
-};
+const Window = HappyDomWindow as unknown as new (options: { url: string; width: number; height: number }) => DomWindow;
 
 const GLOBALS = ["window", "document", "HTMLElement", "ResizeObserver", "requestAnimationFrame", "fetch"] as const;
 const saved = new Map<string, unknown>(GLOBALS.map((name) => [name, (globalThis as Record<string, unknown>)[name]]));

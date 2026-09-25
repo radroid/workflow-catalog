@@ -97,6 +97,22 @@ describe("uninstall footprint", () => {
     expect(again.items).toEqual([]);
   });
 
+  // P03.1: the GitHub token (service RUNNER_SECRET_SERVICE, name "github-token", set by POST
+  // /api/onboarding/github/token, never by setup) is found and removed exactly like the provider keys.
+  it("finds and removes a saved GitHub token, alongside the provider keys, under the same runner service", async () => {
+    const install = await fakeInstall();
+    await install.secrets.set(RUNNER_SECRET_SERVICE, "github-token", "github_pat_fictional_northwind_0123456789");
+    const settings = await loadSettings({ envFile: install.envFile, env: {} });
+
+    const plan = await planForget({ runnerDir: install.runnerDir, envFile: install.envFile, settings, secrets: install.secrets, homeDir: install.home });
+    expect(plan.items.map((entry) => entry.label)).toContain(`keychain entry ${RUNNER_SECRET_SERVICE} / github-token`);
+    expect(JSON.stringify(plan)).not.toContain("github_pat_fictional_northwind_0123456789"); // the plan carries the entry's name, never its value
+
+    const outcome = await executeForget(plan, install.secrets);
+    expect(outcome.failed).toEqual([]);
+    expect(await install.secrets.has(RUNNER_SECRET_SERVICE, "github-token")).toBe(false);
+  });
+
   it("keeps the workspace with --keep-workspace, and never removes a folder that is not a workspace", async () => {
     const install = await fakeInstall({ provider: "chatgpt" });
     const settings = await loadSettings({ envFile: install.envFile, env: {} });
