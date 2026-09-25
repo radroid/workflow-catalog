@@ -4573,14 +4573,9 @@
       "statements": [
         "Engineering manager at Harbor from 2021 through the last month of 2023 [C10]."
       ],
-      "verdict": "REFUSE",
+      "verdict": "PASS",
       "reviewerWant": "PASS",
-      "refusals": [
-        {
-          "rule": "date",
-          "message": "“from 2021” names a start and no end, so it says it is still going on, and the claims this sentence cites (C10) don't. Dates must match the claims exactly."
-        }
-      ]
+      "refusals": []
     },
     {
       "source": "r4",

@@ -393,9 +393,10 @@ const THIS_DAY_JOINERS = new Set(["to", "until", "till"]);
 const OPEN_RANGE_ENDS = new Set(["now", "today", "date", "present", "current"]);
 /**
  * Words that may sit between an end word or a joiner and its year: "until the end of March 2021", and (X4, so a range
- * with an end is never read as a start with none) "until summer 2021", "through Q2 2021", "to H1 2021".
+ * with an end is never read as a start with none) "until summer 2021", "through Q2 2021", "to H1 2021"; and (P05.1
+ * finding 3) "through the last month of 2023" closes a range as "through 2023" does.
  */
-const BEFORE_YEAR = new Set(["in", "on", "of", "the", "end", "early", "mid", "late", "spring", "summer", "fall", "autumn", "winter"]);
+const BEFORE_YEAR = new Set(["in", "on", "of", "the", "end", "early", "mid", "late", "spring", "summer", "fall", "autumn", "winter", "last", "month"]);
 const QUARTER_OR_HALF = /^(?:q[1-4]|h[12])$/;
 /** "mid-2021" is "mid 2021": the word before a year, not a range (X4). */
 const PART_OF_YEAR = /(?<![\p{L}\p{N}])(early|mid|late)\s*-\s*(?=(?:19|20)\d{2}(?!\d))/giu;
