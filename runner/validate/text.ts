@@ -143,7 +143,9 @@ export function isAbbreviation(word: string): boolean {
   const bare = word.replace(/^[\p{Ps}\p{Pi}"']+/u, "");
   const lower = bare.replace(/\.$/, "").toLowerCase();
   if (ABBREVIATIONS.has(lower)) return true;
-  if (CAPITALIZED_ABBREVIATIONS.has(lower) && /^\p{Lu}/u.test(bare)) return true; // "Lt.", never "a sales rep." (Z4)
+  // "Lt.", never "a sales rep." (Z4), and (P05.1 finding 8) never all-caps "REP.": Z4's capitalization is a proper
+  // noun's, one capital letter then lower case, not "however it's cased".
+  if (CAPITALIZED_ABBREVIATIONS.has(lower) && /^\p{Lu}\p{Ll}*\.$/u.test(bare)) return true;
   if (/^[A-Z]$/.test(bare.replace(/\.$/, ""))) return true; // an initial, as in "J. Doe"
   const parts = bare.split(".").length - 1;
   return parts >= 2 && DOTTED.test(bare) && !TWO_WORDS_RUN_TOGETHER.test(bare);

@@ -6080,9 +6080,14 @@
       "statements": [
         "Worked as a SALES REP. Shipped the on-call rotation tooling used by three engineering teams [C3]."
       ],
-      "verdict": "PASS",
+      "verdict": "REFUSE",
       "reviewerWant": "REFUSE",
-      "refusals": []
+      "refusals": [
+        {
+          "rule": "uncited",
+          "message": "Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out."
+        }
+      ]
     },
     {
       "source": "r5",
