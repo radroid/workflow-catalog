@@ -30,10 +30,12 @@ async function loadStatus() {
   renderChecklist(status.checklist);
   $("workspace-root").textContent = status.workspace.root;
   $("package-version").textContent = status.packageVersion;
+  // P06.1 item 4.2: status.eve.detail is the eve client's own raw error text (eve-gateway.ts's shorten(error.message),
+  // e.g. a bare fetch/connection error) -- never shown to a person. One plain sentence covers every cause.
   $("eve-status").textContent = status.eve
     ? status.eve.ok
       ? `eve is answering at ${status.eve.url}.`
-      : `eve is not answering at ${status.eve.url}${status.eve.detail ? `: ${status.eve.detail}` : "."}`
+      : `eve isn't answering at ${status.eve.url}. Make sure the runner is still running.`
     : "eve is not connected to this bridge.";
 }
 
@@ -101,10 +103,15 @@ $("new-code").addEventListener("click", async (event) => {
   }
 });
 
+// P06.1 item 4.1: aria-disabled, never the disabled attribute, which drops focus to the page body the instant it's
+// set (a disabled element can't hold focus) -- the same pattern onboarding.css/profile.css/jobs.css's busy buttons
+// use elsewhere. The click handler ignores a press while already busy, and #model-result's role="status" (in
+// status.html) means setting its text is itself the announcement, with focus never having left the button.
 $("check-model").addEventListener("click", async (event) => {
   const button = event.currentTarget;
+  if (button.getAttribute("aria-disabled") === "true") return;
   const result = $("model-result");
-  button.disabled = true;
+  button.setAttribute("aria-disabled", "true");
   result.hidden = false;
   result.className = "small muted";
   result.textContent = "Checking…";
@@ -117,7 +124,7 @@ $("check-model").addEventListener("click", async (event) => {
     result.className = "small error";
     result.textContent = error instanceof Error ? error.message : String(error);
   } finally {
-    button.disabled = false;
+    button.setAttribute("aria-disabled", "false");
   }
 });
 
