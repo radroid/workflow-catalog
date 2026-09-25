@@ -603,3 +603,57 @@ describe("revision 2, X1: titles, whatever their case", () => {
     }
   });
 });
+
+describe("revision 2, X3: numbers written as words", () => {
+  const led = "Led the payments infrastructure team at Northwind Labs";
+  const shipped = "Shipped the on-call rotation tooling used by three engineering teams";
+  it.each([
+    ["zero in a compound", `${led} through zero-downtime ledger releases [C1].`],
+    ["N-fold as one word", `${led}, growing ledger throughput tenfold [C1].`],
+    ["threefold against a claim that says three", `${shipped}, cutting pages threefold [C3].`],
+    ["twofold", `${shipped}, a twofold gain [C3].`],
+    ["a numeral glued to “fold”", `${led}, growing ledger throughput 10fold [C1].`],
+    ["“by half”", `${led}, cutting billing costs by half [C1].`],
+    ["“in half”", `${led}, cutting ledger costs in half [C1].`],
+    ["“helped double”", `${led} and helped double billing volume [C1].`],
+    ["triple as a whole word", `${led} and helped triple billing volume [C1].`],
+    ["quadruple as a whole word", `${led} and helped quadruple billing volume [C1].`],
+    ["“by a third”", `${led}, cutting ledger errors by a third [C1].`],
+    ["“by a quarter”", `${led}, cutting ledger errors by a quarter [C1].`],
+    ["“two thirds”", `${led}, cutting ledger errors by two thirds [C1].`],
+    ["double-digit growth", `${led}, with double-digit billing growth [C1].`],
+  ])("refuses %s", (_name, statement) => {
+    expect(rules(resume(statement))).toEqual(["number"]);
+  });
+
+  it("reads each word as the quantity it states", () => {
+    expect(numbersIn("zero tenfold half double a third").map((fact) => fact.key)).toEqual(["0", "10x", "0.5x", "2x", "0.333333x"]);
+    expect(numbersIn("threefold, twofold, 10fold, two-fold").map((fact) => fact.key)).toEqual(["3x", "2x", "10x", "2x"]);
+    expect(numbersIn("triple, quadruple, a quarter, one-third, three quarters, double digits").map((fact) => fact.key)).toEqual(["3x", "4x", "0.25x", "0.333333x", "0.75x", "double-digit"]);
+    // As the words they are: "half" is what "halved" is, "tenfold" what "10x" is.
+    expect(numbersIn("in half")[0]!.key).toBe(numbersIn("halved")[0]!.key);
+    expect(numbersIn("tenfold")[0]!.key).toBe(numbersIn("10x")[0]!.key);
+  });
+
+  it("passes the same quantity in other words when a claim states it", () => {
+    const halved = confirmedClaim("C9", "metric", "Cut ledger reconciliation time in half at Northwind Labs.");
+    const tenfold = confirmedClaim("C10", "metric", "Grew ledger throughput tenfold at Northwind Labs.");
+    const downtime = confirmedClaim("C11", "fact", "Ran zero-downtime ledger releases at Northwind Labs.");
+    const third = confirmedClaim("C12", "metric", "Cut ledger errors by a third at Northwind Labs.");
+    const claims = [halved, tenfold, downtime, third];
+    expect(rulesWith(claims, "Halved ledger reconciliation time at Northwind Labs [C9].")).toEqual([]);
+    expect(rulesWith(claims, "Grew ledger throughput 10x at Northwind Labs [C10].")).toEqual([]);
+    expect(rulesWith(claims, "Ran zero-downtime ledger releases at Northwind Labs [C11].")).toEqual([]);
+    expect(rulesWith(claims, "Cut ledger errors by a third at Northwind Labs [C12].")).toEqual([]);
+    // …and never another one.
+    expect(rulesWith(claims, "Cut ledger errors by half at Northwind Labs [C12].")).toEqual(["number"]);
+  });
+
+  it("leaves compounds and ordinals that state no quantity alone", () => {
+    expect(rules(resume(`${led}, redesigning its double-entry ledger service [C1].`))).toEqual([]);
+    expect(rules(resume(`${led}, integrating a third-party billing API [C1].`))).toEqual([]);
+    expect(rules(resume(`${shipped} on behalf of the payments team [C3].`))).toEqual([]);
+    expect(numbersIn("double-checked the half-duplex links for a third party in the third quarter, each quarter")).toEqual([]);
+    expect(numbersIn("manifold, scaffold, halfway, first-class")).toEqual([]);
+  });
+});

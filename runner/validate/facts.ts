@@ -24,7 +24,7 @@ export interface NumberFact {
 }
 
 const SMALL_NUMBER_WORDS: Readonly<Record<string, number>> = {
-  two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  zero: 0, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
   eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
   twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
   dozen: 12,
@@ -39,14 +39,30 @@ const SUFFIX_SCALES: Readonly<Record<string, number>> = { k: 1_000, m: 1_000_000
 /** Words that state a quantity without a numeral. Each is its own key, so it must appear in a cited claim too. */
 const QUANTITY_WORDS: Readonly<Record<string, string>> = {
   dozens: "dozens", hundreds: "hundreds", thousands: "thousands", millions: "millions", billions: "billions",
-  doubled: "2x", doubling: "2x", twice: "2x", tripled: "3x", tripling: "3x", quadrupled: "4x", halved: "0.5x", halving: "0.5x",
+  doubled: "2x", doubling: "2x", twice: "2x", tripled: "3x", tripling: "3x", quadrupled: "4x", quadrupling: "4x", halved: "0.5x", halving: "0.5x",
 };
+
+/**
+ * Multiplier words read as whole words only (revision 2, X3): "helped double billing" is 2×, as "doubled" is, and
+ * "cut it in half" is what "halved" is. Inside a compound they name something else: a "double-entry" ledger, a
+ * "half-duplex" link.
+ */
+const WHOLE_WORD_QUANTITIES: Readonly<Record<string, string>> = { double: "2x", triple: "3x", quadruple: "4x", half: "0.5x" };
+
+/** "double-digit" and "triple-digit" growth: a quantity of their own, which a cited claim must state too (X3). */
+const DIGIT_COUNTS: ReadonlySet<string> = new Set(["double", "triple"]);
+
+/** Fractions read after "a" or "one" ("a third", "one quarter") or a number word ("two thirds"), by denominator (X3). */
+const FRACTION_WORDS: Readonly<Record<string, number>> = { third: 3, thirds: 3, quarter: 4, quarters: 4 };
+
+/** "N-fold" written as one word: "tenfold", "threefold" (X3). */
+const FOLD_WORD = /^(\p{L}+)fold$/u;
 
 /** The number a token starts with: digits, optionally in comma-separated thousands, and a decimal part. */
 const LEADING_NUMBER = /^(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?/;
 
-/** A unit or scale glued to a numeral: `40%`, `10x`, `2k`, `1.5M`, `3bn`, each optionally with a `+`. */
-const GLUED_SUFFIX = /^(%|x|k|mm|m|bn|b)\+?$/i;
+/** A unit or scale glued to a numeral: `40%`, `10x`, `10fold`, `2k`, `1.5M`, `3bn`, each optionally with a `+`. */
+const GLUED_SUFFIX = /^(%|x|fold|k|mm|m|bn|b)\+?$/i;
 
 /** A multiplier written before its number: `x2`, `x10`. */
 const MULTIPLIER_FIRST = /^x(\d+(?:\.\d+)?)$/i;
@@ -60,24 +76,38 @@ export function isYear(raw: string): boolean {
   return /^(19|20)\d{2}$/.test(raw);
 }
 
+interface Token {
+  readonly text: string;
+  /** Whether it is one part of a hyphenated compound: "double" in "double-entry", "zero" in "zero-downtime". */
+  readonly compound: boolean;
+}
+
+function cleanPart(part: string): string {
+  return part.replace(/^[$€£+'.,]+/, "").replace(/[.,']+$/, "");
+}
+
 /**
  * Words, numerals and symbols-with-numbers, split at hyphens ("3-person",
  * "twenty-five", "2019-2022") and at a comma that isn't a thousands
  * separator ("3,5", "teams,won"), outer punctuation dropped. The
  * multiplication sign reads as `x` ("2×", "×2").
  */
-function tokens(text: string): string[] {
+function tokens(text: string): Token[] {
   const raw =
     normalizeForChecks(text)
       .replace(/[’‘]/g, "'")
       .replace(/[‐‑‒–—―−]/g, "-")
       .replace(/×/g, "x")
       .match(/[\p{L}\p{N}$€£%.,+'-]+/gu) ?? [];
-  const out: string[] = [];
+  const out: Token[] = [];
   for (const token of raw) {
-    for (const part of token.split(/-|,(?!\d{3}(?!\d))/)) {
-      const cleaned = part.replace(/^[$€£+'.,]+/, "").replace(/[.,']+$/, "");
-      if (cleaned) out.push(cleaned);
+    const hyphenParts = token.split("-");
+    const compound = hyphenParts.filter((part) => cleanPart(part) !== "").length > 1;
+    for (const hyphenPart of hyphenParts) {
+      for (const part of hyphenPart.split(/,(?!\d{3}(?!\d))/)) {
+        const cleaned = cleanPart(part);
+        if (cleaned) out.push({ text: cleaned, compound });
+      }
     }
   }
   return out;
@@ -98,15 +128,19 @@ function trailingUnit(list: readonly string[], at: number): { readonly scale: nu
  * Every quantity in `text`: numerals (`3`, `1,200`, `2.5`, `40%`, `10x`,
  * `x10`, `$2M`, `2k`, `8+`, `1e6`), numerals with a unit glued on (`200ms`,
  * `5GB`, `3rd`: the quantity is the number, as it is for `200 ms`), number
- * words (`three`, `twenty-five`, `a dozen`), scaled and written-out forms
- * (`two hundred`, `3 million`, `40 percent`) and multiplier words
- * (`doubled`). Digits of any script count (`٥٠٠`). A name that starts with
- * a letter (`EC2`, `K8s`, `P99`, `Q3`, `B2B`) is not a quantity, and years
+ * words (`zero`, `three`, `twenty-five`, `a dozen`), scaled and written-out
+ * forms (`two hundred`, `3 million`, `40 percent`), multiplier words
+ * (`doubled`, `tenfold`, and whole-word `double`, `triple`, `quadruple`,
+ * `half`), `double-digit`, and fractions (`a third`, `a quarter`, `two
+ * thirds`). Digits of any script count (`٥٠٠`). A name that starts with a
+ * letter (`EC2`, `K8s`, `P99`, `Q3`, `B2B`) is not a quantity, and years
  * (`2019`, and `2019Q3`'s) are left to the date rule. "One" is not counted:
- * as a pronoun it is far too common to be a claim.
+ * as a pronoun it is far too common to be a claim. Nor are ordinals such as
+ * "first" and "third": "first-class" and "third-party" are everywhere.
  */
 export function numbersIn(text: string): NumberFact[] {
-  const list = tokens(text);
+  const found = tokens(text);
+  const list = found.map((token) => token.text);
   const facts: NumberFact[] = [];
   for (let index = 0; index < list.length; index += 1) {
     const token = list[index]!;
@@ -125,7 +159,7 @@ export function numbersIn(text: string): NumberFact[] {
         facts.push({ key: keyOf(Number(digits) * after.scale, after.unit), raw: token });
         index += after.count;
       } else if (glued) {
-        const unit: NumberUnit = glued === "%" ? "%" : glued === "x" ? "x" : "";
+        const unit: NumberUnit = glued === "%" ? "%" : glued === "x" || glued === "fold" ? "x" : "";
         facts.push({ key: keyOf(Number(digits) * (unit ? 1 : (SUFFIX_SCALES[glued] ?? 1)), unit), raw: token });
       } else if (/^e[+-]?\d+$/i.test(rest)) {
         facts.push({ key: keyOf(Number(`${digits}${rest}`), ""), raw: token }); // 1e6
@@ -149,14 +183,52 @@ export function numbersIn(text: string): NumberFact[] {
       continue;
     }
 
+    const next = (list[index + 1] ?? "").toLowerCase();
+    // "double-digit growth" states a quantity of its own (X3).
+    if (DIGIT_COUNTS.has(lower) && (next === "digit" || next === "digits")) {
+      facts.push({ key: `${lower}-digit`, raw: `${token}-${list[index + 1]}` });
+      index += 1;
+      continue;
+    }
+    const whole = WHOLE_WORD_QUANTITIES[lower];
+    if (whole !== undefined) {
+      if (!found[index]!.compound) facts.push({ key: whole, raw: token });
+      continue;
+    }
+
+    // "tenfold", "threefold": N×, as "10-fold" is (X3).
+    const fold = FOLD_WORD.exec(lower)?.[1];
+    if (fold !== undefined) {
+      const times = SMALL_NUMBER_WORDS[fold] ?? SCALE_WORDS[fold];
+      if (times !== undefined) facts.push({ key: keyOf(times, "x"), raw: token });
+      continue;
+    }
+
+    // "a third", "one quarter", "one-third" (X3). A "third-party" library, or a third party, is no fraction.
+    const denominator = FRACTION_WORDS[lower];
+    if (denominator !== undefined) {
+      const previous = (list[index - 1] ?? "").toLowerCase();
+      if ((previous === "a" || previous === "one") && next !== "party" && next !== "parties") {
+        facts.push({ key: keyOf(1 / denominator, "x"), raw: `${list[index - 1]} ${token}` });
+      }
+      continue;
+    }
+
     const small = SMALL_NUMBER_WORDS[lower];
     if (small !== undefined) {
       let value = small;
       let used = 0;
-      const units = SMALL_NUMBER_WORDS[(list[index + 1] ?? "").toLowerCase()];
+      const units = SMALL_NUMBER_WORDS[next];
       if (small >= 20 && small < 100 && small % 10 === 0 && units !== undefined && units < 10) {
         value += units; // "twenty five", "twenty-five"
         used = 1;
+      }
+      // "two thirds", "three quarters": a fraction (X3).
+      const over = used === 0 ? FRACTION_WORDS[next] : undefined;
+      if (over !== undefined && value > 0 && value < over) {
+        facts.push({ key: keyOf(value / over, "x"), raw: `${token} ${list[index + 1]}` });
+        index += 1;
+        continue;
       }
       const after = trailingUnit(list, index + 1 + used);
       facts.push({ key: keyOf(value * after.scale, after.unit), raw: token });
