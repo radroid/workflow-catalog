@@ -908,3 +908,79 @@ describe("revision 3, Y2: short abbreviations a claim may state, and a way out f
     expect(plain.refusals[0]!.message).toBe("Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out.");
   });
 });
+
+describe("revision 3, Y3: titles wherever they stand", () => {
+  // C9 is FERNWOOD_LABS, "Platform Engineer at Fernwood Labs, 2019–2021."; C10 is written in sentence case.
+  const harborStaff = confirmedClaim("C10", "title", "Staff engineer at Harbor, 2021–2023.");
+  const claims = [FERNWOOD_LABS, harborStaff];
+
+  it.each([
+    ["an opening title before an em dash", "Engineering manager — Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening title before “on”", "Engineering manager on the payments team at Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening title before “with”", "Engineering manager with Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening title before a bracket", "Security engineer (Fernwood Labs), 2019–2021 [C9]."],
+    ["a title after “and”", "Platform Engineer and team lead at Fernwood Labs, 2019–2021 [C9]."],
+    ["a title after “and”, with a modifier", "Platform Engineer and engineering manager at Fernwood Labs, 2019–2021 [C9]."],
+    ["“technical lead” after “and”", "Platform Engineer and technical lead at Fernwood Labs, 2019–2021 [C9]."],
+    ["a title after “then”, between commas", "Platform Engineer, then engineering manager, at Fernwood Labs, 2019–2021 [C9]."],
+    ["a title after “later”, at the end", "Platform Engineer at Fernwood Labs, 2019–2021, later platform architect [C9]."],
+    ["a title before “role”", "Took on the engineering manager role at Fernwood Labs, 2019–2021 [C9]."],
+    ["a title before “position”", "Took on the team lead position at Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening title before “in”", "Engineering manager in the Fernwood Labs payments group, 2019–2021 [C9]."],
+    ["an opening title before a colon", "Engineering manager: Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening title ending the sentence", "Engineering manager [C9]."],
+    ["an opening title before an unspaced em dash", "Engineering manager—Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening title before a spaced hyphen", "Engineering manager - Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening VP before an em dash", "VP engineering — Fernwood Labs, 2019–2021 [C9]."],
+  ])("refuses %s against a claim that says otherwise", (_name, statement) => {
+    expect(rulesWith(claims, statement)).toEqual(["title"]);
+  });
+
+  it("passes the claim's own title in each of those places", () => {
+    for (const statement of [
+      "Platform engineer — Fernwood Labs, 2019–2021 [C9].",
+      "Platform engineer on the payments team at Fernwood Labs, 2019–2021 [C9].",
+      "Platform engineer with Fernwood Labs, 2019–2021 [C9].",
+      "Platform engineer (Fernwood Labs), 2019–2021 [C9].",
+      "Platform engineer in the Fernwood Labs payments group, 2019–2021 [C9].",
+      "Platform engineer: Fernwood Labs, 2019–2021 [C9].",
+      "Platform engineer [C9].",
+      "Platform Engineer at Fernwood Labs, 2019–2021, and staff engineer at Harbor, 2021–2023 [C9][C10].",
+      "Platform Engineer at Fernwood Labs, 2019–2021, then staff engineer at Harbor, 2021–2023 [C9][C10].",
+      "Platform Engineer at Fernwood Labs, 2019–2021, later staff engineer at Harbor, 2021–2023 [C9][C10].",
+      "Took on the platform engineer role at Fernwood Labs, 2019–2021 [C9].",
+      "Staff Engineer — Harbor, 2021–2023 [C10].",
+    ]) {
+      expect(rulesWith(claims, statement), statement).toEqual([]);
+    }
+  });
+
+  it("passes “As Senior Platform Engineer at Northwind Labs, I led …”: a capitalized first word that can't be part of a title isn't one", () => {
+    expect(rules(resume("As Senior Platform Engineer at Northwind Labs, I led the payments infrastructure team [C8][C1]."))).toEqual([]);
+    expect(rules(resume("While Senior Platform Engineer at Northwind Labs, led the payments infrastructure team [C8][C1]."))).toEqual([]);
+    expect(titlesIn("As Senior Platform Engineer at Northwind Labs, I led the payments infrastructure team.")).toEqual(["senior platform engineer"]);
+    // …and one that can is read as before.
+    expect(rules(resume("As Staff Platform Engineer at Northwind Labs, I led the payments infrastructure team [C8][C1]."))).toEqual(["title"]);
+  });
+
+  it("leaves verbs alone after “and”, “then” and a first word: no title's follower comes after them", () => {
+    for (const text of [
+      "Lead the migration at Fernwood Labs, then head the team.",
+      "Led the payments infrastructure team, then redesigned the ledger service.",
+      "I design and lead the platform migrations at Northwind Labs.",
+      "I lead with the ledger service's reconciliation runs at Northwind Labs.",
+      "Shipped the on-call rotation tooling, and later its runbooks.",
+      "Developer tooling for three engineering teams: shipped the on-call rotation.",
+    ]) {
+      expect(titlesIn(text), text).toEqual([]);
+    }
+  });
+
+  it("reads each new form the way the rule compares it", () => {
+    expect(titlesIn("Security engineer (Fernwood Labs), 2019–2021.")).toEqual(["security engineer"]);
+    expect(titlesIn("Engineering manager — Fernwood Labs.")).toEqual(["engineering manager"]);
+    expect(titlesIn("Platform Engineer and team lead at Fernwood Labs.")).toEqual(["platform engineer", "team lead"]);
+    expect(titlesIn("Took on the engineering manager role at Fernwood Labs.")).toEqual(["engineering manager"]);
+    expect(titlesIn("Platform Engineer at Fernwood Labs, later platform architect.")).toEqual(["platform engineer", "platform architect"]);
+  });
+});

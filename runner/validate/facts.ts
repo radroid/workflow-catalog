@@ -496,10 +496,33 @@ const TITLE_ABBREVIATIONS = new Set(["sr", "jr", "snr", "jnr", "assoc", "asst", 
 
 /**
  * What follows a phrase that opens a sentence and ends in a role word, when that phrase is a title: "Director at
- * …", "Engineering manager at …", "CTO of …", "Engineer for …", or a comma. A verb-like role word followed by
- * anything else ("Lead the migration", "Head the team") is a verb, not a title.
+ * …", "Engineering manager at …", "CTO of …", "Engineer for …", and (revision 3, Y3) "Engineering manager on …",
+ * "… with …", "… in …"; or a comma, a colon, a dash, an opening bracket, or the end of the sentence
+ * (`titleFollows`). A verb-like role word followed by anything else ("Lead the migration", "Head the team") is a
+ * verb, not a title.
  */
-const AFTER_OPENING_TITLE = new Set(["at", "of", "for"]);
+const AFTER_OPENING_TITLE = new Set(["at", "of", "for", "on", "with", "in"]);
+
+/**
+ * Words right before a role phrase that make it a title when a title's follower comes after it (Y3): "Platform
+ * Engineer and team lead at …", "…, then engineering manager, at …", "…, later platform architect.". A verb after
+ * them stays a verb: "then head the team".
+ */
+const LINKING_CONTEXTS = new Set(["and", "then", "later"]);
+
+/** Words right after a role phrase that name it as a title (Y3): "took on the engineering manager role". */
+const TITLE_NOUNS = new Set(["role", "position", "title"]);
+
+/**
+ * Words that open a sentence without being part of a title, though capitalized there (Y3): "As Senior Platform
+ * Engineer at …" states "senior platform engineer", as "As a Senior Platform Engineer at …" does.
+ */
+const NOT_TITLE_OPENERS = new Set([
+  "a", "an", "the", "as", "at", "in", "on", "of", "for", "with", "by", "from", "to", "into", "over", "under", "after", "before", "during",
+  "since", "until", "till", "while", "when", "where", "whereas", "though", "although", "because", "if", "once", "then", "later", "now",
+  "today", "currently", "formerly", "previously", "also", "and", "or", "but", "so", "i", "we", "my", "our", "his", "her", "their", "its",
+  "this", "that", "these", "those", "there", "here", "became", "become", "becoming", "named", "appointed", "promoted", "elected",
+]);
 
 /**
  * Words after which a role phrase is a title: "as a platform engineer", "became head of platform", "promoted to
@@ -558,10 +581,14 @@ function inTitleContext(lower: readonly string[], at: number): boolean {
  *   Platform-Engineer"), with a lower-case role word right after it ("Senior
  *   Platform engineer").
  * - A phrase that opens the sentence and ends in a role word, before "at",
- *   "of", "for" or a comma ("Director at Fernwood Labs", "Engineering manager
- *   at …", "CTO, Harbor"). "Lead the migration" and "Head the team" are verbs.
+ *   "of", "for", "on", "with", "in", a comma, a colon, a dash, an opening
+ *   bracket or the sentence's end ("Director at Fernwood Labs", "Engineering
+ *   manager on the payments team", "Security engineer (Fernwood Labs)", "CTO,
+ *   Harbor"; revision 3, Y3). "Lead the migration" and "Head the team" are
+ *   verbs. A first word that can't be part of a title isn't one ("As Senior
+ *   Platform Engineer at …").
  * - An opening "VP", "Director" or "Head" with what it heads, in a word or
- *   two, before "at", "of", "for" or a comma ("VP engineering at Harbor").
+ *   two, before the same ("VP engineering at Harbor").
  * - A role phrase with a seniority word before its role word ("senior
  *   platform engineer", "a Senior platform engineer"), with "of X" after it,
  *   an article allowed ("director of the platform group", "engineer of the
@@ -569,6 +596,10 @@ function inTitleContext(lower: readonly string[], at: number): boolean {
  *   ("worked as a platform engineer"). The words before the role word never
  *   reach back past such a word: "and became engineering manager" states
  *   "engineering manager".
+ * - A role phrase right after "and", "then" or "later", before what ends an
+ *   opening title ("Platform Engineer and team lead at …", "…, later platform
+ *   architect."), or right before "role", "position" or "title" ("took on the
+ *   engineering manager role"; Y3).
  *
  * The validator compares titles whole: a sentence's title must equal one its
  * cited claims state, so "Platform Engineer" doesn't pass on a claim that
@@ -581,10 +612,26 @@ export function titlesIn(text: string): string[] {
 }
 
 function sentenceTitles(sentence: string): string[] {
-  const words = normalizeForChecks(sentence).replace(/[“”"()[\]]/g, " ").split(/\s+/).filter(Boolean);
+  const words = normalizeForChecks(sentence)
+    // An opening bracket or a dash ends what comes before it as a comma does (Y3): "Security engineer (Fernwood
+    // Labs)", "Engineering manager — Fernwood Labs". A dash inside a word or a range ("co-founder", "2019–2021") stays.
+    .replace(/\s*\(\s*/g, ", ")
+    .replace(/\s*—\s*/g, ", ")
+    .replace(/\s+[–-]\s+/g, ", ")
+    .replace(/^[\s,]+/, "")
+    .replace(/[“”"()[\]]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
   const lower = words.map((word) => bareWord(word).toLowerCase());
   const punctuated = words.map((word) => bareWord(word) !== word);
-  const capitalized = words.map((word) => isCapitalized(bareWord(word)));
+  // The first word is capitalized because it opens the sentence; a word that can't be part of a title isn't one (Y3).
+  const capitalized = words.map((word, at) => isCapitalized(bareWord(word)) && !(at === 0 && NOT_TITLE_OPENERS.has(lower[0]!)));
+  /** Whether what follows the word at `at` ends a title there (Y3): a title's follower word, a comma, colon or semicolon, or the sentence's end. */
+  const titleFollows = (at: number) => {
+    if (at === words.length - 1) return true;
+    if (punctuated[at]) return /[,;:]$/.test(words[at]!);
+    return AFTER_OPENING_TITLE.has(lower[at + 1] ?? "");
+  };
   const titles: string[] = [];
 
   // Capitalized phrases. One capitalized role word opening the sentence is left to the opening rule below.
@@ -633,7 +680,12 @@ function sentenceTitles(sentence: string): string[] {
   const plain = (at: number) => at >= 0 && at < words.length && !PHRASE_BREAKS.has(lower[at]!) && (at === 0 || !capitalized[at]);
   /** A word the phrase before a role word can take: plain, or a capitalized seniority word ("a Senior platform engineer"); never past punctuation or a context word. */
   const extendsLeft = (at: number) =>
-    at >= 0 && !punctuated[at] && !PHRASE_BREAKS.has(lower[at]!) && !TITLE_CONTEXTS.has(lower[at]!) && (at === 0 || !capitalized[at] || SENIORITY.has(lower[at]!));
+    at >= 0 &&
+    !punctuated[at] &&
+    !PHRASE_BREAKS.has(lower[at]!) &&
+    !TITLE_CONTEXTS.has(lower[at]!) &&
+    !LINKING_CONTEXTS.has(lower[at]!) &&
+    (at === 0 ? !NOT_TITLE_OPENERS.has(lower[0]!) : !capitalized[at] || SENIORITY.has(lower[at]!));
   for (let role = 0; role < words.length; role += 1) {
     if ((role > 0 && capitalized[role]) || !isRoleNoun(words[role]!)) continue;
     // Modifiers before the role word: up to three words.
@@ -658,18 +710,15 @@ function sentenceTitles(sentence: string): string[] {
       }
       if (at > first) end = at - 1;
     }
-    // An opening "VP engineering at …": what it heads, in a word or two, before "at", "of", "for" or a comma.
+    // An opening "VP engineering at …": what it heads, in a word or two, before what ends a title (`titleFollows`).
     if (role === 0 && end === role && DEPARTMENT_HEADS.has(lower[0]!) && !punctuated[0]) {
       let headed = -1;
       for (let at = 1; at <= 2 && plain(at); at += 1) {
-        if (punctuated[at]) {
-          if (words[at]!.endsWith(",")) headed = at;
-          break;
-        }
-        if (AFTER_OPENING_TITLE.has(lower[at + 1] ?? "")) {
+        if (titleFollows(at)) {
           headed = at;
           break;
         }
+        if (punctuated[at]) break;
       }
       if (headed > 0) {
         titles.push(titleKey(words.slice(0, headed + 1)));
@@ -677,10 +726,14 @@ function sentenceTitles(sentence: string): string[] {
       }
     }
     const context = inTitleContext(lower, left);
-    // A phrase that opens the sentence and ends in its role word, before "at", "of", "for" or a comma.
-    const opening = left === 0 && end === role && (punctuated[role] ? words[role]!.endsWith(",") : AFTER_OPENING_TITLE.has(lower[role + 1] ?? ""));
-    if (start === role && end === role && !context && !opening) continue;
-    titles.push(titleKey(words.slice(opening ? left : context && start === role ? left : start, end + 1)));
+    // A phrase that opens the sentence and ends in its role word, before what ends a title (Y3: whatever of those follows).
+    const opening = left === 0 && end === role && titleFollows(role);
+    // Right after "and", "then" or "later", before what ends a title (Y3): "and team lead at …", ", then engineering manager, at …".
+    const linked = left > 0 && LINKING_CONTEXTS.has(lower[left - 1]!) && !punctuated[left - 1] && titleFollows(end);
+    // Named as one (Y3): "the engineering manager role", "the team lead position".
+    const named = !punctuated[end] && TITLE_NOUNS.has(lower[end + 1] ?? "");
+    if (start === role && end === role && !context && !opening && !linked && !named) continue;
+    titles.push(titleKey(words.slice(opening || linked || named || (context && start === role) ? left : start, end + 1)));
   }
   return titles;
 }
