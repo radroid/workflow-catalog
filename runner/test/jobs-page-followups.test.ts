@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import type { JobStructured } from "@workflow-catalog/contracts";
 import type { Client, ClientSession, MessageResponse, MessageStreamEvent } from "eve/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -431,6 +431,32 @@ describe("Jobs page: a repeated identical refusal (item 1.7, the pattern shared 
 
     await until(() => page.status() === "Not saved.", "the line restored a frame later");
     expect(page.byId("last-action").querySelector(".tag")!.textContent).toBe("Refused");
+  });
+});
+
+describe("Jobs page: a Re-extract whose waiting-state write fails (item 2.1, K5 round-1 revision)", () => {
+  it("shows a plain message naming the file, not a generic refusal", async () => {
+    const bridge = await realBridge();
+    const page = await openJobsPage(bridge);
+    page.type("paste-url", "https://jobs.example/fernwood-staff-swe");
+    page.type("paste-text", "Staff Software Engineer at Fernwood.");
+    page.submit("paste-form");
+    await until(() => page.status().startsWith("Saved "), "the save outcome");
+    await until(() => page.rows() === 1, "the job to appear in the list");
+    const jobId = page.document.querySelector(".job-row")!.getAttribute("id")!.replace("job-row-", "");
+
+    // extraction-1.json already exists (the paste itself queued, and immediately settled, an extraction with no
+    // eve configured); replace it with a directory to reproduce the write failure a Re-extract hits.
+    const extractionStatePath = path.join(bridge.workspace.root, "jobs", jobId, "extraction-1.json");
+    await rm(extractionStatePath);
+    await mkdir(extractionStatePath);
+
+    await openFirstJob(page);
+    page.byId("detail-retry").click();
+    await until(() => page.status().startsWith("Couldn't extract"), "the refusal");
+    // K5: a plain message naming the exact file the server's 409 names, never a generic "the runner hit a problem".
+    expect(page.status()).toBe(`Couldn't extract: this revision's extraction state can't be saved (jobs/${jobId}/extraction-1.json).`);
+    expect(page.byId("last-action").className).toContain("refused");
   });
 });
 
