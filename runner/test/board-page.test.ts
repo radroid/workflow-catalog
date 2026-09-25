@@ -220,9 +220,9 @@ describe("moving a card on the board", () => {
     await store.update(lead.taskId, (current) => ({ ...current, stage: "interviewing" }));
     page.byId(`move-${lead.taskId}`).value = "applied";
     page.press(`move-submit-${lead.taskId}`);
-    await until(() => page.lines.length > 0, "the refusal");
+    await until(() => page.outcomes().length > 0, "the refusal");
     // A line that names a job fits 80 characters, so the name is cut at a word.
-    expect(page.lines).toEqual(["Not moved: “Platform Lead…” changed since; the board shows it as it is now."]);
+    expect(page.outcomes()).toEqual(["Not moved: “Platform Lead…” changed since; the board shows it as it is now."]);
     expect(page.byId("last-action").className).toContain("refused");
     expect((await store.get(lead.taskId))?.stage).toBe("interviewing");
     await until(() => column(page, "interviewing").includes(lead.taskId), "the card as it is now");

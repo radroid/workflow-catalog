@@ -129,6 +129,7 @@ describe("sessions: expired commands and other devices' tasks are refused (accep
   it("delivers a command only to its own device, and refuses another device's report on it or status for its task", async () => {
     const b = await bridge();
     const other = await pairDevice(b, OTHER_EXTENSION_ORIGIN);
+    b.clock.advance(MINUTE_MS); // the test clock stands still: without this, the two pairings tie
     const mine = await pairDevice(b); // paired last: sessions go to it
     const lead = await seedApplication(b.workspace, b.clock, platformLeadJob());
     await startSession(b, [lead.taskId]);

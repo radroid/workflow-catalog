@@ -55,8 +55,8 @@ describe("the Sessions page: a session and a flagged result", () => {
 
     const reviewId = flags[0]!.id.replace("flag-", "review-");
     page.press(reviewId);
-    await until(() => page.lines.length > 0, "the review");
-    expect(page.lines).toEqual(["Reviewed “Platform Engineer · Harbor”'s result."]);
+    await until(() => page.outcomes().length > 0, "the review");
+    expect(page.outcomes()).toEqual(["Reviewed “Platform Engineer · Harbor”'s result."]);
     expect(page.all(".review-item")).toHaveLength(0);
     expect(page.byId("review-none").textContent).toBe("Nothing needs your review.");
     // The item it acted on left the page, so focus went to the section's heading, never to the page.
@@ -86,8 +86,8 @@ describe("the Sessions page: the reconciliation view (file bridge)", () => {
     expect(page.visibleText()).not.toMatch(UUID);
 
     page.press("import-0");
-    await until(() => page.lines.length > 0, "the import");
-    expect(page.lines).toEqual(["Imported “export-1.json”: 1 imported."]);
+    await until(() => page.outcomes().length > 0, "the import");
+    expect(page.outcomes()).toEqual(["Imported “export-1.json”: 1 imported."]);
     expect((await store.get(lead.taskId))!.stage).toBe("applied");
     expect(page.byId("sync-line").textContent).toBe("Everything in inbox/ is imported: nothing waits to be synced.");
     expect(page.document.getElementById("import-0")).toBeNull();
@@ -99,7 +99,7 @@ describe("the Sessions page: the reconciliation view (file bridge)", () => {
     page.refreshNow();
     await page.quiet();
     expect((await store.get(lead.taskId))!.revision).toBe(revision);
-    expect(page.lines).toHaveLength(1);
+    expect(page.outcomes()).toHaveLength(1);
   });
 
   it("with nothing yet, says what each part is for", async () => {

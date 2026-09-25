@@ -20,6 +20,8 @@ const COOKIE = `${UI_COOKIE}=${UI_TOKEN}`;
 const PAGE_REQUEST_TIMEOUT_MS = 15_000;
 const realSetTimeout = globalThis.setTimeout;
 export const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+/** Busy words: shown while a request takes a moment (over 300 ms), never an outcome. */
+const BUSY = new Set(["Saving…", "Starting…", "Moving…"]);
 
 export interface DomNode {
   readonly id: string;
@@ -86,6 +88,8 @@ export interface Page {
   readonly window: DomWindow;
   /** Every text the live line's sentence showed, in order. */
   readonly lines: string[];
+  /** The live line's outcomes: every text it showed, less the busy words a slow request shows first. */
+  outcomes(): string[];
   /** Every text the whole live region showed (tag and sentence), in order, including empty states. */
   readonly regions: string[];
   readonly requests: string[];
@@ -177,6 +181,7 @@ export async function openUiPage(bridge: TestBridge, options: OpenOptions): Prom
     document,
     window,
     lines,
+    outcomes: () => lines.filter((line) => !BUSY.has(line)),
     regions,
     requests,
     byId,
