@@ -280,6 +280,42 @@ JSON API are protected as follows:
   - Pages also get a CSP that allows only the bridge's own scripts, styles
     and fonts, with `frame-ancestors 'none'`.
 
+The **Onboarding page** (`ui/onboarding.html`, P03) turns each F4 category's
+evidence into career-profile.md's claims, through `extract_claims`. P03.1
+adds four more ways to provide it, alongside paste and the existing
+`.txt`/`.md` upload:
+
+- **PDF and DOCX** (`lib/document-text.ts`), read locally with `unpdf` and
+  an in-memory zip read (a DOCX is itself a zip). An encrypted or malformed
+  file, or one over the 10 MB cap, answers with a plain refusal, never a
+  crash. The raw file lands dot-prefixed
+  (`sources/<category>/.raw-<name>.<ext>`), so `ProfileStore.sourceText`'s
+  existing dotfile skip keeps the raw bytes out of every extraction prompt;
+  only the extracted text is ever read by the model.
+- **Exported archives** (`lib/archive-text.ts`): a `.zip` (LinkedIn's
+  export, and similar) is read in memory with `fflate`, never unpacked to
+  disk — an entry's own path is never used as a file path. CSV, TXT, MD and
+  JSON entries become the source text; every other entry (an image, a
+  nested archive) is skipped before any ratio or size check runs, so it can
+  never trip the zip-bomb guard (entry count, per-entry and total
+  uncompressed size, and a compression-ratio cap, all read from the zip's
+  own header metadata before decompression).
+- **URL import**, fetched through P04's `lib/safe-fetch.ts` (https only,
+  the SSRF checks re-run on every redirect) and read with
+  `lib/readable-text.ts`, the same as a pasted job posting.
+- **GitHub** (`lib/github-source.ts`), read-only: `gh auth token` when the
+  CLI is signed in, else a pasted fine-grained PAT kept in the OS keychain
+  (service `workflow-catalog-runner`, name `github-token`, alongside the
+  provider keys — `forget` removes it the same way). The token itself never
+  reaches the workspace, the journal, a log line, the UI or any response;
+  the source text is the person's own repositories (name, description,
+  language, topics) with each README's start, up to a cap.
+
+Every one of these still lands in career-profile.md's claims only after an
+ok `extract_claims` turn (P03.2) — the one tool the extraction model can
+call, so hostile content in a document, archive, page or repository is data,
+never instructions (hard-problems.md #2).
+
 The **status page** (`ui/status.html`) shows:
 
 - the doctor checklist
@@ -690,6 +726,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 | Packet | Adds |
 |---|---|
 | P03 | `server/routes/onboarding.ts`, `store/profile.ts`, `ui/onboarding.html`, `ui/profile.html`, `agent/tools/extract_claims.ts`, `agent/tools/ask_follow_up.ts`, onboarding skills |
+| P03.1 | `lib/document-text.ts` (PDF/DOCX text, `unpdf` + an in-memory zip read), `lib/archive-text.ts` (in-memory zip-bomb-guarded text for exported archives), `lib/github-source.ts` (the `gh auth token`/keychain-PAT source), and the matching routes in `server/routes/onboarding.ts` and modes in `ui/onboarding.html`/`assets/onboarding.js` |
 | P04 | `server/routes/captures.ts` (the `job_capture` handler, plus the paste/url-fetch/list/detail/re-extract routes), `store/jobs.ts`, `lib/safe-fetch.ts`, `lib/readable-text.ts`, `agent/tools/extract_job.ts` (IDs only: jobId, revision, structured fields — never a URL or raw text; it checks and returns the fields, and the route saves them after an ok turn), `ui/jobs.html` |
 | P05 | `server/routes/applications.ts` (list, detail, prepare, answer a gap question, the documents' header, downloads; queues the preparation turn through `runTurn` inside `withRun`), `store/applications.ts`, `agent/tools/prepare_application.ts` with `agent/lib/prepare-*.ts` (IDs, requirement accounts and the cited draft only — never a claim's id or text; it checks and returns, and the route saves after an ok turn and a second check), `validate/` (the deterministic validator), `export/` (Markdown, DOCX, PDF with its embedded Noto Sans, the diff, the download names), `ui/application.html`, the five preparation skills and the resume and cover-letter templates |
 | P06 | `server/routes/applications.ts`'s board (`GET /board`) and stage move (`POST /:taskId/stage`, at the revision the board showed), `server/routes/sessions.ts` (the `application_status_changed` handler; start a session, the Sessions view, write to the outbox, import from `inbox/`, mark a flag reviewed), `server/routes/commands.ts` (the `browser_command_result` handler), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts` (task IDs only; each resolves to the job URL the runner stored). Only the person's explicit Applied, or a board move, changes a stage; a tab report never does. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |

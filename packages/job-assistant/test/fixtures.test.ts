@@ -28,7 +28,14 @@ function readFixture(file: string): unknown {
 describe("fixtures/index.json manifest", () => {
   it("lists every fixture file present in fixtures/, and nothing extra", () => {
     const manifest = readManifest();
-    const actualFiles = readdirSync(fixturesDir).filter((f) => f !== "index.json");
+    // P03.1: readdirSync lists subdirectories too, e.g. fixtures/onboarding/
+    // (the PDF, DOCX and ZIP fixtures for the document/archive extractors).
+    // Those are binary and don't fit this manifest's raw-text/schema model,
+    // so only top-level files are checked against it; the subdirectory
+    // itself needs no manifest entry.
+    const actualFiles = readdirSync(fixturesDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name !== "index.json")
+      .map((entry) => entry.name);
     expect(new Set(Object.keys(manifest))).toEqual(new Set(actualFiles));
   });
 

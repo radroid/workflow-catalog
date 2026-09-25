@@ -20,7 +20,7 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 - [x] P2.E — P07.B Extension: pairing and job_capture against the bridge — spec P07 and P04; blocked by P1.D, P2.C. Done iter 005, PR #12 (squash e01017c).
 - [x] P2.F — P09.1 Catalog follow-ups — install commands synced to the runner's whole-repo clone path with a drift test, refusal-nonce test, stop reading at the checksum cap, UI notes; spec P09.1-catalog-followups.md; blocked by P1.D, P2.D. Done iter 004, PR #10 (squash 61f0e2d).
 - [x] P2.H — P03.2 Onboarding and model-turn follow-ups — one turn classifier (P03's extraction and P02's checkModel onto P08-A's runTurn), P03 round-4 nits and polish; spec P03.2-onboarding-and-turn-followups.md; blocked by P2.B (P04 adds turn events). Runs before P2.G (shared files). Done iter 007, PR #17 (squash 47cca70).
-- [ ] P2.G — P03.1 Onboarding sources: PDF/DOCX, exported archives, URL import, GitHub token, plus the happy-dom devDependency — deferred from P03 at review (iter 004); spec P03.1-onboarding-sources.md; blocked by P2.A, P2.B, P2.H (shared files) and P3.A (package.json).
+- [x] P2.G — P03.1 Onboarding sources: PDF/DOCX, exported archives, URL import, GitHub token, plus the happy-dom devDependency — deferred from P03 at review (iter 004); spec P03.1-onboarding-sources.md; blocked by P2.A, P2.B, P2.H (shared files) and P3.A (package.json). Done 2026-09-25 (manual session), PR #23 (squash 903eed3).
 
 ## Phase 3 — Apply
 
