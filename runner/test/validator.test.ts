@@ -984,3 +984,50 @@ describe("revision 3, Y3: titles wherever they stand", () => {
     expect(titlesIn("Platform Engineer at Fernwood Labs, later platform architect.")).toEqual(["platform engineer", "platform architect"]);
   });
 });
+
+describe("revision 3, Y4: more quantities in words", () => {
+  const led = "Led the payments infrastructure team at Northwind Labs";
+  const shipped = "Shipped the on-call rotation tooling used by three engineering teams";
+  it.each([
+    ["“an order of magnitude”", `${led}, cutting ledger latency by an order of magnitude [C1].`],
+    ["“orders of magnitude”", `${led}, cutting ledger latency by orders of magnitude [C1].`],
+    ["“single-digit”", `${led}, bringing ledger latency to single-digit milliseconds [C1].`],
+    ["“quintupled”", `${led}, which quintupled billing throughput [C1].`],
+    ["“sextupled”", `${led}, which sextupled billing throughput [C1].`],
+    ["quintuple as a whole word", `${led} and helped quintuple billing throughput [C1].`],
+    ["sextuple as a whole word", `${led} and helped sextuple billing throughput [C1].`],
+    ["“a couple of”", `${shipped} and a couple of partner teams [C3].`],
+    ["“scores of”", `${shipped} and scores of engineers [C3].`],
+    ["“dozens”", `${shipped} and dozens of engineers [C3].`],
+    ["“hundreds”", `${shipped} and hundreds of engineers [C3].`],
+  ])("refuses %s", (_name, statement) => {
+    expect(rules(resume(statement))).toEqual(["number"]);
+  });
+
+  it("reads each as the quantity it states", () => {
+    expect(numbersIn("an order of magnitude, orders of magnitude, single-digit, quintupled, sextuple").map((fact) => fact.key)).toEqual(["10x", "10x", "single-digit", "5x", "6x"]);
+    expect(numbersIn("a couple of teams, scores of engineers, a dozen, dozens, millions").map((fact) => fact.key)).toEqual(["a couple", "scores of", "12", "dozens", "millions"]);
+    expect(numbersIn("by an order of magnitude")[0]!.key).toBe(numbersIn("tenfold")[0]!.key);
+    // Not a quantity: an order of service, a couple in a name, test scores.
+    expect(numbersIn("in order of priority, the couple's scores")).toEqual([]);
+  });
+
+  it("passes a claim's own quantity word cited verbatim, and the same quantity in other words", () => {
+    const faster = confirmedClaim("C9", "metric", "Cut ledger latency by an order of magnitude at Northwind Labs.");
+    const partners = confirmedClaim("C10", "fact", "Shipped the on-call rotation tooling to a couple of partner teams.");
+    const mentees = confirmedClaim("C11", "fact", "Mentored scores of engineers at Northwind Labs.");
+    const latency = confirmedClaim("C12", "metric", "Brought ledger latency to single-digit milliseconds at Northwind Labs.");
+    const growth = confirmedClaim("C13", "metric", "Quintupled billing throughput at Northwind Labs.");
+    const claims = [faster, partners, mentees, latency, growth];
+    expect(rulesWith(claims, "Cut ledger latency by an order of magnitude at Northwind Labs [C9].")).toEqual([]);
+    expect(rulesWith(claims, "Cut ledger latency tenfold at Northwind Labs [C9].")).toEqual([]);
+    expect(rulesWith(claims, "Shipped the on-call rotation tooling to a couple of partner teams [C10].")).toEqual([]);
+    expect(rulesWith(claims, "Mentored scores of engineers at Northwind Labs [C11].")).toEqual([]);
+    expect(rulesWith(claims, "Brought ledger latency to single-digit milliseconds at Northwind Labs [C12].")).toEqual([]);
+    expect(rulesWith(claims, "Quintupled billing throughput at Northwind Labs [C13].")).toEqual([]);
+    expect(rulesWith(claims, "Helped quintuple billing throughput at Northwind Labs [C13].")).toEqual([]);
+    // …and never another one: dozens are not scores, double digits are not single ones.
+    expect(rulesWith(claims, "Mentored dozens of engineers at Northwind Labs [C11].")).toEqual(["number"]);
+    expect(rulesWith(claims, "Brought ledger latency to double-digit milliseconds at Northwind Labs [C12].")).toEqual(["number"]);
+  });
+});

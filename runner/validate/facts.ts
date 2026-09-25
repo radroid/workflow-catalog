@@ -40,17 +40,19 @@ const SUFFIX_SCALES: Readonly<Record<string, number>> = { k: 1_000, m: 1_000_000
 const QUANTITY_WORDS: Readonly<Record<string, string>> = {
   dozens: "dozens", hundreds: "hundreds", thousands: "thousands", millions: "millions", billions: "billions",
   doubled: "2x", doubling: "2x", twice: "2x", tripled: "3x", tripling: "3x", quadrupled: "4x", quadrupling: "4x", halved: "0.5x", halving: "0.5x",
+  // Revision 3, Y4.
+  quintupled: "5x", quintupling: "5x", sextupled: "6x", sextupling: "6x",
 };
 
 /**
  * Multiplier words read as whole words only (revision 2, X3): "helped double billing" is 2×, as "doubled" is, and
  * "cut it in half" is what "halved" is. Inside a compound they name something else: a "double-entry" ledger, a
- * "half-duplex" link.
+ * "half-duplex" link. Quintuple and sextuple too (revision 3, Y4).
  */
-const WHOLE_WORD_QUANTITIES: Readonly<Record<string, string>> = { double: "2x", triple: "3x", quadruple: "4x", half: "0.5x" };
+const WHOLE_WORD_QUANTITIES: Readonly<Record<string, string>> = { double: "2x", triple: "3x", quadruple: "4x", quintuple: "5x", sextuple: "6x", half: "0.5x" };
 
-/** "double-digit" and "triple-digit" growth: a quantity of their own, which a cited claim must state too (X3). */
-const DIGIT_COUNTS: ReadonlySet<string> = new Set(["double", "triple"]);
+/** "single-digit", "double-digit" and "triple-digit": a quantity of their own, which a cited claim must state too (X3; "single": Y4). */
+const DIGIT_COUNTS: ReadonlySet<string> = new Set(["single", "double", "triple"]);
 
 /** Fractions read after "a" or "one" ("a third", "one quarter") or a number word ("two thirds"), by denominator (X3). */
 const FRACTION_WORDS: Readonly<Record<string, number>> = { third: 3, thirds: 3, quarter: 4, quarters: 4 };
@@ -130,9 +132,12 @@ function trailingUnit(list: readonly string[], at: number): { readonly scale: nu
  * `5GB`, `3rd`: the quantity is the number, as it is for `200 ms`), number
  * words (`zero`, `three`, `twenty-five`, `a dozen`), scaled and written-out
  * forms (`two hundred`, `3 million`, `40 percent`), multiplier words
- * (`doubled`, `tenfold`, and whole-word `double`, `triple`, `quadruple`,
- * `half`), `double-digit`, and fractions (`a third`, `a quarter`, `two
- * thirds`). Digits of any script count (`٥٠٠`). A name that starts with a
+ * (`doubled`, `tenfold`, `quintupled`, and whole-word `double`, `triple`,
+ * `quadruple`, `quintuple`, `sextuple`, `half`), `single-digit` and
+ * `double-digit`, `an order of magnitude` (10×), fractions (`a third`, `a
+ * quarter`, `two thirds`), and the vague counts `a couple of`, `scores of`,
+ * `dozens`, `hundreds` and the like, each its own key (revision 3, Y4).
+ * Digits of any script count (`٥٠٠`). A name that starts with a
  * letter (`EC2`, `K8s`, `P99`, `Q3`, `B2B`) is not a quantity, and years
  * (`2019`, and `2019Q3`'s) are left to the date rule. "One" is not counted:
  * as a pronoun it is far too common to be a claim. Nor are ordinals such as
@@ -184,9 +189,25 @@ export function numbersIn(text: string): NumberFact[] {
     }
 
     const next = (list[index + 1] ?? "").toLowerCase();
-    // "double-digit growth" states a quantity of its own (X3).
+    // "double-digit growth" states a quantity of its own (X3), as "single-digit milliseconds" does (Y4).
     if (DIGIT_COUNTS.has(lower) && (next === "digit" || next === "digits")) {
       facts.push({ key: `${lower}-digit`, raw: `${token}-${list[index + 1]}` });
+      index += 1;
+      continue;
+    }
+    // "an order of magnitude", "orders of magnitude": ten times (Y4).
+    if ((lower === "order" || lower === "orders") && next === "of" && (list[index + 2] ?? "").toLowerCase() === "magnitude") {
+      facts.push({ key: keyOf(10, "x"), raw: `${token} of magnitude` });
+      index += 2;
+      continue;
+    }
+    // "a couple of" and "scores of": vague, so a cited claim must use the same words (Y4).
+    if (lower === "couple" && (list[index - 1] ?? "").toLowerCase() === "a") {
+      facts.push({ key: "a couple", raw: `a couple${next === "of" ? " of" : ""}` });
+      continue;
+    }
+    if (lower === "scores" && next === "of") {
+      facts.push({ key: "scores of", raw: `${token} of` });
       index += 1;
       continue;
     }
