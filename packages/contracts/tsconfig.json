@@ -2,9 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "src",
     "outDir": "dist",
     "types": ["node"]
   },
-  "include": ["src"]
+  // "migrations" (P10-B): versioned workspace-migration scripts, consumed by
+  // the runner through a computed `import()` (like server/route-modules.ts
+  // loads route files) that tsc can never follow statically — this is the
+  // only tsc invocation that ever typechecks them. tsconfig.build.json
+  // narrows back to "src" so dist/ (the package's public build output) is
+  // unaffected; "rootDir" is dropped here (typecheck only emits nothing) and
+  // set explicitly there instead, where it still governs dist/'s layout.
+  "include": ["src", "migrations"]
 }
