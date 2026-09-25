@@ -228,9 +228,13 @@ export class JobsStore {
     let numbers: number[];
     try {
       numbers = await this.revisions(jobId);
-    } catch {
-      // P06.1 item 2.2: the directory itself couldn't be listed (e.g. chmod 000), not merely a file inside it.
-      // Reported like a damaged file (T6), never dropped from the list silently.
+    } catch (error) {
+      // P06.1 K7 (round-1 revision): a uuid-named regular file directly under jobs/ passes isJobId's format check,
+      // so listJobs() tries to list it as a directory and readdir answers ENOTDIR, never ENOENT (workspace.list()
+      // only swallows ENOENT). That is "not a job" (the pre-2.2, 404-like behaviour), not "a directory that can't
+      // be read" -- only a real permission failure (EACCES, from e.g. chmod 000) or another unreadable-directory
+      // cause earns item 2.2's directoryUnreadable shape.
+      if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
       return { jobId, revisionCount: 0, latestRevisionNumber: 0, unreadable: [], directoryUnreadable: jobDirectoryPath(jobId) };
     }
     const latestRevisionNumber = numbers.at(-1);
@@ -279,7 +283,10 @@ export class JobsStore {
     let revisionNumbers: number[];
     try {
       revisionNumbers = await this.revisions(jobId);
-    } catch {
+    } catch (error) {
+      // P06.1 K7 (round-1 revision): same ENOTDIR-vs-everything-else split as #summarise above, so a stray
+      // uuid-named file's detail route 404s ("no such job") instead of claiming an unreadable directory.
+      if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
       // P06.1 item 2.2: report a directory that can't even be listed like a damaged file, not "no such job".
       return { jobId, revisionNumbers: [], revisions: [], unreadable: [], directoryUnreadable: jobDirectoryPath(jobId) };
     }

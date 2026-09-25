@@ -60,8 +60,8 @@ interface DetailBody {
   readonly directoryUnreadable?: string;
 }
 
-describe("captures.ts: a Re-extract whose waiting-state write fails (item 2.1)", () => {
-  it("refuses plainly, as a typed JSON error, never an unhandled 500, when extraction-<rev>.json exists as a directory", async () => {
+describe("captures.ts: a Re-extract whose waiting-state write fails (item 2.1, refined by K5)", () => {
+  it("refuses plainly with a 409 naming the file, and logs the cause with its path, when extraction-<rev>.json exists as a directory", async () => {
     const bridge = await bridgeWith();
     const pasted = await postCaptures(bridge, "/paste", { url: "https://jobs.example/fernwood-staff-swe", text: "Staff Software Engineer at Fernwood." });
     expect(pasted.status).toBe(200);
@@ -72,13 +72,24 @@ describe("captures.ts: a Re-extract whose waiting-state write fails (item 2.1)",
     const extractionStatePath = path.join(bridge.workspace.root, "jobs", job.jobId, "extraction-1.json");
     await rm(extractionStatePath);
     await mkdir(extractionStatePath);
+    expect(bridge.logs).toHaveLength(0); // nothing logged yet
     const response = await bridge.request(`/api/captures/${job.jobId}/1/extract`, { method: "POST", headers: SAME_ORIGIN });
 
     expect(response.headers.get("content-type")).toContain("application/json");
-    expect(response.status).toBe(500);
+    // K5 (round-1 revision): a 409 naming the file, exactly as the snapshot_unreadable branch above does for a
+    // damaged file (T6) -- never a bare 500 that names nothing.
+    expect(response.status).toBe(409);
     const body = (await response.json()) as { ok: boolean; error?: { code: string; message: string } };
-    expect(body).toEqual({ ok: false, error: { code: "extraction_not_queued", message: "Couldn't start extraction: the runner hit a problem saving its state." } });
+    expect(body).toEqual({
+      ok: false,
+      error: { code: "extraction_state_unwritable", message: `Couldn't start extraction: this revision's extraction state can't be saved: jobs/${job.jobId}/extraction-1.json.` },
+    });
     expect(body.error?.message).not.toMatch(/EISDIR|ENOTDIR|Error:|at Object/); // never the raw fs/stack text
+
+    // K5: the cause is logged with its path, so the folder is diagnosable -- previously bridge.logs gained nothing.
+    expect(bridge.logs).toHaveLength(1);
+    expect(bridge.logs[0]).toContain(`jobs/${job.jobId}/extraction-1.json`);
+    expect(bridge.logs[0]).toMatch(/EISDIR|is a directory/i);
   });
 });
 

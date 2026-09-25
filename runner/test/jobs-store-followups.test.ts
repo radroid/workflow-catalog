@@ -1,4 +1,4 @@
-import { chmod } from "node:fs/promises";
+import { chmod, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { JobsStore } from "../store/jobs.ts";
 import { newWorkspace } from "./helpers.ts";
@@ -62,5 +62,25 @@ describe("JobsStore: a job directory that can't be listed", () => {
     const [summary] = await store.listJobs();
     expect(summary?.directoryUnreadable).toBeUndefined();
     expect((await store.readJob(healthy.jobId))?.directoryUnreadable).toBeUndefined();
+  });
+
+  // P06.1 K7 (round-1 revision): a uuid-named *regular file* directly under jobs/ passes isJobId's format check
+  // (it never looks at the filesystem), so listJobs() tries to list it as a directory and readdir throws ENOTDIR,
+  // not ENOENT -- workspace.list() only swallows ENOENT. Before this revision, #summarise()/readJob()'s catch (item
+  // 2.2, meant for a real permission failure) treated *any* thrown error the same way, so this stray file was
+  // reported as "a folder that can't be read" -- listed, with a 200 detail -- instead of being skipped as it was
+  // before item 2.2 existed (not listed at all, detail 404 "No such job").
+  it("skips a uuid-named regular file under jobs/ as if it were never there, never as an unreadable folder", async () => {
+    const workspace = await newWorkspace();
+    const store = new JobsStore(workspace);
+    const healthy = await store.captureJob({ url: HARBOR_URL, text: "Platform Engineer at Harbor.", extractorVersion: "t", capturedAt: "2026-09-22T09:00:00.000Z" });
+    const strayId = "11111111-1111-4111-8111-111111111111"; // a valid uuid shape, so isJobId accepts it
+    await writeFile(workspace.resolve("jobs", strayId), "not a directory at all");
+
+    const summaries = await store.listJobs();
+    expect(summaries.map((entry) => entry.jobId)).toEqual([healthy.jobId]); // the stray file never joins the list
+    expect(summaries.some((entry) => entry.directoryUnreadable)).toBe(false); // and is never misreported as one
+
+    expect(await store.readJob(strayId)).toBeUndefined(); // 404 "No such job", not a directoryUnreadable shape
   });
 });

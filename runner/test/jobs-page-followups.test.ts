@@ -256,6 +256,44 @@ describe("Jobs page: the last file becomes unreadable while focus is on Re-extra
   });
 });
 
+describe("Jobs page: the same focus-redirect, for focus elsewhere in the detail (item 1.1, K4 round-1 revision)", () => {
+  it("focus on the address link moves to the heading before the stale sections are dropped", async () => {
+    const bridge = await realBridge();
+    const store = new JobsStore(bridge.workspace);
+    const job = await store.captureJob({ url: "https://jobs.example/ledgerkit-backend-engineer", text: "Backend Engineer at Ledgerkit.", extractorVersion: "t", capturedAt: CAPTURED_AT });
+    const page = await openJobsPage(bridge);
+    await openFirstJob(page);
+    const link = page.document.querySelector("#detail-address a")!;
+    link.focus();
+    expect(page.document.activeElement).toBe(link);
+
+    await writeFile(path.join(bridge.workspace.root, "jobs", job.jobId, "snapshot-1.json"), "{ not valid json");
+    page.refreshNow();
+    await until(() => page.document.getElementById("detail-unreadable") !== null, "the unreadable section to appear");
+
+    expect(page.document.activeElement?.id).toBe("detail-title"); // K4: was previously only checked for #detail-structured
+    expect(page.document.getElementById("detail-address")).toBeNull();
+  });
+
+  it("focus on the 'Full posting text' summary moves to the heading too, and a chmod'd directory does the same", async () => {
+    const bridge = await realBridge();
+    const store = new JobsStore(bridge.workspace);
+    const job = await store.captureJob({ url: "https://jobs.example/ledgerkit-backend-engineer", text: "Backend Engineer at Ledgerkit.", extractorVersion: "t", capturedAt: CAPTURED_AT });
+    const page = await openJobsPage(bridge);
+    await openFirstJob(page);
+    const summary = page.document.querySelector(".detail-raw summary")!;
+    summary.focus();
+    expect(page.document.activeElement).toBe(summary);
+
+    await writeFile(path.join(bridge.workspace.root, "jobs", job.jobId, "snapshot-1.json"), "{ not valid json");
+    page.refreshNow();
+    await until(() => page.document.getElementById("detail-unreadable") !== null, "the unreadable section to appear");
+
+    expect(page.document.activeElement?.id).toBe("detail-title");
+    expect(page.document.querySelector(".detail-raw")).toBeNull();
+  });
+});
+
 describe("Jobs page: the name cap cuts at a word (item 1.3)", () => {
   it("never cuts mid-word, however long the first line of the posting is", async () => {
     const bridge = await realBridge();
@@ -278,6 +316,35 @@ describe("Jobs page: the name cap cuts at a word (item 1.3)", () => {
   });
 });
 
+describe("Jobs page: the name cap doesn't over-cut when the 80th character already ends a word (item 1.3, K3 round-1 revision)", () => {
+  it("keeps the whole word that already fits exactly at the cut point, instead of dropping it to find an earlier space", async () => {
+    const bridge = await realBridge();
+    const page = await openJobsPage(bridge);
+    // Built so index 79 (the 80th character) is itself a space: the first 79 characters are already whole words
+    // that fit exactly and must survive in full -- the pre-fix code searched for the *last* space within its own
+    // 79-character slice regardless, over-cutting "...of Platformxx" down to "...of" for no reason.
+    const words = ["Senior", "Staff", "Principal", "Distinguished", "Software", "Engineering", "Manager", "of", "Platform"];
+    let base = "";
+    for (const word of words) {
+      const next = base ? `${base} ${word}` : word;
+      if (next.length > 79) break;
+      base = next;
+    }
+    while (base.length < 79) base += "x"; // pads the last word itself -- never introduces a new space
+    expect(base.length).toBe(79); // the fixture is built correctly before it's used to test anything
+    const longTitle = `${base} Labs today, a truly excellent place to work indeed.`;
+    expect(longTitle[79]).toBe(" "); // and it actually lands the boundary this test is about
+
+    page.type("paste-url", "https://jobs.example/northwind-labs/word-boundary");
+    page.type("paste-text", `${longTitle}\nFictional posting.`);
+    page.submit("paste-form");
+    await until(() => page.status().startsWith("Saved "), "the save outcome");
+    await until(() => page.rows() === 1, "the job to appear in the list");
+    const name = page.document.querySelector(".job-open")!.textContent!;
+    expect(name).toBe(`${base}…`); // the whole 79-character prefix survives -- nothing dropped to find an earlier space
+  });
+});
+
 describe("Jobs page: one name for list and detail, and the toggle names its own revision (item 1.4)", () => {
   it("when the true latest revision is damaged, the detail uses the list's own url-path name, and the toggle says which revision it shows", async () => {
     const bridge = await realBridge();
@@ -294,6 +361,38 @@ describe("Jobs page: one name for list and detail, and the toggle names its own 
     expect(page.byId("detail-title").textContent).toBe(listName); // item 1.4: the same name, not revision 1's own title
     const summary = page.document.querySelector(".detail-raw summary")!;
     expect(summary.textContent).toBe("Full posting text (revision 1)"); // names the revision actually shown
+  });
+});
+
+describe("Jobs page: the 'Last action' line uses the same name as the row and heading, for a job whose latest file is damaged (item 1.4, K6 round-1 revision)", () => {
+  it("retrying the older readable revision announces the row/heading's name, not that revision's own content-derived name", async () => {
+    const held = gate();
+    const { bridge, store } = await bridgeExtracting(() => ({ title: "Data Platform Engineer", company: "Fernwood" }), held.opened);
+    const first = await store.captureJob({ url: "https://jobs.example/fernwood/data-engineer", text: "Data Engineer at Fernwood.", extractorVersion: "t", capturedAt: CAPTURED_AT });
+    await store.captureJob({ url: "https://jobs.example/fernwood/data-engineer", text: "Data Engineer at Fernwood. Updated.", extractorVersion: "t", capturedAt: "2026-09-23T09:00:00.000Z" });
+    await writeFile(path.join(bridge.workspace.root, "jobs", first.jobId, "snapshot-2.json"), "{ not valid json");
+
+    const page = await openJobsPage(bridge);
+    await until(() => page.rows() === 1, "the job row");
+    const rowName = page.document.querySelector(".job-open")!.textContent!;
+    expect(rowName).toBe("fernwood/data-engineer"); // T6's url-path fallback: the true latest (revision 2) is damaged
+
+    await openFirstJob(page);
+    expect(page.byId("detail-title").textContent).toBe(rowName);
+
+    page.byId("detail-retry").click(); // retries revision 1, the newest readable one
+    await until(() => page.status().startsWith("Extracting "), "the extraction to start");
+    // K6: named the same way the row/heading are, not "Data Engineer at Fernwood." -- revision 1's own first-line
+    // text, which is what a plain jobDisplayName(result.job) would have shown instead.
+    expect(page.status()).toBe(`Extracting “${rowName}”…`);
+
+    held.open();
+    await waitForExtractionQueue(bridge.workspace.root);
+    page.refreshNow();
+    await until(() => page.lines.some((line) => line.startsWith("Extracted ")), "the outcome", 6_000);
+    const outcome = page.lines.filter((line) => line.startsWith("Extracted "));
+    expect(outcome).toHaveLength(1);
+    expect(outcome[0]).toBe(`Extracted “${rowName}”.`); // the settle path names it the same way too
   });
 });
 
@@ -372,8 +471,46 @@ describe("Jobs page: two extractions settling in the same refresh (item 1.2)", (
     const combined = page.lines.filter((line) => line.startsWith("Extracted "));
     expect(combined).toHaveLength(1); // one message, not the first silently replaced by the second
     // Both names fit evenly shortened to NAMED_LINE_MAX (T18); this is short enough that only the second is cut.
-    expect(combined[0]).toBe("Extracted “Support Engineer · Harbor” and “Staff Platform Engineer ·…”.");
+    // K3 (round-1 revision): the cut never leaves a dangling "·" in front of the ellipsis -- "Staff Platform
+    // Engineer · Northwind Labs" loses its whole "· Northwind Labs" clause at this room, not just "Northwind Labs".
+    expect(combined[0]).toBe("Extracted “Support Engineer · Harbor” and “Staff Platform Engineer…”.");
     expect(combined[0]!.length).toBeLessThanOrEqual(80);
+  });
+});
+
+describe("Jobs page: two short-named extractions settling together (item 1.2, K3 round-1 revision)", () => {
+  it("names each job once, even when every name is under 16 characters", async () => {
+    // K3 (reviewer issue 3): settledMessage's room-fitting loop used to start at Math.max(...names), which can
+    // itself be under 16 when every name is short -- skipping the loop body entirely and falling straight to the
+    // nameless counted form ("2 jobs: 2 were extracted."), instead of naming both jobs as it does for longer ones.
+    const held = gate();
+    const fields: Record<string, JobStructured> = {};
+    const { bridge, store } = await bridgeExtracting((jobId) => fields[jobId] ?? {}, held.opened);
+    const page = await openJobsPage(bridge);
+
+    page.type("paste-url", "https://jobs.example/quill/qa");
+    page.type("paste-text", "QA at Quill.");
+    page.submit("paste-form");
+    await until(() => page.status().includes("QA at Quill"), "the first save");
+    const quillId = (await store.findJobIdByUrl("https://jobs.example/quill/qa"))!;
+    fields[quillId] = { title: "QA", company: "Quill" }; // "QA · Quill", 10 characters
+
+    page.type("paste-url", "https://jobs.example/harbor/chef");
+    page.type("paste-text", "Chef at Harbor.");
+    page.submit("paste-form");
+    await until(() => page.status().includes("Chef at Harbor"), "the second save");
+    const harborId = (await store.findJobIdByUrl("https://jobs.example/harbor/chef"))!;
+    fields[harborId] = { title: "Chef", company: "Harbor" }; // "Chef · Harbor", 13 characters
+
+    page.setVisibility("hidden");
+    held.open();
+    await waitForExtractionQueue(bridge.workspace.root);
+    page.refreshNow();
+    await until(() => page.lines.some((line) => line.startsWith("Extracted ")), "the combined outcome", 6_000);
+
+    const combined = page.lines.filter((line) => line.startsWith("Extracted "));
+    expect(combined).toHaveLength(1);
+    expect(combined[0]).toBe("Extracted “QA · Quill” and “Chef · Harbor”."); // both named, never "2 jobs: 2 were extracted."
   });
 });
 
@@ -398,12 +535,63 @@ describe("Jobs page: the runner going down while an extraction is watched (item 
     }
     expect(page.lines.filter((line) => line === "Can't reach the runner. Is it still running?")).toHaveLength(1); // announced once, not on every failed poll
 
+    // K2 (round-1 revision): the runner comes back while the watched extraction is STILL running (`held` hasn't
+    // been opened yet) -- the notice must actually clear, and restore the "Extracting …" line, not sit stuck or
+    // jump straight to an outcome that hasn't happened. A no-op clearUnreachable would leave the old notice text
+    // on screen forever here, since nothing else calls lastAction until the extraction actually settles.
+    down = false;
+    page.refreshNow();
+    await until(() => page.status() !== "Can't reach the runner. Is it still running?", "the notice to clear");
+    expect(page.status()).toMatch(/^Extracting “.*”…$/); // restored, named, not left blank or on the bare placeholder
+    expect(page.byId("last-action").className).toContain("working");
+
+    // A second outage announces again -- proof the first clear genuinely reset the shown/cleared state, not just a
+    // one-off coincidence (a permanently-latched "shown" flag would silently swallow this one).
+    down = true;
+    page.refreshNow();
+    await until(() => page.lines.filter((line) => line === "Can't reach the runner. Is it still running?").length === 2, "a second notice");
+
     down = false;
     held.open();
     await waitForExtractionQueue(bridge.workspace.root);
     page.refreshNow();
     await until(() => page.lines.some((line) => line.startsWith("Extracted “")), "the outcome once the runner is reachable again", 6_000);
     expect(page.lines.filter((line) => line.startsWith("Extracted “"))).toHaveLength(1);
+    expect(page.lines.filter((line) => line === "Can't reach the runner. Is it still running?")).toHaveLength(2); // both outages were announced, the second one included
+  });
+});
+
+describe("Jobs page: the runner is down from the very first load, with nothing started yet (item 1.6, K2 round-1 revision)", () => {
+  it("a first-load refusal sets the same notice, and clears on the next good refresh", async () => {
+    const bridge = await realBridge();
+    let down = true;
+    const page = await openJobsPage(bridge, { intercept: (input, init) => (down && (init.method ?? "GET") === "GET" ? Promise.reject(new TypeError("fetch failed")) : undefined) });
+    await until(() => page.status() === "Can't reach the runner. Is it still running?", "the first-load notice");
+    expect(page.byId("last-action").className).toContain("refused");
+
+    down = false;
+    page.refreshNow();
+    await until(() => page.status() !== "Can't reach the runner. Is it still running?", "the notice to clear on the next good refresh");
+    expect(page.status()).toBe("Reached the runner again."); // nothing was ever started, so this is the plain recovery line
+    expect(page.byId("last-action").className).toContain("done");
+  });
+
+  it("a first-load 500 sets the same notice too, and also clears on the next good refresh", async () => {
+    const bridge = await realBridge();
+    let broken = true;
+    const page = await openJobsPage(bridge, {
+      intercept: (input, init) =>
+        broken && (init.method ?? "GET") === "GET" && input === "/api/captures"
+          ? jsonResponse(500, { ok: false, error: { code: "internal_error", message: "the runner hit a problem." } })
+          : undefined,
+    });
+    await until(() => page.status() === "Couldn't load the saved jobs; reload the page to try again.", "the first-load 500 notice");
+    expect(page.byId("last-action").className).toContain("refused");
+
+    broken = false;
+    page.refreshNow();
+    await until(() => page.status() !== "Couldn't load the saved jobs; reload the page to try again.", "the notice to clear");
+    expect(page.status()).toBe("Reached the runner again.");
   });
 });
 
@@ -426,6 +614,10 @@ describe("Jobs page: a job directory that can't be read (item 2.2)", () => {
     await until(() => page.rows() === 1, "the unreadable job row");
     expect(page.document.querySelector(".job-open")!.textContent).toBe("A saved job that can't be read");
     expect(page.document.querySelector(".job-status.refused")!.textContent).toBe(`This job's folder can't be read: jobs/${jobId}`);
+    // K7 (round-1 revision): the row never also claims "0 revisions" beside that -- there is no meta line at all,
+    // since nothing about this job's revisions is actually known.
+    expect(page.document.querySelector(".job-meta")).toBeNull();
+    expect(page.document.querySelector(".job-row")!.textContent).not.toMatch(/revision/i);
 
     page.document.querySelector(".job-open")!.click();
     await until(() => page.document.activeElement?.id === "detail-title", "the detail to open");
