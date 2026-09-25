@@ -25,30 +25,29 @@ The board tracks intent; a session turns Ready applications into a manifest the 
 ## Out of scope
 The extension (P07), schedules (P08).
 
-## Carried in from P04's round-3 reviews (iter 006)
-Findings are in `logs/handoff/P04-round-3-review.md`. On top of P06's Owns, these small edits are granted: `runner/ui/assets/jobs.js` and `jobs.css`, `runner/server/routes/captures.ts` and `runner/store/jobs.ts` for the two server items, the secondary-button rule in `runner/ui/assets/runner.css`, and new tests. The UI critic checks them with the board.
-- **P1.** If a job's only file becomes unreadable while focus is on its Re-extract button, the old "What the runner found" section stays under the new message, even after focus leaves. Move focus to the heading, then drop the section.
-- **P2.** When two extractions the page started finish in the same refresh, the first message is replaced before it's shown. Combine them into one line.
-- **P3.** The 80-character name cap cuts mid-word ("Staff Platform Engin…"). Cut at a word.
-- **P4.** A job whose latest file is damaged is listed by its URL path, but its detail heading uses the title. The "(latest revision)" toggle label then shows revision 1. Use one name, and label the toggle with the revision actually shown.
-- **The reviewer's nits:**
-  - A Re-extract whose waiting-state write fails (for example, `extraction-1.json` is a directory) returns a generic 500. Refuse plainly instead.
-  - A job directory that can't be read (for example, chmod 000) drops out of the list, and its detail says "No such job". List it as unreadable and name the folder, as T6 does for files.
-- **The Jobs page's pinned line** (from P03.2's round-1 critic, iter 007): at 640 px and below, the tag runs into the message for assistive tech ("LAST ACTIONExtracting…"). Use the separator P03.2 settles (Q9 in `logs/handoff/P03.2-round-1-review.md`): the visible tag keeps its words, and a visually hidden ": " separates it. The grant covers `runner/ui/jobs.html`'s `#last-action` markup.
-- **The shared secondary button's border** (`#detail-retry` and every `.secondary` button) is 1.27:1, from `runner.css`. Where the border is the button's only visible boundary, it needs 3:1 (WCAG 1.4.11). Use `--muted-foreground`, as G7 does for form controls, and check every runner page.
+## Moved to P06.1 (iter 007)
+P04's round-3 Jobs-page items and server nits, the Jobs page's pinned line and runner-down notice, the shared `.secondary` border and `.error` colour in `runner.css`, and the Status page's model check, eve line and screenshot retake now live in `P06.1-jobs-and-status-followups.md`. P06 edits none of those files.
 
-## Carried in from P05's round-1 reviews (iter 007)
-Findings are in `logs/handoff/P05-round-1-review.md`. On top of P06's Owns, these are granted: `packages/contracts/src/application.ts` (the one value below, with its tests), `runner/server/routes/applications.ts` and `runner/ui/assets/application.js` (P05 created them, and P06 extends them), `runner/server/local-ui.ts`'s `NAV_PAGES`, and `runner/ui/assets/jobs.js`.
+## Carried in from P05's reviews (iter 007)
+Findings are in `logs/handoff/P05-round-1-review.md` and `P05-round-2-review.md`. On top of P06's Owns, these are granted:
+- `packages/contracts/src/application.ts`: the one value below, with its tests;
+- `runner/server/routes/applications.ts` and `runner/ui/assets/application.js`: P05 created them, and P06 extends them;
+- `runner/export/file-names.ts`: the download names only;
+- `runner/server/local-ui.ts`: `NAV_PAGES` only.
+
+The items:
 - **A waiting state.** A preparation parked on gap questions is recorded as `processing: failed`, the only fit in today's contract. Add a waiting value to `application.ts`'s `processing`, use it for a parked preparation, and have the board show "Needs your answer" rather than a failure.
 - **The nav order.** Applications joins the nav through its meta tag, after Status. Place it between Jobs and Board in `NAV_PAGES`.
-- **The Jobs page is silent while the runner is down.** Use the notice P05 adds (V13): show and announce "Can't reach the runner. Is it still running?" once, and clear it on the next good refresh.
 - **Versions that share a profile version look identical.** Excluding a claim keeps P03's approval version, so versions 1 and 2 both say "career profile version 1". Name what separates them.
-- **The Status page's model check** (from P03.2's round-2 critic, iter 007): "Check the model" drops focus to the page body while the check runs, and its result is never announced. Keep focus on the button, mark it `aria-disabled` while busy, and announce the result once. `runner/ui/assets/status.js` is granted.
-- **More Status-page items** (from P03.2's round-3 critic; `logs/handoff/P03.2-round-3-review.md`):
-  - In light theme, the model check's failure sentence is #e54b4f on white, 3.85:1 (axe serious). The colour comes from `.error { color: var(--destructive) }` in `runner.css`, which is granted for this rule. Fix it for every page that uses `.error`.
-  - The eve line shows the eve client's raw error text. Phrase it for a person.
-  - The two 1280 `docs/screenshots/P03.2-status-model-check-failed-*.png` shots include a line from the test setup ("eve is not answering…"). Retake them after these changes; both files are granted.
-- **More Applications-page items** (from P05's round-2 critic; `logs/handoff/P05-round-2-review.md`):
+- **The Applications page** (P05's round-2 critic):
   - The page's requests have no timeout, so a runner that hangs rather than stops is never noticed. Reuse the Jobs page's timeout, and show the runner-down notice.
   - With focus on the runner line's Settings link, the runner going down replaces that line and drops focus to the body. Keep focus on a stable node.
   - Titles over 60 characters or 6 words are left out of download names, so two such jobs at one company collide. Cut at a word instead, and tell collisions apart.
+
+## Alongside P08-B and P03.1 (iter 008)
+- **The budget pause on the board.** P08's deliverable shows a paused budget and its reason ("provider limit") on the board and in Settings. Settings already shows it (P08-A). The board is P06's: read the budget from `GET /status` or `GET /api/runs/budget`, and never edit `runs.ts`, `budget.ts` or `settings.html`.
+- **P08-B imports** `startPreparation` and `waitForPreparationQueue` from `routes/applications.ts` to run daily preparations. Keep both signatures stable. If one must change, tell the orchestrator first.
+- **P02's seams.** `GET /commands`, the lease, and `acknowledge()` live in `runner/server/extension-api.ts` and `runner/store/commands.ts`. Event types reach a route module through its `events` handlers (`server/route-modules.ts`). Use them as they are. If one must change, stop and ask.
+- **Styles.** `runner.css` belongs to P06.1. The board's and sessions' styles go in their own CSS files.
+
+## Report
