@@ -197,13 +197,25 @@ function gate(): { open: () => void; opened: Promise<void> } {
   return { open, opened };
 }
 
-/** Like jobs-page.test.ts's extractingEve, but the structured result can differ by jobId, for the two-jobs-settle-together test. */
+/**
+ * Like jobs-page.test.ts's extractingEve, but the structured result can differ by jobId, for the two-jobs-settle-together
+ * tests. `held` is awaited BEFORE `byJobId` is read, not after (CI flakiness fix, round-1 revision): those two tests
+ * populate their `fields` record only after seeing each paste's own "Saved " line, by which point the very first
+ * queued extraction's session-create call could otherwise already have run past this point on the backend's own
+ * timeline -- captureAndExtract only awaits queueExtraction's disk write, not this fake gateway's turn, so nothing
+ * upstream ever waited for `fields` to be populated before that. Reading `byJobId` early enough could see `{}`
+ * (the fallback default), which fails validation and settles as "failed" instead of "done", exactly reproducing the
+ * intermittent "timed out waiting for the combined outcome" CI failures. Every caller's `held` gate is deliberately
+ * opened only after the test has finished writing every job's `fields` entry, so waiting on it first, before
+ * `byJobId` is ever called, makes that ordering the actual, deterministic thing every extraction blocks on -- for
+ * the tests with a static `byJobId` (a plain closure, not a `fields` lookup) this reorder is a no-op.
+ */
 function extractingEve(getStore: () => JobsStore, byJobId: (jobId: string) => JobStructured, held: Promise<void> = Promise.resolve()): EveGateway {
   const create = async ({ message }: { message: string }) => {
     const jobId = /jobId: "([0-9a-f-]{36})"/.exec(message)?.[1] ?? "";
     const revision = Number(/revision: (\d+)/.exec(message)?.[1] ?? "0");
-    const output = await checkExtractedJob({ jobId, revision, structured: byJobId(jobId) }, getStore());
     await held;
+    const output = await checkExtractedJob({ jobId, revision, structured: byJobId(jobId) }, getStore());
     const events: MessageStreamEvent[] = [
       { type: "step.started", data: { modelId: "test-model", sequence: 0, stepIndex: 0, turnId: "t1" }, meta: META },
       { type: "action.result", data: { status: "completed", result: { kind: "tool-result", callId: "call-1", toolName: "extract_job", output }, sequence: 1, stepIndex: 0, turnId: "t1" }, meta: META } as MessageStreamEvent,
