@@ -1722,3 +1722,24 @@ describe("the list view and downloads", () => {
     expect((await get<ErrorBody>(bridge, "/not-a-task")).status).toBe(404);
   });
 });
+
+describe("download names for two jobs that share one (P06, carried from P05's review)", () => {
+  it("the job captured second downloads as (2), in the page's names and the served header, and the first keeps its plain name", async () => {
+    const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const first = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    bridge.clock.advance(60_000);
+    const second = await seedJob(bridge.workspace, bridge.clock, { ...platformLeadJob(), url: "https://jobs.example/postings/fernwood-platform-lead-remote" });
+    const firstTask = (await prepare(bridge, first.jobId)).body.application.taskId;
+    const secondTask = (await prepare(bridge, second.jobId)).body.application.taskId;
+
+    expect((await detail(bridge, firstTask)).versions[0]!.files[0]!.download).toBe("Ada Quill - Resume - Fernwood Platform Lead.md");
+    expect((await detail(bridge, secondTask)).versions[0]!.files.map((file) => file.download)).toEqual([
+      "Ada Quill - Resume - Fernwood Platform Lead (2).md",
+      "Ada Quill - Resume - Fernwood Platform Lead (2).docx",
+      "Ada Quill - Resume - Fernwood Platform Lead (2).pdf",
+      "Ada Quill - What changed in version 1 - Fernwood Platform Lead (2).md",
+    ]);
+    expect((await download(bridge, secondTask, "resume-v1.pdf")).headers["content-disposition"]).toBe('attachment; filename="Ada Quill - Resume - Fernwood Platform Lead (2).pdf"');
+    expect((await download(bridge, firstTask, "resume-v1.pdf")).headers["content-disposition"]).toBe('attachment; filename="Ada Quill - Resume - Fernwood Platform Lead.pdf"');
+  });
+});
