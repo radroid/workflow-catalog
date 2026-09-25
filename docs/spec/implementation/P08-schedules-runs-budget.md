@@ -3,14 +3,14 @@
 Status: claimed (part B)
 Assignee: manual session (Sonnet)
 Blocked by: P05
-Owns: runner/agent/schedules/, runner/store/runs.ts, runner/scheduler/ (catch-up + fallback trigger), runner/server/routes/runs.ts, runner/ui/runs.html, runner/ui/settings.html (schedules and budget sections)
+Owns: runner/store/runs.ts, runner/scheduler/ (catch-up + fallback trigger, including runner/scheduler/prompts/ — see the Gate fix round 1 report entry: moved from runner/agent/schedules/, which eve itself discovers as cron schedules), runner/server/routes/runs.ts, runner/ui/runs.html, runner/ui/settings.html (schedules and budget sections)
 Spec: F10, F11, §8 schedules and run modes, hard-problems #4 and #7
 
 ## Goal
 Daily preparation of newly saved jobs and a weekly review that survive laptops sleeping and never draft twice or burn quota silently.
 
 ## Deliverables
-- `agent/schedules/daily-prepare.md` (cron, markdown prompt: prepare Saved jobs, cap N per run) and `agent/schedules/weekly-review.md`; per-schedule timezone, pause, run history in Settings.
+- `scheduler/prompts/daily-prepare.md` (markdown prompt: prepare Saved jobs, cap N per run) and `scheduler/prompts/weekly-review.md`; per-schedule timezone, pause, run history in Settings. These live under `runner/scheduler/prompts/`, not `runner/agent/schedules/`: in mode A the runner's own scheduler owns firing (the bridge's clock, through `withRun` and the budget), and a `.md` under `agent/schedules/` is eve's own markdown-schedule form, discovered and fired by eve itself in task mode (and required to declare `cron` frontmatter) — a second, uncontrolled trigger the design rules out. See "Gate fix round 1" in the Report.
 - Catch-up: `last-successful-run` marker per schedule; on `npm run runner` start, run any overdue schedule once. In mode (B) the bridge's own clock dispatches via `POST /eve/v1/dev/schedules/<id>`.
 - Run log: every run writes `runs/<date>/<runId>.json` with kind, inputs, idempotency key, outcome, model, tokens, duration; Runs page lists them; the file is human-readable.
 - Budget: per-day run cap and per-run item cap; provider limit (429 after eve's three attempts) → schedule paused with reason "provider limit" shown on the board and Settings; manual resume.

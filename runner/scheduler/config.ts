@@ -4,8 +4,17 @@ import type { ScheduleKind } from "@workflow-catalog/contracts";
 import { RUNNER_DIR } from "../lib/paths.ts";
 import type { Cadence } from "./time.ts";
 
-/** `runner/agent/schedules/` (F10/§8's layout convention) — this schedule's own prompt file. */
-export const SCHEDULES_PROMPT_DIR = path.join(RUNNER_DIR, "agent", "schedules");
+/**
+ * `runner/scheduler/prompts/` — each schedule's own prompt file. Not
+ * `runner/agent/schedules/` (F10/§8's layout convention for *eve's own* cron
+ * schedules): a `.md` there is eve's markdown schedule form and must declare
+ * `cron` frontmatter (`node_modules/eve/docs/schedules.mdx`), which would
+ * make eve discover and fire it itself in task mode — a second trigger
+ * outside `withRun`/the budget that the design (this packet's Report,
+ * "What fires a schedule") rules out. These two schedules are fired only by
+ * this module's own `start()`/fallback-interval dispatch, never by eve.
+ */
+export const SCHEDULES_PROMPT_DIR = path.join(RUNNER_DIR, "scheduler", "prompts");
 
 export interface ScheduleDefinition {
   readonly id: string;

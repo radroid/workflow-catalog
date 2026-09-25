@@ -10,6 +10,15 @@ eligible Saved job, up to the day's per-run item cap — the same function and
 the same model turn a person triggers by pressing Prepare on the board.
 There is no second preparation path and no separate prompt: P05's own
 `buildPreparationPrompt` already builds each job's turn.
+
+This file lives in `runner/scheduler/prompts/`, not `runner/agent/schedules/`,
+because in mode A the runner's own scheduler (`runner/scheduler/`, not eve's
+cron) owns firing it, driven by the bridge's own clock through `withRun` and
+the budget. A `.md` under `runner/agent/schedules/` is eve's own markdown
+schedule form and must declare `cron` frontmatter (`node_modules/eve/docs/
+schedules.mdx`); eve would then discover and fire it itself, in task mode,
+outside `withRun` and the budget — a second, uncontrolled trigger the design
+rules out (see the packet's Report, "What fires a schedule").
 -->
 
 # Prepare newly saved jobs
