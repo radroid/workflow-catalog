@@ -1630,3 +1630,35 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **P05.1** will be created when P05 merges, to hold the recorded validator findings.
 
 **Lesson:** each validator round has fixed its list and opened one or two narrow holes next to it. Keeping later rounds narrow, and parking older-kind gaps in P05.1, is what lets the critical path converge.
+
+## 2026-09-25 — P06.1 peer review, round 1 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (an Opus reviewer and an Opus UI critic, ui14), PR #18 at e41aefd
+**Severity:** low. The contrast fixes and most items hold. Some tests don't prove what they claim, some fixes are half-done, and 16 screenshots are wrong.
+
+**Verdict:** REVISE — 5 issues; UI REVISE — 7 issues.
+- **Reviewer:**
+  1. The busy-guard test and the runner-down "clear" test pass without their fixes.
+  2. Short names aren't named in the combined message.
+  3. Only one detail section handles focus.
+  4. A failed waiting-state write lost its log line and gives a generic refusal.
+- **UI critic:**
+  1. A first-load notice never clears.
+  2. The same focus gap.
+  3. 4 Status shots are 531 px wide, and 12 Jobs shots were captured scrolled.
+  4. "Failed to fetch" is announced.
+  5. There's no visible busy state.
+  6. A damaged job gets a second name.
+  7. The folder row claims "0 revisions".
+
+**What holds:**
+- `.secondary` borders are 7.55–8.46:1 (were 1.27:1), and `.error` text is 6.29–7.59:1 (was 3.84:1).
+- No existing test was edited.
+- The chain and CI are green, and scope is clean.
+
+**Decision:**
+- K1–K12 in `logs/handoff/P06.1-round-1-review.md` go to the same Sonnet implementer, as its one revision round.
+- K11 (the pairing buttons) and K10 (long paths at 390) were the critic's "outside this round" items. They're ruled in, because P06.1 is the Status page's follow-up packet.
+- The `runner.css` grant is widened for the busy style and the path wrap.
+- P05's identical short-name loop in `settledMessage` is carried to P06.
