@@ -1422,7 +1422,8 @@ describe("Applications page: outcomes that settle in one refresh (revision 2, X6
     await until(() => page.outcomes().length === 3, "the two outcomes", 10_000);
     await page.quiet();
     const [line] = page.outcomes().slice(2);
-    expect(line).toBe("“Backend Engineer · Qu…” needs your answers; prepared “Platform Lead · Fernw…”.");
+    // P06 (carried from P05's round-3 critic): names are cut at a word, never mid-word, and no "·" is left before the "…".
+    expect(line).toBe("“Backend Engineer…” needs your answers; prepared “Platform Lead…”.");
     expect(line!.length).toBeLessThanOrEqual(80);
     expect(page.byId("last-action").className).toContain("done");
     page.refreshNow();
@@ -1442,7 +1443,8 @@ describe("Applications page: outcomes that settle in one refresh (revision 2, X6
     await until(() => page.outcomes().length === 4, "the three outcomes", 10_000);
     page.refreshNow();
     await page.quiet();
-    expect(page.outcomes().slice(3)).toEqual(["3 applications: 1 couldn't be prepared, 1 needs your answers, 1 is ready."]);
+    // P06 (carried from P05's round-3 critic): the counted form still names the application that couldn't be prepared.
+    expect(page.outcomes().slice(3)).toEqual(["Couldn't prepare “Platform Engineer · Harbor”; 1 needs your answers, 1 is ready."]);
     expect(page.byId("last-action").className).toContain("refused");
   });
 });

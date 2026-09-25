@@ -49,6 +49,8 @@ export const NAV_PAGES: ReadonlyArray<readonly [string, string]> = [
   ["onboarding", "Onboarding"],
   ["profile", "Profile"],
   ["jobs", "Jobs"],
+  // P05's page, placed by P06 between Jobs and Board (it joined after Status through its meta tag before).
+  ["application", "Applications"],
   ["board", "Board"],
   ["sessions", "Sessions"],
   ["runs", "Runs"],

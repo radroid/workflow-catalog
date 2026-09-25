@@ -1,4 +1,4 @@
-/* global document, window, fetch, requestAnimationFrame, ResizeObserver, setTimeout, clearTimeout */
+/* global document, window, fetch, requestAnimationFrame, ResizeObserver, setTimeout, clearTimeout, AbortController */
 // The Applications page (P05): prepare a saved job's resume (and cover
 // letter, if wanted) from confirmed claims; answer the model's gap
 // questions; see each version's documents, and every sentence beside the
@@ -41,23 +41,37 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * P06 (carried from P05's round-2 critic): a runner that hangs rather than stops is noticed. A request, its body
+ * included, unanswered after this long is abandoned and counts as "can't reach the runner", so the page shows
+ * the same runner-down notice as for a runner that stopped. (The Jobs page, which the critic named, has no
+ * request timeout of its own to reuse.)
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 async function api(method, path, body) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response;
+  let data = null;
   try {
     response = await fetch(path, {
       method,
       credentials: "same-origin",
+      signal: controller.signal,
       headers: body === undefined ? { accept: "application/json" } : { accept: "application/json", "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+    try {
+      data = await response.json();
+    } catch {
+      if (controller.signal.aborted) throw new Error("timed out");
+      // not JSON
+    }
   } catch {
     throw new ApiError({ code: "unreachable" });
-  }
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    // not JSON
+  } finally {
+    clearTimeout(timer);
   }
   if (response.status === 401) {
     window.location.reload();
@@ -113,9 +127,17 @@ function plainOf(message) {
     .join("");
 }
 
+/**
+ * `text` fitted to `max` characters, cut at a word (P06, carried from P05's round-3 critic): never mid-word,
+ * unless a single word is longer than half the room, and never leaving a separator ("·", a dash) before the "…".
+ */
 function shorten(text, max) {
   const line = String(text).replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  const base = space >= Math.floor(max / 2) ? cut.slice(0, space) : cut;
+  return `${base.replace(/[\s·,;:–—-]+$/u, "")}…`;
 }
 
 /** `before“name”after`, with the name shortened so the whole sentence fits the line. */
@@ -154,7 +176,11 @@ function stopWorking() {
   working = null;
 }
 
-/** Announces one outcome, once. The same text twice in a row is cleared first, so it is announced again. */
+/**
+ * Announces one outcome, once. The same text twice in a row is cleared first, so it is announced again. The tag
+ * is cleared with the text (P06, carried from P05's round-3 critic): cleared alone, the text left "Refused"
+ * sitting in the live region for a frame, announced as an outcome of its own before the whole line.
+ */
 function lastAction(message, tone = "done") {
   if (tone !== "working") stopWorking();
   const node = $("last-action");
@@ -170,6 +196,7 @@ function lastAction(message, tone = "done") {
     });
   if (text.textContent === plain && tag.textContent === TAGS[tone]) {
     keepInPlace(() => {
+      tag.textContent = "";
       text.textContent = "";
     });
     requestAnimationFrame(apply);
@@ -687,7 +714,14 @@ function renderVersion(detail, version, latest) {
   const prepared = `Prepared ${formatDate(version.createdAt)}`;
   // A re-export says "the same sentences as" only of the version it replaces, and only when every sentence is (X8).
   const sameAsReplaced = version.changes.every((change) => change.kind === "unchanged");
-  let meta = `${prepared} from career profile version ${version.profileVersion} and job revision ${version.jobRevision}.${replaces}`;
+  // Excluding a claim keeps the profile's version, so two versions can share it (P06, carried from P05's review):
+  // the later one names what separates it from the earlier.
+  const sharedProfile = version.sameProfileAs
+    ? version.leavesOutChanged
+      ? ` Same profile version as version ${version.sameProfileAs}, made after you excluded or changed a claim it cited.`
+      : ` Same profile version as version ${version.sameProfileAs}, made after your confirmed claims or profile notes changed.`
+    : "";
+  let meta = `${prepared} from career profile version ${version.profileVersion} and job revision ${version.jobRevision}.${sharedProfile}${replaces}`;
   if (version.sameDraftAs && sameAsReplaced && version.newHeader) meta = `${prepared} with your updated name and contact line: the same sentences as version ${version.replaces}.${replaces}`;
   else if (version.sameDraftAs) meta = `${prepared} from version ${version.sameDraftAs}'s sentences, exported again${version.newHeader ? " with your updated name and contact line" : ""}; no model ran.${replaces}`;
   // What to prepare again for belongs to the latest version alone; an older one says which version replaced it (revision 1, V15).
@@ -905,6 +939,13 @@ function showUnreachable(error) {
   // "The runner's agent is running." was true at the last refresh, not now; the next good refresh renders it from the runner again.
   const runner = $("ready-runner");
   if (runner) {
+    // P06 (carried from P05's round-2 critic): the line's Settings link may hold focus, and replacing the line
+    // would drop it to the page. Focus moves first to the section's heading, a node no render replaces.
+    if (holdsFocus(runner)) {
+      const heading = $("ready-title");
+      heading.setAttribute("tabindex", "-1");
+      heading.focus({ preventScroll: true });
+    }
     runner.className = "ready-blocked";
     runner.textContent = "The runner can't be reached right now.";
   }
@@ -961,15 +1002,37 @@ function settledMessage(settled) {
     if (prepared.length > 0) clauses.push([clauses.length === 0 ? "Prepared " : "prepared ", ...namesPhrase(fitted(prepared), "and")]);
     return [...clauses.flatMap((clause, index) => (index === 0 ? clause : ["; ", ...clause])), "."];
   };
-  for (let room = Math.max(...settled.map((outcome) => outcome.name.length)); room >= 16; room -= 1) {
+  // From the longest name's length down to 16 characters, or to the longest name's own length when every name is
+  // shorter than that (P06, carried from P06.1's round-1 review: with only short names the loop never ran, and
+  // the line named no application at all).
+  const longest = Math.max(...settled.map((outcome) => outcome.name.length));
+  for (let room = longest; room >= Math.min(16, longest); room -= 1) {
     const message = sentence(room);
     if (plainOf(message).length <= NAMED_LINE_MAX) return message;
   }
-  const counts = [];
-  if (failed.length > 0) counts.push(`${failed.length} couldn't be prepared`);
-  if (answers.length > 0) counts.push(`${answers.length} ${answers.length === 1 ? "needs" : "need"} your answers`);
-  if (prepared.length > 0) counts.push(`${prepared.length} ${prepared.length === 1 ? "is" : "are"} ready`);
-  return `${plural(settled.length, "application")}: ${counts.join(", ")}.`;
+  return countedMessage(failed, answers, prepared);
+}
+
+/**
+ * When even short names can't all fit, the line still names one (P06, carried from P05's round-3 critic): the
+ * first application that couldn't be prepared, since that is the one to act on, else the first to answer, else
+ * the first prepared; the rest are counted.
+ */
+function countedMessage(failed, answers, prepared) {
+  const rest = [];
+  let head;
+  let name;
+  let more;
+  if (failed.length > 0) {
+    [head, name, more] = ["Couldn't prepare ", failed[0], failed.length > 1 ? ` or ${failed.length - 1} more` : ""];
+    if (answers.length > 0) rest.push(`${answers.length} ${answers.length === 1 ? "needs" : "need"} your answers`);
+  } else if (answers.length > 0) {
+    [head, name, more] = ["", answers[0], answers.length > 1 ? ` and ${answers.length - 1} more need your answers` : " needs your answers"];
+  } else {
+    [head, name, more] = ["Prepared ", prepared[0], prepared.length > 1 ? ` and ${prepared.length - 1} more` : ""];
+  }
+  if ((failed.length > 0 || answers.length > 0) && prepared.length > 0) rest.push(`${prepared.length} ${prepared.length === 1 ? "is" : "are"} ready`);
+  return withName(head, name, `${more}${rest.length > 0 ? `; ${rest.join(", ")}` : ""}.`);
 }
 
 /** Announces how the watched preparations that stopped running since the last refresh ended: all of them, once, in one message (X6). */

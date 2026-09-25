@@ -703,7 +703,8 @@ describe("gap questions", () => {
     const runs = await listRuns(bridge.workspace, bridge.clock);
     expect(runs.records[0]).toMatchObject({ outcome: "failure", error: "Waiting for your answer to 2 questions." });
     const application = await applicationRecord(bridge, taskId);
-    expect(application.processing).toEqual({ status: "failed", runId: runs.records[0]!.runId, error: "Waiting for your answer to 2 questions." });
+    // P06 (carried from P05's review, nit e): a parked preparation waits for the person; it is not recorded as failed.
+    expect(application.processing).toEqual({ status: "waiting", runId: runs.records[0]!.runId });
 
     // Preparing again before answering is refused plainly, and runs nothing.
     const early = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false });
