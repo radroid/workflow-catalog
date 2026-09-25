@@ -1603,3 +1603,30 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **Carried:**
   - to P06: the combined line's mid-word cuts, and the repeated-refusal announcement on the Applications page;
   - to P06.1: the same repeated-refusal pattern on the Jobs page.
+
+## 2026-09-25 — P05 peer review, round 4 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (the round-3 Opus reviewer and UI critic, narrow), PR #16 at 00ff33e
+**Severity:** low. Y1–Y8 are all done. Three narrow regressions against 1a0f854 remain, and three side effects of the orchestrator's own rulings were flagged.
+
+**Verdict:** REVISE — 2 issues; UI REVISE — 1 issue.
+- **UI critic:** after a failed or interrupted attempt, Prepare again no longer retries. Y5's exemption covered only parked attempts.
+- **Reviewer:** Y3 opened two title holes: a bracketed seniority word ("Platform Engineer (Staff)"), and "I was engineering manager at …".
+
+**What holds:**
+- The r3 corpus is down to 5 mismatches from 28. They are ruled refusals and P05.1 findings.
+- Honest controls pass, and exactly the 5 listed test lines are removed.
+- All 19 mutations fail tests.
+- The chain is green, merged and unmerged (runner 1289, 161 gates), and so is CI.
+- The UI sweep is clean.
+
+**Decision:** Z1–Z4 in `logs/handoff/P05-round-4-review.md` go to the same escalation.
+- **Z4 corrects the orchestrator's own rulings:**
+  - Y2's added abbreviations count only when capitalised, so "sales rep. Shipped…" can't carry an uncited sentence;
+  - "scores of" counts only where a quantity can start;
+  - Y1's words never make a claim open, which closes the "now retired" hole.
+- **Round 5** is narrow. Only these count: an undone Z item, a regression against 00ff33e, or a weakened test.
+- **P05.1** will be created when P05 merges, to hold the recorded validator findings.
+
+**Lesson:** each validator round has fixed its list and opened one or two narrow holes next to it. Keeping later rounds narrow, and parking older-kind gaps in P05.1, is what lets the critical path converge.
