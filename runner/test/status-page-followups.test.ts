@@ -219,6 +219,27 @@ describe("Status page: Check the model keeps focus and announces once (item 4.1,
   });
 });
 
+describe("Status page: the checklist's Fix: lines render backticked commands as <code> (K8 round-1 revision)", () => {
+  it("a failing item's fix text shows its command as <code>, never a literal backtick", async () => {
+    const bridge = await makeBridge({
+      modules: await loadRouteModules(ROUTES_DIR),
+      checklist: async () => ({
+        ok: false,
+        checkedAt: "2026-09-25T00:00:00.000Z",
+        items: [{ id: "runner", label: "Runner", status: "fail", detail: "The runner isn't set up yet.", required: true, fix: "Run `npm run setup` in runner/." }],
+      }),
+    });
+    const page = await openStatusPage(bridge);
+    const checklist = page.document.getElementById("checklist");
+    if (!checklist) throw new Error("no #checklist");
+    const fix = checklist.querySelectorAll(".fix")[0];
+    if (!fix) throw new Error("no .fix line");
+    expect(fix.textContent).toBe("Fix: Run npm run setup in runner/.");
+    const codeSpans = Array.from(fix.querySelectorAll("code")).map((node) => node.textContent);
+    expect(codeSpans).toEqual(["npm run setup"]);
+  });
+});
+
 describe("Status page: the eve line is phrased for a person (item 4.2, K8 round-1 revision)", () => {
   it("never shows the eve client's own raw error text when eve doesn't answer, and names eve and how to start it again", async () => {
     // eve-gateway.ts's real health() turns a thrown client/fetch error into { ok: false, detail: shorten(error.message) }
