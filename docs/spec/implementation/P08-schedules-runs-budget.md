@@ -1,6 +1,6 @@
 # P08 · Schedules, run log, and budget pause
 
-Status: claimed (part B)
+Status: done (part A iter 005, PR #13, squash 360ac69; part B 2026-09-25, PR #20, squash c33689a)
 Assignee: manual session (Sonnet)
 Blocked by: P05
 Owns: runner/store/runs.ts, runner/scheduler/ (catch-up + fallback trigger, including runner/scheduler/prompts/ — see the Gate fix round 1 report entry: moved from runner/agent/schedules/, which eve itself discovers as cron schedules), runner/server/routes/runs.ts, runner/ui/runs.html, runner/ui/settings.html (schedules and budget sections)
