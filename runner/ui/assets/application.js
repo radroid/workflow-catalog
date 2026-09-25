@@ -761,7 +761,11 @@ function renderActions(detail) {
   const questions = parkedQuestions(detail);
   const continuing = questions.length > 0 && !needsEvidence(detail);
   const busy = state === "running" || preparingJobs.has(detail.jobId) || (continuing && openQuestions(detail) > 0);
-  const coverLetter = detail.preparation?.coverLetter ?? false;
+  // Prepare again keeps what the newest documents are, with a cover letter or without (revision 3, Y5): since X5
+  // re-exports an older version's draft, the last model attempt may have asked for the other. Continuing a parked
+  // attempt continues what it asked for.
+  const newest = detail.versions[0];
+  const coverLetter = newest && detail.preparation?.status !== "parked" ? newest.coverLetter : (detail.preparation?.coverLetter ?? false);
   const button = el("button", {
     className: continuing ? "button" : "button secondary",
     text: continuing ? "Continue preparing" : "Prepare again",

@@ -889,6 +889,94 @@ describe("Applications page: switching the name back (revision 2, X5)", () => {
   });
 });
 
+describe("Applications page: Prepare again keeps the newest version's cover letter choice (revision 3, Y5)", () => {
+  /** The cover-letter choice of every prepare request the page sends, in order. */
+  function letterChoices(): { readonly intercept: Intercept; readonly sent: boolean[] } {
+    const sent: boolean[] = [];
+    const intercept: Intercept = (input, init) => {
+      if (input === "/api/applications/prepare" && init.method === "POST") sent.push((JSON.parse(init.body ?? "{}") as { coverLetter: boolean }).coverLetter);
+      return undefined;
+    };
+    return { intercept, sent };
+  }
+
+  async function prepareFromForm(page: Page, jobId: string, coverLetter: boolean, outcome: string): Promise<void> {
+    const before = page.outcomes().length;
+    pressPrepare(page, jobId, coverLetter);
+    await until(() => page.outcomes().slice(before).includes(outcome), outcome, 10_000);
+    await page.quiet();
+  }
+
+  it("the critic's steps: no letter, a letter, no letter again from the form; then Prepare again, nothing changed, is already prepared", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const { intercept, sent } = letterChoices();
+    const page = await openPage(bridge, { intercept });
+    await prepareFromForm(page, jobId, false, "Prepared “Platform Lead · Fernwood”: version 1 is ready.");
+    await prepareFromForm(page, jobId, true, "Prepared “Platform Lead · Fernwood”: version 2 is ready.");
+    await prepareFromForm(page, jobId, false, "Re-exported “Platform Lead · Fernwood” as version 3, from version 1's sentences.");
+    await until(() => all(page, ".version").length === 3, "version 3 in the detail");
+    expect(all(page, ".version h4").map((node) => node.textContent)).toEqual(["Version 3 · resume", "Version 2 · resume and cover letter", "Version 1 · resume"]);
+
+    // The last model attempt asked for a letter (version 2); the newest documents, version 3's, have none.
+    for (let press_ = 0; press_ < 2; press_ += 1) {
+      const before = page.outcomes().length;
+      press(page, "detail-prepare");
+      await until(() => page.outcomes().length > before, "the answer to Prepare again");
+      expect(page.outcomes().at(-1)).toBe("Already prepared: “Platform Lead · Fernwood” matches version 3; nothing new.");
+      await page.quiet();
+    }
+    expect(sent).toEqual([false, true, false, false, false]);
+    expect(all(page, ".version")).toHaveLength(3);
+    expect(model.prompts).toHaveLength(2);
+  });
+
+  it("the other way: a letter switched back on from the form stays on when Prepare again is pressed", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const { intercept, sent } = letterChoices();
+    const page = await openPage(bridge, { intercept });
+    await prepareFromForm(page, jobId, true, "Prepared “Platform Lead · Fernwood”: version 1 is ready.");
+    await prepareFromForm(page, jobId, false, "Prepared “Platform Lead · Fernwood”: version 2 is ready.");
+    await prepareFromForm(page, jobId, true, "Re-exported “Platform Lead · Fernwood” as version 3, from version 1's sentences.");
+    await until(() => all(page, ".version").length === 3, "version 3 in the detail");
+
+    const before = page.outcomes().length;
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().length > before, "the answer to Prepare again");
+    expect(page.outcomes().at(-1)).toBe("Already prepared: “Platform Lead · Fernwood” matches version 3; nothing new.");
+    await page.quiet();
+    expect(sent).toEqual([true, false, true, true]);
+    expect(all(page, ".version h4")[0]!.textContent).toBe("Version 3 · resume and cover letter");
+    expect(model.prompts).toHaveLength(2);
+  });
+
+  it("continuing a parked attempt continues what it asked for, whatever the newest version is", async () => {
+    // A letter's attempt asks about requirement 3; the resume's never does.
+    const withQuestion = honest([{ claims: ["C1"] }, { claims: ["C3"] }, { gap: "Which of your work shows open-source maintenance?" }]);
+    const planner: Planner = (prompt, attempt) => (prompt.coverLetter ? withQuestion(prompt, attempt) : honest(PLATFORM_LEAD)(prompt, attempt));
+    const { bridge, model } = await bridgeAndModel(planner);
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const { intercept, sent } = letterChoices();
+    const page = await openPage(bridge, { intercept });
+    await prepareFromForm(page, jobId, false, "Prepared “Platform Lead · Fernwood”: version 1 is ready.");
+    await prepareFromForm(page, jobId, true, "Needs your answers: “Platform Lead · Fernwood”.");
+    const taskId = taskIdOf(page);
+    await until(() => page.document.getElementById(`answer-${taskId}-3-leave_out`) !== null, "the question");
+    press(page, `answer-${taskId}-3-leave_out`);
+    await until(() => page.byId("detail-prepare").getAttribute("aria-disabled") === "false", "Continue preparing to be enabled");
+    expect(page.byId("detail-prepare").textContent).toBe("Continue preparing");
+
+    const before = page.outcomes().length;
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().slice(before).includes("Prepared “Platform Lead · Fernwood”: version 2 is ready."), "version 2", 10_000);
+    expect(sent).toEqual([false, true, true]);
+    await until(() => all(page, ".version").length === 2, "version 2 in the detail");
+    expect(all(page, ".version h4")[0]!.textContent).toBe("Version 2 · resume and cover letter");
+    expect(model.prompts).toHaveLength(3);
+  });
+});
+
 describe("Applications page: a re-export whose saved draft no longer passes (revision 2, X7)", () => {
   it("is refused in one plain line, and nothing new is listed", async () => {
     const bridge = await bridgeWith(honest(PLATFORM_LEAD));
