@@ -814,7 +814,8 @@ async function openApplication(taskId, { focus = true, detail: known } = {}) {
 // while the page is visible. Announces, once each, the results of the
 // preparations it watches: the ones this page started, and every one the
 // list showed running, so a reload or a revisit mid-preparation still hears
-// how it ended (revision 1, V13).
+// how it ended (revision 1, V13). The results one refresh brings share one
+// message, so none is lost behind another (revision 2, X6).
 // ---------------------------------------------------------------------------
 
 /** Watched preparations: taskId → the job's name. */
@@ -880,21 +881,65 @@ function clearUnreachable() {
   // Otherwise announceSettled, next, says how the watched preparation ended.
 }
 
+/** How a watched preparation that stopped running ended, or null when there is nothing to announce. */
+function outcomeOf(entry) {
+  // Parked: only while a question is open. Once every one is answered (in another tab, say), the row says what is next.
+  if (entry.state.status === "parked") return entry.state.open > 0 ? "answers" : null;
+  return entry.state.status === "idle" && entry.latestVersion ? "prepared" : "failed";
+}
+
+/** Names in quotes, as data: “A”, “A” and “B”, “A”, “B” and “C”. */
+function namesPhrase(names, joiner) {
+  return names.flatMap((name, index) => [...(index === 0 ? [] : [index === names.length - 1 ? ` ${joiner} ` : ", "]), data(`“${name}”`)]);
+}
+
+/**
+ * Every outcome that settled in one refresh, as one sentence (revision 2, X6), each job named once: what couldn't
+ * be prepared first, then what needs answers, then what was prepared. The names are shortened evenly so the line
+ * fits NAMED_LINE_MAX (P04's T18); when even the shortest names can't fit, it counts the outcomes instead.
+ */
+function settledMessage(settled) {
+  if (settled.length === 1) {
+    const [{ kind, name, version }] = settled;
+    if (kind === "answers") return withName("Needs your answers: ", name, ".");
+    if (kind === "prepared") return withName("Prepared ", name, `: version ${version} is ready.`);
+    return withName("Couldn't prepare ", name, "; its details say why.");
+  }
+  const namesOf = (kind) => settled.filter((outcome) => outcome.kind === kind).map((outcome) => outcome.name);
+  const failed = namesOf("failed");
+  const answers = namesOf("answers");
+  const prepared = namesOf("prepared");
+  const sentence = (room) => {
+    const fitted = (names) => names.map((name) => shorten(name, room));
+    const clauses = [];
+    if (failed.length > 0) clauses.push(["Couldn't prepare ", ...namesPhrase(fitted(failed), "or")]);
+    if (answers.length > 0) clauses.push([...namesPhrase(fitted(answers), "and"), answers.length === 1 ? " needs your answers" : " need your answers"]);
+    if (prepared.length > 0) clauses.push([clauses.length === 0 ? "Prepared " : "prepared ", ...namesPhrase(fitted(prepared), "and")]);
+    return [...clauses.flatMap((clause, index) => (index === 0 ? clause : ["; ", ...clause])), "."];
+  };
+  for (let room = Math.max(...settled.map((outcome) => outcome.name.length)); room >= 16; room -= 1) {
+    const message = sentence(room);
+    if (plainOf(message).length <= NAMED_LINE_MAX) return message;
+  }
+  const counts = [];
+  if (failed.length > 0) counts.push(`${failed.length} couldn't be prepared`);
+  if (answers.length > 0) counts.push(`${answers.length} ${answers.length === 1 ? "needs" : "need"} your answers`);
+  if (prepared.length > 0) counts.push(`${prepared.length} ${prepared.length === 1 ? "is" : "are"} ready`);
+  return `${plural(settled.length, "application")}: ${counts.join(", ")}.`;
+}
+
+/** Announces how the watched preparations that stopped running since the last refresh ended: all of them, once, in one message (X6). */
 function announceSettled() {
+  const settled = [];
   for (const [taskId, name] of [...started]) {
     const entry = listView?.applications.find((application) => application.taskId === taskId);
-    if (!entry) continue;
-    if (isRunning(entry.state)) continue;
+    if (!entry || isRunning(entry.state)) continue;
     started.delete(taskId);
-    if (entry.state.status === "parked") {
-      // Only while a question is open: once every one is answered (in another tab, say), the row says what is next.
-      if (entry.state.open > 0) lastAction(withName("Needs your answers: ", name, "."), "done");
-    } else if (entry.state.status === "idle" && entry.latestVersion) {
-      lastAction(withName("Prepared ", name, `: version ${entry.latestVersion} is ready.`), "done");
-    } else {
-      lastAction(withName("Couldn't prepare ", name, "; its details say why."), "refused");
-    }
+    const kind = outcomeOf(entry);
+    if (kind) settled.push({ kind, name, version: entry.latestVersion });
   }
+  if (settled.length === 0) return;
+  lastAction(settledMessage(settled), settled.some((outcome) => outcome.kind === "failed") ? "refused" : "done");
 }
 
 function anyActive() {

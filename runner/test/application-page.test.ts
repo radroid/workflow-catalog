@@ -17,6 +17,7 @@ import {
   fixtureJob,
   GOOD_COVER_LETTER,
   GOOD_RESUME,
+  HARBOR_JOB,
   HOSTILE_JOB,
   INJECTION_PHRASES,
   platformLeadJob,
@@ -995,6 +996,85 @@ describe("Applications page: watching (revision 1, V13)", () => {
     page.refreshNow();
     await until(() => page.lines.at(-1) === "Prepared “Platform Lead · Fernwood”: version 1 is ready.", "the outcome", 10_000);
     expect(page.outcomes().filter((line) => line.startsWith("Prepared"))).toHaveLength(1);
+  });
+});
+
+describe("Applications page: outcomes that settle in one refresh (revision 2, X6)", () => {
+  /**
+   * Starts every job in `jobIds` from the page while the model holds its first turn, then lets them all finish
+   * while the page is hidden, so the next refresh is the one that sees every outcome.
+   */
+  async function settleTogether(bridge: TestBridge, model: ScriptedModel, page: Page, names: readonly string[], jobIds: readonly string[]): Promise<void> {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    model.beforeTurn = () => held;
+    for (const [index, jobId] of jobIds.entries()) {
+      pressPrepare(page, jobId);
+      await until(() => page.lines.includes(`Preparing “${names[index]}”…`), `the start of ${names[index]}`);
+      await until(() => page.byId("prepare-submit").getAttribute("aria-disabled") === "false", "the prepare button");
+    }
+    page.setVisibility("hidden");
+    await page.quiet();
+    release();
+    await waitForPreparationQueue(bridge.workspace.root);
+    page.refreshNow();
+  }
+
+  it("a provider limit that pauses the budget, and the preparation refused behind it: both are announced, in one line, once", async () => {
+    // The critic's case: Harbor's turn hits the provider's limit, which pauses the budget; Quill, queued behind it, is then refused.
+    const limited: Planner = (prompt, attempt) => (prompt.company === "Harbor" ? { skills: ["claim-matching"], end: "provider_limit" } : honest(HOSTILE)(prompt, attempt));
+    const { bridge, model } = await bridgeAndModel(limited);
+    const harbor = await seedJob(bridge.workspace, bridge.clock, fixtureJob(HARBOR_JOB));
+    const quill = await seedJob(bridge.workspace, bridge.clock, fixtureJob(HOSTILE_JOB));
+    const page = await openPage(bridge);
+    await settleTogether(bridge, model, page, ["Platform Engineer · Harbor", "Backend Engineer · Quill"], [harbor.jobId, quill.jobId]);
+    const both = "Couldn't prepare “Platform Engineer · Harbor” or “Backend Engineer · Quill”.";
+    await until(() => page.lines.includes(both), "the two outcomes", 10_000);
+    expect(page.byId("last-action").className).toContain("refused");
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      page.refreshNow();
+      await page.quiet();
+    }
+    expect(page.outcomes()).toEqual(["Preparing “Platform Engineer · Harbor”…", "Preparing “Backend Engineer · Quill”…", both]);
+    // Each row still says why.
+    expect(all(page, ".app-status").map((node) => node.textContent)).toEqual([
+      "The run budget is paused, so nothing was prepared. Resume it in Settings, then try again.",
+      "The model provider's rate limit stopped this, and the run budget is now paused. Resume it in Settings, then prepare again.",
+    ]);
+  });
+
+  it("a version ready and questions to answer share one line that fits, each job named once", async () => {
+    const mixed: Planner = (prompt, attempt) => (prompt.company === "Quill" ? honest(HOSTILE)(prompt, attempt) : honest(PLATFORM_LEAD)(prompt, attempt));
+    const { bridge, model } = await bridgeAndModel(mixed);
+    const lead = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const quill = await seedJob(bridge.workspace, bridge.clock, fixtureJob(HOSTILE_JOB));
+    const page = await openPage(bridge);
+    await settleTogether(bridge, model, page, ["Platform Lead · Fernwood", "Backend Engineer · Quill"], [lead.jobId, quill.jobId]);
+    await until(() => page.outcomes().length === 3, "the two outcomes", 10_000);
+    await page.quiet();
+    const [line] = page.outcomes().slice(2);
+    expect(line).toBe("“Backend Engineer · Qu…” needs your answers; prepared “Platform Lead · Fernw…”.");
+    expect(line!.length).toBeLessThanOrEqual(80);
+    expect(page.byId("last-action").className).toContain("done");
+    page.refreshNow();
+    await page.quiet();
+    expect(page.outcomes()).toHaveLength(3);
+  });
+
+  it("when the names can't fit one line, it counts the outcomes instead, still once", async () => {
+    const three: Planner = (prompt, attempt) =>
+      prompt.company === "Harbor" ? { skills: ["claim-matching"], end: "failed" } : prompt.company === "Quill" ? honest(HOSTILE)(prompt, attempt) : honest(PLATFORM_LEAD)(prompt, attempt);
+    const { bridge, model } = await bridgeAndModel(three);
+    const lead = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const quill = await seedJob(bridge.workspace, bridge.clock, fixtureJob(HOSTILE_JOB));
+    const harbor = await seedJob(bridge.workspace, bridge.clock, fixtureJob(HARBOR_JOB));
+    const page = await openPage(bridge);
+    await settleTogether(bridge, model, page, ["Platform Lead · Fernwood", "Backend Engineer · Quill", "Platform Engineer · Harbor"], [lead.jobId, quill.jobId, harbor.jobId]);
+    await until(() => page.outcomes().length === 4, "the three outcomes", 10_000);
+    page.refreshNow();
+    await page.quiet();
+    expect(page.outcomes().slice(3)).toEqual(["3 applications: 1 couldn't be prepared, 1 needs your answers, 1 is ready."]);
+    expect(page.byId("last-action").className).toContain("refused");
   });
 });
 
