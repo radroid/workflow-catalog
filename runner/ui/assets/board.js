@@ -538,13 +538,18 @@ async function moveCard(taskId, button) {
   } catch (error) {
     moving.delete(taskId);
     button.setAttribute("aria-disabled", "false");
-    const message =
-      error?.code === "unreachable"
-        ? CANT_REACH
-        : error?.code === "stale_revision"
-          ? withName("Not moved: ", entry.jobName, " changed since; the board shows it as it is now.")
-          : withName("Not moved: ", entry.jobName, " couldn't be changed; try again.");
-    lastAction(message, "refused");
+    if (error?.code === "stale_revision") {
+      // The card goes to where it is now, as the line says. A focused card is never moved by a render, so focus
+      // first goes to its column's heading, a node no render replaces; then back to the card's Move button.
+      const heading = button.closest("[data-stage]")?.querySelector("h3");
+      heading?.focus({ preventScroll: true });
+      lastAction(withName("Not moved: ", entry.jobName, " changed since; the board shows it as it is now."), "refused");
+      await refresh();
+      const again = $(`move-submit-${taskId}`);
+      if (again && heading && document.activeElement === heading) again.focus();
+      return;
+    }
+    lastAction(error?.code === "unreachable" ? CANT_REACH : withName("Not moved: ", entry.jobName, " couldn't be changed; try again."), "refused");
     await refresh();
     return;
   }
