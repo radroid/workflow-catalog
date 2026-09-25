@@ -77,7 +77,10 @@ export function createUpgradeRouteModule(deps: UpgradeFetchDeps = {}) {
         if (result.status === "up_to_date") return errorResponse(409, "already_up_to_date", "No update is available to confirm.");
         if (result.status === "refused") {
           ctx.log.warn(`Upgrade refused (${result.reason}): ${result.message}`);
-          return c.json({ ok: false, reason: result.reason, message: result.message }, 422);
+          // The standard { ok: false, error: { code, message } } shape (http.ts's errorResponse), not a bespoke
+          // one: the Settings page's postJson (ui/assets/runner.js) reads error.message generically for every
+          // route, and a refusal should surface in the UI exactly like any other rejected request.
+          return errorResponse(422, result.reason, result.message);
         }
         ctx.log.error(`Upgrade could not complete: ${result.message}`);
         return errorResponse(502, "upgrade_failed", result.message);

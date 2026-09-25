@@ -105,9 +105,10 @@ describe("POST /api/upgrade/confirm", () => {
     const bridge = await bridgeWith({ version: "0.2.0", tarball, checksumBytes: wrongChecksum });
     const response = await bridge.request("/api/upgrade/confirm", { method: "POST", headers: SAME_ORIGIN, body: JSON.stringify({ nextVersion: "0.2.0" }) });
     expect(response.status).toBe(422);
-    const body = (await response.json()) as { ok: boolean; reason: string; message: string };
-    expect(body).toMatchObject({ ok: false, reason: "checksum_mismatch" });
-    expect(typeof body.message).toBe("string");
+    const body = (await response.json()) as { ok: boolean; error: { code: string; message: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("checksum_mismatch");
+    expect(typeof body.error.message).toBe("string");
   });
 
   it("400s a malformed body", async () => {

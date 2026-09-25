@@ -12,7 +12,7 @@
     <!-- runner:nav -->
     <main class="page">
       <h1>Settings</h1>
-      <p class="lede">How this runner behaves, one section per concern. Today that is the run budget; pairing is on the Status page.</p>
+      <p class="lede">How this runner behaves, one section per concern: the run budget, schedules, and upgrades. Pairing is on the Status page.</p>
 
       <!-- The page's one persistent live region: every section's success and error is announced here. -->
       <p id="status-message" role="status" aria-live="polite" class="status-message"></p>
@@ -60,8 +60,38 @@
           <li class="muted">Loading…</li>
         </ul>
       </section>
+
+      <section class="card" aria-labelledby="upgrade-title" id="upgrade-section">
+        <div class="card-head">
+          <h2 id="upgrade-title" tabindex="-1">Upgrade</h2>
+        </div>
+        <p class="muted small">Checks the latest job-assistant release against this workspace's own recorded version. Nothing changes here until you confirm — this workspace stays on its current version otherwise.</p>
+
+        <p class="small" id="upgrade-current">Current version: <span id="upgrade-current-value">…</span></p>
+
+        <p class="small muted" id="upgrade-up-to-date" hidden>You're on the latest release.</p>
+
+        <div id="upgrade-refused" class="notice decision" hidden>
+          <p class="small" id="upgrade-refused-message"></p>
+        </div>
+
+        <div id="upgrade-available" hidden>
+          <p class="small">An update is available: version <strong id="upgrade-next-version"></strong>.</p>
+          <div id="upgrade-changelog" class="upgrade-changelog"></div>
+          <button class="button" type="button" id="upgrade-start">Update to this version</button>
+        </div>
+
+        <div id="upgrade-confirm" class="notice decision" hidden>
+          <p class="small">Update the workspace to version <strong id="upgrade-confirm-version"></strong>? This runs its migration steps and records the new version; it cannot be undone from here.</p>
+          <button class="button" type="button" id="upgrade-confirm-yes">Yes, update</button>
+          <button class="button secondary" type="button" id="upgrade-confirm-cancel">Cancel</button>
+        </div>
+
+        <button class="button secondary" type="button" id="upgrade-check">Check for updates</button>
+      </section>
     </main>
     <script type="module" src="/ui/assets/settings-budget.js"></script>
     <script type="module" src="/ui/assets/settings-schedules.js"></script>
+    <script type="module" src="/ui/assets/settings-upgrade.js"></script>
   </body>
 </html>
