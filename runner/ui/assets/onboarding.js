@@ -82,6 +82,26 @@ function messageOf(error) {
 }
 
 /**
+ * P03.1 (carried from P03.2's round-3 critic, item 2): a page-load failure's line used to
+ * concatenate the raw error message with " Reload the page to try again." unconditionally. Two
+ * problems: with the runner not answering at all, the message is the browser's own wording,
+ * "Failed to fetch" -- no closing period -- so the sentences ran together as "...Failed to fetch
+ * Reload the page to try again."; and with the profile busy, the message is already "The profile
+ * is busy. Try again in a moment." (store/profile-writes.ts's PROFILE_BUSY_MESSAGE), so appending
+ * the reload sentence said "try again" twice in a row. This closes the message with a full stop
+ * first when it doesn't already end with one, and only adds the reload sentence when the message
+ * doesn't already tell the person to try again -- the server's own wording, kept at its own
+ * capitalization (unlike a refusal's afterColon(), which lower-cases it), is instruction enough.
+ */
+const SUGGESTS_RETRY = /try again/i;
+function pageLoadErrorText(subject, error) {
+  const raw = messageOf(error);
+  const message = /[.!?]$/.test(raw) ? raw : `${raw}.`;
+  const reloadHint = SUGGESTS_RETRY.test(message) ? "" : " Reload the page to try again.";
+  return `${subject} couldn't load: ${message}${reloadHint}`;
+}
+
+/**
  * Q10 (revision 1, critic polish, "outside this round" note): store/profile.ts's `editsNote` puts a fixed-
  * shape sentence ("1 edit saved.", "2 edits saved, 1 edit proposed.") *after* the server's own message
  * whenever a write also reconciled a hand edit to career-profile.md (Q10's own reordering, this same
@@ -453,9 +473,26 @@ function afterColon(message) {
   return /^[A-Z][a-z]/.test(message) ? `${message[0].toLowerCase()}${message.slice(1)}` : message;
 }
 
-async function refused(error, id, field) {
+/**
+ * P03.1 (carried from P03.2's round-3 review, "outside this round"): this
+ * used to `await load()` — reloading the page's state — *before* showing
+ * the refusal. A "profile busy" refusal (503, the write that just failed)
+ * reloads into the very same lock, so the message sat unshown for as long
+ * as the lock stayed busy (about 10 s in the reviewer's probe): a person
+ * would see nothing happen for that long, then the refusal, instead of an
+ * immediate answer. The refusal is now announced immediately, from whatever
+ * `view` is already on screen (a refused write changes nothing server-side,
+ * so the markdownError check below reads the same either way, stale or
+ * not). There is no reload after it: the old reload's only purpose was
+ * fresher `view` data for whatever the person does *next*, and every action
+ * on this page already starts with its own `load()` before it renders
+ * anything (`setSourceStatus`, `saveAndExtract`, `decide`, `addStatement`,
+ * ...), so the next real action reloads regardless. Refusing to leave any
+ * async work running past this function's return also means nothing here
+ * can land after the page (or, in a test, the harness) has moved on.
+ */
+function refused(error, id, field) {
   const message = messageOf(error);
-  await load().catch(() => undefined);
   // Q7 (revision 1, reviewer 6 and critic 2): unlike a client-side refusal (refuseAt's other call sites,
   // each hand-authoring its own short focusedReason distinct from the fuller detail next to the field), the
   // server gives only one message -- already short, plain and code-free (J5, Q3) -- so there is no separate
@@ -463,7 +500,7 @@ async function refused(error, id, field) {
   // use (S8: in lower case, see afterColon), keeps the line's own shape (what happened, then why) for a
   // server refusal too: the upload's 413, or a statement's Enter refused by the server (the profile lock's
   // 503), while the field never loses focus for a screen reader to re-read the field error from.
-  if (field && !view?.markdownError) return refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${afterColon(message)}`);
+  if (field && !view?.markdownError) return void refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${afterColon(message)}`);
   lastAction(message, "refused");
   // Focus stays where the person acted (the button, or the field they pressed Enter in); only a lost focus goes to the button.
   render(document.activeElement && document.activeElement !== document.body ? undefined : id);
@@ -1069,6 +1106,6 @@ refresh()
   })
   .catch((error) => {
     const node = $("page-error");
-    node.textContent = `The onboarding page couldn't load: ${messageOf(error)} Reload the page to try again.`;
+    node.textContent = pageLoadErrorText("The onboarding page", error);
     node.hidden = false;
   });

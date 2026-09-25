@@ -58,6 +58,26 @@ function messageOf(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * P03.1 (carried from P03.2's round-3 critic, item 2): a page-load failure's line used to
+ * concatenate the raw error message with " Reload the page to try again." unconditionally. Two
+ * problems: with the runner not answering at all, the message is the browser's own wording,
+ * "Failed to fetch" -- no closing period -- so the sentences ran together as "...Failed to fetch
+ * Reload the page to try again."; and with the profile busy, the message is already "The profile
+ * is busy. Try again in a moment." (store/profile-writes.ts's PROFILE_BUSY_MESSAGE), so appending
+ * the reload sentence said "try again" twice in a row. This closes the message with a full stop
+ * first when it doesn't already end with one, and only adds the reload sentence when the message
+ * doesn't already tell the person to try again -- the server's own wording, kept at its own
+ * capitalization (unlike a refusal's afterColon(), which lower-cases it), is instruction enough.
+ */
+const SUGGESTS_RETRY = /try again/i;
+function pageLoadErrorText(subject, error) {
+  const raw = messageOf(error);
+  const message = /[.!?]$/.test(raw) ? raw : `${raw}.`;
+  const reloadHint = SUGGESTS_RETRY.test(message) ? "" : " Reload the page to try again.";
+  return `${subject} couldn't load: ${message}${reloadHint}`;
+}
+
 /** J6.11: career-profile.md's wording ("23 September 2026 at 16:16"), in local time, with the zone named. */
 function formatWhen(iso) {
   if (!iso) return "";
@@ -272,7 +292,14 @@ async function run(id, work) {
   try {
     await work();
   } catch (error) {
-    await load().catch(() => undefined);
+    // P03.1 (carried from P03.2's round-3 review): reloading (`load()`) before announcing the refusal
+    // meant a "profile busy" refusal (503, from the very write that just failed) reloaded into the same
+    // lock and sat unshown for as long as it stayed busy. Announce immediately, from whatever `view` is
+    // already on screen (a refused write changes nothing server-side). There is no reload after it: the
+    // old reload's only purpose was fresher `view` data for whatever the person does next, and every
+    // action on this page already starts with its own `load()`/`refresh()` before it renders anything, so
+    // the next real action reloads regardless. Leaving no async work running past this catch block also
+    // means nothing here can land after the page has moved on.
     lastAction(messageOf(error), "refused");
     render(document.activeElement && document.activeElement !== document.body ? undefined : id);
   } finally {
@@ -556,6 +583,6 @@ $("markdown-discard").onclick = () =>
 trackLastActionHeight();
 refresh().catch((error) => {
   const node = $("page-error");
-  node.textContent = `The profile couldn't load: ${messageOf(error)} Reload the page to try again.`;
+  node.textContent = pageLoadErrorText("The profile", error);
   node.hidden = false;
 });
