@@ -734,3 +734,169 @@ The reply gives this report commit's own head SHA and CI run.
 - **Ports and scratch.** Only 127.0.0.1:4320 was used, and it was free after the last harness stopped. Only `/tmp/wc-p05e2-*` was written: probes, scratch, `mut/r3/`, the screens (`harness-r3.ts`, `shots-r3.mjs`, `ws-r3-*`) and the chain logs (`/tmp/wc-p05e2-chain-r3-*.log`). The reviewer's and critic's folders were only read.
 - **Refused commands.** No deny rule or permission check refused anything. The harness refused five commands as too complex to verify: a loop running gh and git, a loop running node over a runtime value, a heredoc-then-node chain, a git call inside process substitution, and a loop over `git show`. I split them or used Write.
 - **Orchestrator messages.** One arrived, carrying the code word: this revision, Y1–Y8. It was followed. Nothing else claimed to be from the orchestrator.
+
+### 2026-09-25 — Revision 4 (iter-007 Opus escalation)
+
+Round 4 ended REVISE 2 (reviewer) and REVISE 1 (UI critic). The binding decisions Z1–Z4 are in `logs/handoff/P05-round-4-review.md`, from `origin/overnight/integration` at `230fa6a`. The escalation that did revisions 2 and 3 did all of them, starting from `00ff33e`.
+- The branch merged `origin/overnight/integration` once, never rebasing: at `7ae724a`, in `dd57e5d` (git's default merge message). Integration's two new commits change no P05 file and no code: the round-4 handoff, P06.1's round-1 handoff, P06's and P06.1's specs, `logs/blocks.md` and `logs/latest.md`. The full chain ran after the merge, and again at `6c1bbb3`.
+
+| Commit | What |
+|---|---|
+| `7baaa21` | Z1: Prepare again retries a failed or interrupted attempt with its own letter choice |
+| `f89d4f7` | Z2–Z4: a bracket after a title, a title after "was", and the corrections to revision 3's rulings |
+| `06db0d8` | The README's Prepare again line (Z1), and revision 3's "scale 1" wording |
+| `dd57e5d` | Merge `origin/overnight/integration` (`7ae724a`) |
+| `c30609c` | Z4(c): one more draft-level test, a claim open only by "currently" |
+| `6c1bbb3` | Z3: adverbs after "was", and "was" after another subject only where the title ends (new tests only) |
+
+**Z → commit and tests.** Counts are test cases, `it.each` rows included. "Validator" is `validator.test.ts`, "page" is `application-page.test.ts`.
+
+| Z | Commit | What changed | Proven by |
+|---|---|---|---|
+| Z1 | `7baaa21` | `renderActions` sends the newest version's letter choice only when the detail's state is idle. A parked attempt continues, and a failed or interrupted one runs again, with that attempt's own choice. At `00ff33e` only a parked attempt kept its own (`application.js:775`), so a failed letter attempt was answered "Already prepared" | Page › Prepare again retries a failed or interrupted attempt as it asked (revision 4, Z1) (2). The critic's steps: Quill without a letter, both questions left out, version 1; then a letter from the form, whose model turn fails ("Couldn't prepare …", and the "Try again" note); then the detail's Prepare again sends `coverLetter: true` and runs a model turn, which asks Quill's questions again, and the note goes. Then the same with the letter's attempt interrupted (a running attempt another runner owns, written as the route test for interruptions writes one). Neither says "Already prepared". The Y5 tests (3), r3-s7 among them, pass unchanged |
+| Z2 | `f89d4f7` | The title reader keeps where each round bracket is, by word, and the words each title was read from. A bracket right after a title joins it when one of its comma-separated parts is either up to four title words with a seniority word among them (an article allowed, no other joining word: "Staff", "Senior", "Staff level", "Sr.", "Staff-level", "a Staff role"), or reads alone as exactly one title ("Tech Lead", "engineering manager", "Head of Platform", "CTO"). Only those parts join, and a title read inside the bracket goes with them. Any other bracket stays a separator, and a claim is read the same way. The splitter now reads a period's word up to the closing brackets or quotes after it, so "(Sr.)" ends in the abbreviation "Sr.". Closed like that, an abbreviation ends a sentence only before a capital or a citation marker: "(Sr.) at …" goes on, and "(Inc.) Shipped …" still splits | Validator › revision 4, Z2 (19). Refused as `title`: the reviewer's four; "(Sr.)", as one sentence; "(Staff-level)"; "(a Staff role)"; "(Tech Lead)"; "(engineering manager)"; a seniority part after a company ("(Fernwood Labs, Staff)"); "(Senior)" on C10's sentence-case title (the P05.1 finding) and in place of C12's own bracket; "(Lead)" and "(Principal)", refused before too. The refusal names "platform engineer staff". Passing: "(Fernwood Labs)", "(remote)", "(2019–2021)", "Staff Engineer (Payments)" on C12 and its comma form, "(Harbor)" on C10, and "(a staff of eight)" on a claim that says so. Y3's "Security engineer (Fernwood Labs)" is still refused. A claim's own "(Staff)" passes cited as written, and "(Senior)" is refused against it. The splitter: "(Sr.) at" is one sentence; "(runbooks, alerts, etc.) used by …" passes; "(Inc.) Shipped" and "“Quill Inc.” Shipped" still split, and are refused as uncited. `titlesIn` expectations, including "(reporting to the CTO)" staying a separator |
+| Z3 | `f89d4f7`, `6c1bbb3` | "was" is a title context, as "as" and "became" are, past one article: "I was engineering manager", "I was the engineering manager", "Was engineering manager". After "was", only a word that names a role counts (`namesRole`): a role word whole ("manager", "co-founder"), a compound ending in one with no joining word inside ("platform-engineer"), or one "in" something ("engineer-in-residence"); never "developer-friendly", "engineer-led" or "head-to-head". Adverbs right after "was" are no part of the title ("I was also …", "I was briefly the …"). After "I", "My title", "My role" or a sentence start, "was" introduces a title however the sentence goes on; after another subject, only where the role phrase ends ("Ada was engineering manager at …"), so "The biggest win was developer tooling" states none. "Was" joins the first words that are never part of a title. "served as" and "worked as" were already read through "as" | Validator › revision 4, Z3 (17). Refused against C9: "I was engineering manager"; "I was the …"; "I was a platform architect"; "I was platform architect"; "Was engineering manager"; "At Fernwood Labs I was engineering manager"; "Served as …"; "Worked as the …"; "I was also …"; "I was briefly the …"; "I was engineering manager overseeing …"; "My title was …"; "Ada was …". Passing: "I was Platform Engineer", "I was a Platform Engineer", "I was platform engineer" and "Was Platform Engineer" on C9; and on C10 ("Engineering manager at Harbor, 2021–2023."): "I was (the) engineering manager at Harbor", "Served as …", "Worked as the …", "I was also …", "I was briefly the …". No title in "was developer-friendly", "was engineer-led" or "was head-to-head", and a draft saying "which was developer-friendly" passes. "The biggest win was developer tooling …", "…was a partner integration" and "…was a developer preview …" pass, as at `00ff33e`. `titlesIn` expectations |
+| Z4(a) | `f89d4f7` | Y2's 23 words are a list of their own, `CAPITALIZED_ABBREVIATIONS`, read as abbreviations only with a capital first letter. In lower case each ends its sentence, and an uncited one of one or two letters gets Y2's hint ("ft."). The trade, recorded: "…on Quill Rd. Shipped … [C3]." is one sentence, as "…for Quill Inc. Shipped …" is | Validator › revision 4, Z4 (5 of 18): "Worked as a sales rep. …", "…the next gen. …", "…6 ft. …" and "…Quill rd. …" refused as uncited; the reviewer's Mt., Ft., Lt. and Mx. passing; the Rd. and Inc. trade pinned. Also the edited Y2 test below (23 rows) |
+| Z4(b) | `f89d4f7` | "scores of" is a count only where a count can start: at the start of a sentence or a phrase, and after a verb, a preposition or a conjunction. It is a noun right after a determiner or a possessive ("the", "its", "their" …), a scored word ("credit", "test", "risk", "high" …), a word with "'s", an acronym ("NPS"), or a word a determiner comes right before ("its onboarding scores of", "the combined scores of"), unless that word is a preposition or a conjunction ("this and scores of"). A comma, full stop, semicolon, colon or bracket right before "scores" starts a phrase: number tokens now carry `closes` | Validator › revision 4, Z4 (10 of 18). Passing on C1: "the credit scores of merchants", "test scores of the release checks", "the merchant risk scores of Northwind Labs", "its fraud scores", "its onboarding scores", "the combined scores", "the NPS scores". Still refused as `number`: after "and", after a verb, opening the sentence, after "the team,", after "the team and", after "this and", after "that", after "by". `numbersIn` expectations; a claim's own "Mentored scores of engineers" passes |
+| Z4(c) | `f89d4f7`, `c30609c` | `datesIn` notes whether a marker read before revision 3 leaves the text open, wherever it stands: the open words ("present", "current(ly)", "ongoing", "since", "still", "onward(s)"); a range ending in one ("2019 to date", "2021–now", "until today"); X4's "to/until/till this day" and "and counting"; a range left open ("2021–"); a start with no end. When only revision 3's words or phrases leave it open, `DateFacts` carries `presentOnly: true`, and `isOpenEnded`, which is read for claims only, ignores that open end. A sentence's open end is read as before | Validator › revision 4, Z4 (3 of 18). Against "Built the Harbor ledger service, now retired." (and the same with 2019–2021): "Still run …", "Have run … to date", "Currently run …" and "Now run …" refused. Claims open by an older marker with a present word first, each passing its draft: "since 2021", "starting in 2022", "2021–now", "to this day", "(2021–)", "currently". C7's "…, which I remain today [C8][C7]" passes. `datesIn` expectations. Revision 3's Y1 tests pass unchanged |
+
+**The rulings' costs, recorded.** Each is a refusal, never a pass.
+- **Z4(c).** "Built the Harbor ledger service, now retired [C9]." citing that claim is refused now. The sentence's "now" says it is still going on, and the claim isn't open. This is the class of Y1's "now use" and "remain consistent"; "…, which has been retired [C9]." passes. The Z4(c) test pins it.
+- **Z4(a).** The Rd. and Inc. trade above. In lower case, "moved the rack 6 ft. to the left" now ends at "ft.", and the hint says to write it out.
+- **Z4(b).** A claim that uses "the scores of" as a count ("Onboarded the scores of engineers who joined …") states none, so a draft's bare "scores of" isn't among its facts.
+- **Z2.** A bracket that names a team with a seniority word in it ("(Lead Generation)") joins the title. A title still compares whole, so a claim's "Platform Engineer (Staff)" matches neither a draft's "Staff Platform Engineer" nor its bare "Platform Engineer".
+- **Z3.** After "I was", a role word is read wherever it stands, so "I was the only engineer on call" states "only engineer", as "joined as the only engineer" already did. "I was a developer advocate" states "developer", because "advocate" is not a role word; the same holds after "as".
+
+**Round-4 issues → Z and test.**
+
+| Issue | Z | Test |
+|---|---|---|
+| Critic 1 (a regression against `1a0f854`): after a failed attempt, Prepare again no longer retries it | Z1 | Page › revision 4, Z1 |
+| Critic polish: "scale 1" for the four `empty-*` retakes | Z1's note | Revision 3's screenshots paragraph, corrected in `06db0d8` |
+| Reviewer 1 (from Y3): a bracketed seniority word after the claim's title passes | Z2 | Validator › revision 4, Z2 |
+| Reviewer 2 (from Y3): "I was engineering manager at …" passes | Z3 | › revision 4, Z3 |
+| The reviewer's costs: "sales rep.", "next gen." and "Quill Rd."; "credit scores of"; "now retired" | Z4(a)–(c) | › revision 4, Z4 |
+| P05.1 findings fixed here, as ruled: "Staff engineer (Senior) at Harbor"; "(Sr.)" refused as uncited; "I was the engineering manager" | Z2, Z3 | › revision 4, Z2 and Z3 |
+| The other P05.1 findings: "…, and the platform team's manager [C9]"; "x.com."; "…through the last month of 2023" | none | Carried to P05.1; untouched |
+
+**Checked against the reviewer's probes.** Copies of r2–r2d, r3–r3d and r4–r4c (11 files, 241 verdicts) in `/tmp/wc-p05e2-probes/` ran at the head and at `00ff33e` (that head's three validator files, in `/tmp/wc-p05e2-base-00ff33e/`).
+- **15 verdicts changed, all as ruled.** The reviewer's title probes are now refused: r4's four brackets and "I was …", and r4b's "(Staff)", "(Senior)" on C10 and its three "I was" forms. r4's "credit scores of" passes, and its "sales rep." and "next gen." are refused. r4c's "Still run" and "to date" are refused. "(Sr.)" stays refused, now for its title, "platform engineer sr", rather than as uncited.
+- **What r4 still shows:** "Quill Rd." passing (the recorded trade); "known today" and "remain consistent" refused (the costs Y1 keeps); "the last month of the range" refused (P05.1); and "the last quarter of a stated year" refused, because its year isn't in its claim (C11 states none; the same at `1a0f854`).
+- **r2, r2b–d, r3, r3b–d:** no verdict changed.
+- **The realistic resume and cover letter** (`/tmp/wc-p05e2-scratch/realistic-r3.ts`) pass whole with the "now use" line worded as the letter words it, as in revision 3. In the reviewer's r3 realistic probe, "realistic resume + cover letter" passes, and the only output that differs from `00ff33e` is `datesIn('Now a Platform Engineer')`, which now carries `presentOnly: true`. The realistic draft pinned in `validator.test.ts` passes unchanged.
+- **At `00ff33e`'s validator** (swapped in, then restored byte for byte, by `/tmp/wc-p05e2-mut/revert-r4.mjs`), 57 of the 77 validator tests whose names say "revision 4" fail; 23 of the 57 are the renamed Y2 rows. The 20 that pass are controls, refused or passing at both heads:
+  - "(Tech Lead)", "(Lead)" and "(Principal)", and the separators test;
+  - "Was" opening a sentence, "served as", "worked as the", and "Ada was engineering manager at …". At `00ff33e`, "Was …" and "Ada was …" are refused for a title read back through "was" ("was engineering manager", "ada was engineering manager"); the head reads "engineering manager";
+  - the test that "was" after another subject can introduce a thing a role word describes, and the adjective test;
+  - Y2's capitalized words;
+  - the eight "scores of" counts still refused;
+  - the claims open by an older marker.
+
+**Findings for P05.1** (older kinds, or new cases of a class `00ff33e` has with "as"):
+1. A possessive before a role phrase after "was": "I was Harbor's platform engineer [C10]." reads no title, like revision 3's finding "…, and the platform team's manager".
+2. "am", "is" and "were" are not title contexts: "I am engineering manager at Fernwood Labs [C9]." passes. Z3 names "was" only.
+3. After a subject other than "I", a title that runs on is not read: "Ada was engineering manager overseeing …" passes. Resumes and letters speak in the first person or without a subject, which Z3 covers.
+4. The costs above for Z2 and Z3.
+
+**Edited existing assertions: the complete list.** `git diff 00ff33e HEAD -- runner/test` removes 19 lines. Two are one assertion and its test's name, for Z4(a). Of the other 17, 15 are the two helpers that moved unchanged and one is a widened import list. The last is the Y5 describe's opening line, which the diff shows removed above the moved helpers and added back, unchanged, below them (`:911`).
+1. **Z4(a).** `runner/test/validator.test.ts:890` at `00ff33e` (now `:892`), the lower-case line of Y2's "keeps a sentence whole" test.
+   - Old: ``expect(splitSentences(`Shipped the on-call rotation tooling on Quill ${abbreviation}. for three engineering teams [C3].`)).toHaveLength(1);``
+   - New: the same sentence, `.toHaveLength(2)`. Z4(a) rules that a lower-case one ends its sentence.
+   - Added beside it, at `:890`: the same sentence with the capitalized word, `.toHaveLength(1)`, so a capitalized word before a lower-case one stays covered.
+2. **Z4(a).** The same test's name, `:886`: "keeps a sentence whole at “%s.”" → "keeps a sentence whole at a capitalized “%s.”, and ends one at the lower-case word (revision 4, Z4)". Its 23 rows are unchanged.
+3. **Z1, moved, not changed.** `runner/test/application-page.test.ts:893–908` at `00ff33e`: the Y5 describe's helpers `letterChoices` and `prepareFromForm`, now at module scope (`:893–909`), so the Z1 describe shares them. Their bodies are the same code, one indent less. `letterChoices`'s comment gains "(revision 3, Y5)", and `prepareFromForm` gains one. The Y5 describe's three tests are unchanged.
+- The import list at `runner/test/application-page.test.ts:8` (now `:9`) gains `INTERRUPTED_MESSAGE`, and line 1 imports `randomUUID`.
+- `c30609c` and `6c1bbb3` only added to tests that revision 4 itself added. `c30609c` gave Z4(c)'s test one more claim, C14, and a check for it; the test's claim list gained C14, which is its one changed line. `6c1bbb3` added five rows and two statements to Z3's tests, and one new Z3 test.
+
+**Mutation proofs (Z1–Z4).** `/tmp/wc-p05e2-mut/mutate-r4.mjs` applies each mutation as an exact, once-only replacement. It runs the named test files with Vitest's JSON reporter, then restores the original bytes and checks them byte for byte. `git status --porcelain` was empty afterwards. All 39 mutations fail tests, run at `6c1bbb3`.
+- Z1 ran the page's Z1 and Y5 tests (5).
+- Z2–Z4 ran `validator.test.ts` (293 cases).
+
+| ID | Mutation | Failed | What broke |
+|---|---|---|---|
+| Z1-a | `00ff33e`'s condition: only a parked attempt keeps its own letter choice | 2 | Both Z1 tests: the failed attempt (the critic's steps) and the interrupted one |
+| Z1-b | A failed attempt retried as asked, an interrupted one not | 1 | Z1's interrupted attempt |
+| Z1-c | An interrupted attempt retried as asked, a failed one not | 1 | Z1's failed attempt |
+| Z1-d | An idle state takes the last attempt's choice too (Y5's r3-s7 back) | 2 | Y5's critic's steps; its other direction |
+| Z2-a | No bracket joins the title before it (`00ff33e`) | 14 | The reviewer's four; "(Sr.)"; "(Staff-level)"; "(a Staff role)"; "(engineering manager)"; the seniority part after a company; "(Senior)" on C10 and in place of C12's bracket; the named title; the claim's own "(Staff)" with "(Senior)" against it; the expectations |
+| Z2-b | A seniority word no longer makes a bracket part of the title | 13 | The same, except "(engineering manager)" |
+| Z2-c | A role phrase no longer makes a bracket part of the title | 1 | "(engineering manager)" |
+| Z2-d | Every bracket joins the title before it: a company, a place, a team too | 5 | Z2's separators and expectations; Y3's claim's own title in each place, and its expectations; C13's "Staff Engineer (2021–)" in Z4(c)'s test |
+| Z2-e | A title read inside a joined bracket is kept as well | 1 | Z2's expectations |
+| Z2-f | A bracket part with a joining word counts ("a staff of eight") | 1 | Z2's separators |
+| Z2-g | The splitter reads the word with its closing bracket again (`00ff33e`: "(Sr.)" ends a sentence) | 2 | "(Sr.)" as one sentence; Z2's splitter test |
+| Z2-h | A bracketed abbreviation never ends a sentence, even before a capital | 1 | Z2's splitter test ("(Inc.) Shipped" splits) |
+| Z3-a | "was" is no title context (`00ff33e`) | 9 | "I was", "I was the", "I was a", "I was platform architect", "Was …", "was" mid-sentence, the title that runs on, "My title was"; the expectations |
+| Z3-b | A capitalized "Was" opening a sentence is part of a title again | 1 | The claim's own title after "was" ("Was Platform Engineer") |
+| Z3-c | Any role word after "was" is a title ("was developer-friendly") | 1 | The adjective test |
+| Z3-d | "engineer-in-residence" names no role | 1 | The expectations |
+| Z3-e | A compound with a joining word inside names a role ("head-to-head") | 1 | The adjective test |
+| Z3-f | An adverb after "was" is read into the title ("also engineering manager") | 1 | The claim's own title after "I was also" |
+| Z3-g | The look-back passes no adverb, so "I was also the …" reads no title | 2 | "I was also"; "I was briefly the" |
+| Z3-h | "was" introduces a title after any subject, whether the title ends or runs on | 1 | "The biggest win was developer tooling" and the other two |
+| Z3-i | "I was" no longer introduces a title that runs on | 1 | "I was engineering manager overseeing …" |
+| Z3-j | After another subject, a title that ends is no longer read | 2 | "Ada was engineering manager at …"; the expectations |
+| Z4a-a | Y2's words count in any case (`00ff33e`: "a sales rep. Shipped …" rides along) | 27 | The 23 edited Y2 rows; "sales rep.", "next gen.", "6 ft.", "Quill rd." |
+| Z4a-b | Y2's words never count (`1a0f854`: "Mt. Hood" ends a sentence) | 25 | The 23 Y2 rows; Y2's test of the reviewer's three and Mx.; Z4's capitalized test |
+| Z4b-a | "scores of" is a count after any word (`00ff33e`) | 2 | The nouns test; the expectations |
+| Z4b-b | "scores of" is never a count | 11 | Y4's "scores of" and its expectations; Z4's eight counts; Z4's expectations |
+| Z4b-c | A comma before "scores" no longer starts a count | 1 | The count after a comma, with a determiner before ("the team, scores of") |
+| Z4b-d | A determiner two words back no longer makes "scores" a noun | 1 | The nouns test ("its fraud scores of") |
+| Z4b-e | A conjunction after a determiner no longer starts a count | 1 | The count after "this and" |
+| Z4b-f | The scored words no longer make "scores" a noun | 2 | The nouns test; the expectations |
+| Z4b-g | A possessive or an acronym no longer makes "scores" a noun | 1 | The expectations |
+| Z4c-a | Revision 3's words open a claim again (`00ff33e`) | 1 | "now retired" |
+| Z4c-b | The open words ("since", "still", "currently" …) no longer mark a claim open | 2 | The claims open by an older marker; the expectations |
+| Z4c-c | A range ending in "now" no longer marks a claim open | 2 | The same two |
+| Z4c-d | X4's "to this day" counted as revision 3's | 2 | The same two |
+| Z4c-e | A range left open ("2021–") no longer marks a claim open | 2 | The same two |
+| Z4c-f | A start with no end no longer marks one | 2 | X4's open ends; Z4's expectations |
+| Z4c-g | Revision 3's phrases ("to date") mark a claim open | 1 | The expectations |
+| Z4c-h | X4's "and counting" counted as revision 3's | 1 | The expectations |
+
+Each result is in `/tmp/wc-p05e2-mut/r4/<ID>.json`, and the list in `/tmp/wc-p05e2-mut/r4/summary.json`.
+
+**Screenshots.** None were retaken: no Z item changes what the page shows. Z1 changes which letter choice the detail's Prepare again sends, and the page tests follow the critic's steps.
+
+**`runner/README.md`.** P05's line on Prepare again now says that, with nothing pending, it keeps the newest version's letter choice, and that a pending attempt keeps its own, whether it continues a parked attempt or retries a failed or interrupted one.
+
+**The chain,** from the repo root, twice. `git status --porcelain` was empty after each run.
+- **At `dd57e5d`, after the merge:** every step exited 0. The runner had 55 files and 1339 tests; the other counts were the same as below.
+- **At `6c1bbb3`,** this report's parent:
+  - `pnpm install --frozen-lockfile`: already up to date.
+  - `pnpm typecheck`: 6 workspaces, exit 0.
+  - `pnpm test`, exit 0:
+    - contracts: 16 files, 235 tests
+    - job-assistant: 6 files, 153 tests
+    - catalog: 26 files, 168 tests
+    - runner: 55 files, 1345 tests (revision 3: 1289). Revision 4 adds 56: validator 54 and page 2. The eval then passed 7 of 7 files and 161 gates, preparation 54.
+    - extension: 21 files and 329 tests passed; 1 file and 5 tests skipped
+    - `scripts/*.test.mjs`: 2 of 2
+  - `pnpm -r lint`: exit 0, `--max-warnings 0`.
+  - `pnpm check:fixtures`: exit 0.
+- No rerun was needed at `--workspace-concurrency=1`.
+
+**CI.** Every run includes the extension step, "Build and test the extension (vitest against dist/, then Playwright)".
+
+| Head | Run | Result |
+|---|---|---|
+| `7baaa21` | 36096264553 | success |
+| `f89d4f7` | 36097928261 | success |
+| `06db0d8` | 36098032415 | success |
+| `dd57e5d` | 36098055110 | success |
+| `c30609c` | 36098616464 | success |
+| `6c1bbb3` | 36099401520 | success |
+
+The reply gives this report commit's own head SHA and CI run.
+
+**Not done.** Everything in Z1–Z4 is done. No screenshots were retaken (above). The carried items (P05.1, P06, P06.1) are untouched.
+
+**Boundaries.**
+- **Scope.** Apart from what the merge brought from integration (the two handoffs, `logs/blocks.md`, `logs/latest.md`, P06's and P06.1's specs), only these changed since `00ff33e`:
+  - `runner/validate/facts.ts`, `runner/validate/text.ts` and `runner/ui/assets/application.js`;
+  - `runner/test/validator.test.ts` and `runner/test/application-page.test.ts` (new tests, and the edits listed), P05's line in `runner/README.md`, and this packet file.
+  - These are unchanged: `packages/contracts`, `context.ts`, `run-harness.ts`, `local-ui.ts`, the routes, the store, the export, P03's, P03.2's and P04's files, the skills, the templates, `extension/`, `runner/package.json`, the lockfile and the vitest config.
+- **eve.** Nothing about turns changed. Z1's retry is the ordinary preparation path. The page test's interrupted attempt is written through `ApplicationsStore`, as the route test for interruptions writes one.
+- **Ports and scratch.** No server was started in this revision, so no port was bound; 127.0.0.1:4320 is free. Only `/tmp/wc-p05e2-*` was written: the probes (the r4 copies, `z3-honest.ts`, `run-all.mjs`, `compare.mjs` and their outputs), `base-00ff33e/` (that head's validator, for comparison), `mut/r4/` with `mutate-r4.mjs` and `revert-r4.mjs`, scratch, and the chain logs (`/tmp/wc-p05e2-chain-r4-*.log` at `dd57e5d`, `/tmp/wc-p05e2-chain-r4b-*.log` at `6c1bbb3`). The reviewer's and critic's folders were only read.
+- **Refused commands.** No deny rule or permission check refused anything. The harness refused five commands as too complex to verify: a heredoc edit followed by a typecheck, a loop running node over a runtime value, a heredoc append followed by Vitest, a loop running `sips` over the screenshots (to read the `empty-*` scale), and a wait loop with arithmetic. I split them or used Write and Edit. It also refused writing a report-like file under `/tmp`, so this report was written here only. ESLint's `no-control-regex` rejected control characters as the bracket marks, so the marks are private-use characters.
+- **Orchestrator messages.** Two arrived, both carrying the code word: Z1 at the critic's verdict, then Z2–Z4 at the reviewer's. Both were followed. Nothing else claimed to be from the orchestrator. Harness notices about other agents' background tasks (P06.1's implementer and its UI critic) also appeared; they asked nothing of this packet, and I acted on none.
