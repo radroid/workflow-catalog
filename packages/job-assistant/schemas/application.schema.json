@@ -126,6 +126,7 @@
           "enum": [
             "idle",
             "running",
+            "waiting",
             "failed"
           ]
         },

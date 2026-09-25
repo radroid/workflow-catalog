@@ -1422,7 +1422,8 @@ describe("Applications page: outcomes that settle in one refresh (revision 2, X6
     await until(() => page.outcomes().length === 3, "the two outcomes", 10_000);
     await page.quiet();
     const [line] = page.outcomes().slice(2);
-    expect(line).toBe("“Backend Engineer · Qu…” needs your answers; prepared “Platform Lead · Fernw…”.");
+    // P06 (carried from P05's round-3 critic): names are cut at a word, never mid-word, and no "·" is left before the "…".
+    expect(line).toBe("“Backend Engineer…” needs your answers; prepared “Platform Lead…”.");
     expect(line!.length).toBeLessThanOrEqual(80);
     expect(page.byId("last-action").className).toContain("done");
     page.refreshNow();
@@ -1442,7 +1443,8 @@ describe("Applications page: outcomes that settle in one refresh (revision 2, X6
     await until(() => page.outcomes().length === 4, "the three outcomes", 10_000);
     page.refreshNow();
     await page.quiet();
-    expect(page.outcomes().slice(3)).toEqual(["3 applications: 1 couldn't be prepared, 1 needs your answers, 1 is ready."]);
+    // P06 (carried from P05's round-3 critic): the counted form still names the application that couldn't be prepared.
+    expect(page.outcomes().slice(3)).toEqual(["Couldn't prepare “Platform Engineer · Harbor”; 1 needs your answers, 1 is ready."]);
     expect(page.byId("last-action").className).toContain("refused");
   });
 });
@@ -1500,5 +1502,150 @@ describe("Applications page: the line", () => {
     await until(() => page.lines.some((line) => line.startsWith("Needs your answers")), "the questions", 10_000);
     expect(page.lines.length).toBeGreaterThanOrEqual(2);
     for (const line of page.lines) expect(line.length, line).toBeLessThanOrEqual(line.includes("“") ? 80 : 90);
+  });
+});
+
+/**
+ * P06: the items carried from P05's round reviews and P06.1's. The line cut at a word and the counted form that
+ * names the failure are the X6 tests above, whose expectations P06 changed.
+ */
+describe("Applications page: carried into P06", () => {
+  /** A preparation of `jobId` started from the page, held in its model turn until `release` runs. */
+  async function watching(page: Page, model: ScriptedModel, jobId: string, name: string): Promise<() => void> {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    model.beforeTurn = () => held;
+    pressPrepare(page, jobId);
+    await until(() => page.lines.includes(`Preparing “${name}”…`), "the start");
+    return release;
+  }
+
+  it("a runner that hangs rather than stops is noticed: a request unanswered past the timeout shows the runner-down notice, once", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    let hang = false;
+    let abandoned = 0;
+    // A runner that accepts the connection and never answers: only the page's own timeout ends the request.
+    const page = await openPage(bridge, {
+      intercept: (input, init) => {
+        if (!hang || !input.startsWith("/api/")) return undefined;
+        const signal = (init as { signal?: AbortSignal }).signal;
+        return new Promise<Response>((_resolve, reject) =>
+          signal?.addEventListener("abort", () => {
+            abandoned += 1;
+            reject(new Error("The operation was aborted."));
+          }),
+        );
+      },
+    });
+    // The page's 15-second request timeout, shortened for the test; every other timer is left as it is.
+    const pageTimer = globalThis.setTimeout;
+    (globalThis as Record<string, unknown>).setTimeout = (callback: () => void, ms?: number) => pageTimer(callback, ms === 15_000 ? 300 : ms);
+    const release = await watching(page, model, jobId, "Platform Lead · Fernwood");
+
+    hang = true;
+    page.refreshNow();
+    await until(() => page.lines.at(-1) === "Can't reach the runner. Is it still running?", "the notice");
+    expect(abandoned).toBeGreaterThan(0);
+    expect(page.byId("ready-runner").textContent).toBe("The runner can't be reached right now.");
+    expect(page.byId("last-action").className).toContain("refused");
+    page.refreshNow();
+    await sleep(700);
+    expect(page.lines.filter((line) => line === "Can't reach the runner. Is it still running?")).toHaveLength(1);
+
+    hang = false;
+    page.refreshNow();
+    await until(() => page.lines.at(-1) === "Still preparing “Platform Lead · Fernwood”…", "the notice to clear");
+    release();
+  });
+
+  it("when the runner line's Settings link holds focus and the line is replaced, focus moves to the section's heading, never to the page", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    let down = false;
+    const page = await openPage(bridge, { intercept: (input) => (down && input.startsWith("/api/") ? Promise.reject(new TypeError("Failed to fetch")) : undefined) });
+    const release = await watching(page, model, jobId, "Platform Lead · Fernwood");
+    // Mid-preparation, the budget pauses: the runner line now links to Settings, and the person tabs to it.
+    await pauseBudget(bridge.workspace, bridge.clock, "paused for this test");
+    page.refreshNow();
+    await until(() => page.document.querySelector("#ready-runner a") !== null, "the runner line's Settings link");
+    const link = page.document.querySelector("#ready-runner a")!;
+    expect(link.textContent).toBe("Settings");
+    link.focus();
+    expect(page.document.activeElement).toBe(link);
+
+    down = true;
+    page.refreshNow();
+    await until(() => page.byId("ready-runner").textContent === "The runner can't be reached right now.", "the runner line to be replaced");
+    expect(link.isConnected).toBe(false);
+    expect(page.document.activeElement?.id).toBe("ready-title");
+    expect(page.byId("ready-title").getAttribute("tabindex")).toBe("-1");
+    down = false;
+    release();
+  });
+
+  it("names each application when every name is shorter than 16 characters (carried from P06.1's review)", async () => {
+    const mixed: Planner = (prompt, attempt) => (prompt.company === "Quill" ? honest(HOSTILE)(prompt, attempt) : honest(PLATFORM_LEAD)(prompt, attempt));
+    const { bridge, model } = await bridgeAndModel(mixed);
+    const lead = await seedJob(bridge.workspace, bridge.clock, { ...platformLeadJob(), structured: { ...platformLeadJob().structured, title: "Lead" } });
+    const quill = await seedJob(bridge.workspace, bridge.clock, { ...fixtureJob(HOSTILE_JOB), structured: { ...HOSTILE_JOB.structured, title: "Dev" } });
+    const page = await openPage(bridge);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    model.beforeTurn = () => held;
+    for (const [jobId, name] of [
+      [lead.jobId, "Lead · Fernwood"],
+      [quill.jobId, "Dev · Quill"],
+    ] as const) {
+      pressPrepare(page, jobId);
+      await until(() => page.lines.includes(`Preparing “${name}”…`), `the start of ${name}`);
+      await until(() => page.byId("prepare-submit").getAttribute("aria-disabled") === "false", "the prepare button");
+    }
+    page.setVisibility("hidden");
+    await page.quiet();
+    release();
+    await waitForPreparationQueue(bridge.workspace.root);
+    page.refreshNow();
+    await until(() => page.outcomes().length === 3, "the two outcomes", 10_000);
+    expect(page.outcomes()[2]).toBe("“Dev · Quill” needs your answers; prepared “Lead · Fernwood”.");
+  });
+
+  it("a refusal repeated word for word is announced again whole: the live region never holds the tag alone", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await pauseBudget(bridge.workspace, bridge.clock, "paused for this test");
+    const page = await openPage(bridge);
+    const region = page.byId("last-action");
+    const regions: string[] = [];
+    new page.window.MutationObserver(() => regions.push(region.textContent ?? "")).observe(region, { childList: true, subtree: true, characterData: true });
+
+    pressPrepare(page, jobId);
+    await until(() => page.outcomes().length === 1, "the first refusal");
+    pressPrepare(page, jobId);
+    await until(() => page.outcomes().length === 2, "the second refusal");
+    const [first, second] = page.outcomes();
+    expect(first).toBe("Not prepared: the run budget is paused; resume it in Settings.");
+    expect(second).toBe(first);
+    // Between the two, the region is cleared whole (tag and text), then filled whole; never "Refused" by itself.
+    expect(regions).not.toContain("Refused");
+    expect(regions.filter((text) => text === `Refused${first}`)).toHaveLength(2);
+    expect(regions.every((text) => text === "" || text.endsWith(first!) || text === "Working" || text.startsWith("Working"))).toBe(true);
+  });
+
+  it("two versions from one profile version say what separates them: the later names the earlier and why", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    // Excluding a claim keeps the profile's approved version, so version 2 is made from profile version 1 too.
+    const profiles = new ProfileStore(bridge.workspace, bridge.clock);
+    await profiles.decideClaim((await profiles.read()).claims[5]!.id, "excluded");
+    await prepareElsewhere(bridge, jobId);
+    const page = await openPage(bridge);
+    page.document.querySelector(".app-open")!.click();
+    await until(() => all(page, ".version").length === 2, "both versions");
+    const [v2, v1] = all(page, ".version").map((node) => node.querySelector("p.muted")?.textContent ?? "");
+    expect(v2).toMatch(/^Prepared .+ from career profile version 1 and job revision 1\. Same profile version as version 1, made after you excluded or changed a claim it cited\. It replaces version 1\.$/);
+    expect(v1).toMatch(/^Prepared .+ from career profile version 1 and job revision 1\.$/);
+    expect(v1).not.toContain("Same profile version");
   });
 });

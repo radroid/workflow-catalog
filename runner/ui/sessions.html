@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sessions · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/sessions.css" />
+    <script type="module" src="/ui/assets/sessions.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1 id="page-title" tabindex="-1">Sessions</h1>
+      <p class="lede">A session is a group of Ready applications the extension opens as one tab group. Here is what went out, what your browser said about each tab, and anything that needs your review. Start one on the <a href="/ui/board">Board</a>.</p>
+
+      <!-- The page's one persistent live region: each outcome is announced once, here and nowhere else. -->
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><div class="last-action-body"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div></div>
+
+      <section class="card" aria-labelledby="review-title">
+        <h2 id="review-title">Needs your review</h2>
+        <p class="muted small">Results the runner won't guess about: a tab that closed with no choice, or one your browser couldn't open or didn't mention. Nothing here moved a stage.</p>
+        <ul id="review-list" class="review-list"><li class="muted">Loading…</li></ul>
+      </section>
+
+      <section class="card" aria-labelledby="sessions-title">
+        <h2 id="sessions-title">Sessions</h2>
+        <div id="sessions-list" class="sessions-list"><p class="muted">Loading…</p></div>
+      </section>
+
+      <section class="card" aria-labelledby="files-title">
+        <h2 id="files-title">File bridge</h2>
+        <p class="muted small">Without a paired browser, sessions and results travel as files. The extension imports <code>outbox/application-session.json</code>, and its exported results go in <code>inbox/</code>, where you import them here. Importing never undoes a newer choice.</p>
+        <p id="sync-line" class="sync-line">Loading…</p>
+        <h3>Outbox</h3>
+        <p id="outbox-line" class="small"></p>
+        <h3>Inbox</h3>
+        <ul id="inbox-list" class="inbox-list"></ul>
+      </section>
+    </main>
+  </body>
+</html>

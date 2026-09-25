@@ -139,9 +139,17 @@ describe("local UI: pages", () => {
     await writeFile(path.join(uiDir, "extras.html"), '<meta name="runner-nav" content="Extras">');
     const nav = await renderNav(uiDir, "jobs");
     expect(nav).toBe(
-      '<nav class="runner-nav" aria-label="Runner"><a href="/ui/onboarding">Onboarding</a><a href="/ui/jobs" aria-current="page">Jobs</a><a href="/ui/status">Status</a><a href="/ui/extras">Extras</a></nav>',
+      // P06 (carried from P05's review): Applications is a planned page now, between Jobs and Board.
+      '<nav class="runner-nav" aria-label="Runner"><a href="/ui/onboarding">Onboarding</a><a href="/ui/jobs" aria-current="page">Jobs</a><a href="/ui/application">Applications</a><a href="/ui/status">Status</a><a href="/ui/extras">Extras</a></nav>',
     );
     expect(await renderNav(UI_DIR, "status")).toContain("Status");
+  });
+
+  it("places Applications between Jobs and Board in the real pages' navigation (P06)", async () => {
+    const labels = [...(await renderNav(UI_DIR, "board")).matchAll(/<a href="\/ui\/([a-z-]+)"/g)].map((match) => match[1]);
+    expect(labels.indexOf("application")).toBe(labels.indexOf("jobs") + 1);
+    expect(labels.indexOf("board")).toBe(labels.indexOf("application") + 1);
+    expect(labels.indexOf("sessions")).toBe(labels.indexOf("board") + 1);
   });
 });
 

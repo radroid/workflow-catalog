@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Board · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/board.css" />
+    <script type="module" src="/ui/assets/board.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page wide">
+      <h1 id="page-title" tabindex="-1">Board</h1>
+      <p class="lede">Every application by its stage. A stage moves only when you move it here, or choose Applied in the extension's side panel. How the last preparation went shows under each application and never moves its stage.</p>
+
+      <!-- The page's one persistent live region: each outcome is announced once, here and nowhere else. -->
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><div class="last-action-body"><span class="tag">Last action</span><span class="text">Nothing yet.</span></div></div>
+
+      <div class="board-top">
+        <section class="card" aria-labelledby="runs-title">
+          <h2 id="runs-title">Runs</h2>
+          <p id="runs-line" class="runs-line">Loading…</p>
+        </section>
+
+        <section class="card" aria-labelledby="start-title">
+          <h2 id="start-title">Start applying</h2>
+          <p id="start-device" class="small"></p>
+          <form id="start-form" novalidate>
+            <div class="field">
+              <label for="start-name">Session name</label>
+              <input id="start-name" name="title" type="text" maxlength="80" value="Apply today" autocomplete="off" aria-describedby="start-chosen" />
+            </div>
+            <p id="start-chosen" class="small muted">Choose Ready applications below.</p>
+            <button class="button" type="submit" id="start-submit" aria-disabled="true">Start a session</button>
+          </form>
+          <p id="start-sync" class="small sync-line" hidden></p>
+        </section>
+      </div>
+
+      <section aria-labelledby="stages-title">
+        <h2 id="stages-title" class="visually-hidden">Stages</h2>
+        <div id="board" class="board">
+          <p class="muted">Loading…</p>
+        </div>
+        <p id="board-unreadable" class="small unreadable" hidden></p>
+      </section>
+    </main>
+  </body>
+</html>
