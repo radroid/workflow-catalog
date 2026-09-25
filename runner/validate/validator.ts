@@ -1,6 +1,6 @@
 import type { ClaimKind, ClaimStatus } from "@workflow-catalog/contracts";
 import { credentialsIn, datesIn, isOpenEnded, numbersIn, titlesIn } from "./facts.ts";
-import { citedLabels, hasUuid, ngrams, quoteSentence, splitSentences, strayBrackets, stripCitations, uuidsIn, withoutUuids, wordsOf } from "./text.ts";
+import { citedLabels, hasUuid, ngrams, quoteSentence, splitSentences, strayBrackets, stripCitations, unlistedDottedEnd, uuidsIn, withoutUuids, wordsOf } from "./text.ts";
 
 /**
  * The preparation validator (P05, mvp-spec F7, hard-problems.md #2). No
@@ -15,6 +15,8 @@ import { citedLabels, hasUuid, ngrams, quoteSentence, splitSentences, strayBrack
  * several):
  *
  * - `uncited`: every sentence cites at least one claim by its label, `[C1]`.
+ *   One that ends in an unlisted one-part dotted word ("Sq.") is told where
+ *   it seemed to end, and to write an abbreviation out (revision 3, Y2).
  * - `stray_marker`: square brackets hold claim labels only.
  * - `unknown_citation`: every label is one of the claims this preparation
  *   was given.
@@ -221,7 +223,10 @@ function checkSentence(sentence: string, where: DraftLocation, context: Context)
 
   const labels = citedLabels(sentence);
   if (labels.length === 0) {
-    refuse("uncited", "Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out.");
+    // A sentence that ends in an unlisted one-part dotted word may have been cut short at an abbreviation (Y2).
+    const dotted = unlistedDottedEnd(plain);
+    const hint = dotted ? ` This sentence seems to end at “${dotted}”. If that's an abbreviation, write the word out.` : "";
+    refuse("uncited", `Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out.${hint}`);
     return { refusals, forModel }; // nothing to check facts against
   }
 

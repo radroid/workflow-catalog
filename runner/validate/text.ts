@@ -28,6 +28,9 @@ const ABBREVIATIONS = new Set([
   "dr", "mr", "mrs", "ms", "prof", "st", "jr", "sr", "vs", "etc", "inc", "ltd", "co", "corp", "no", "approx", "dept", "est", "fig", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
   // Revision 2, X2.
   "incl", "esp", "excl", "yrs", "avg", "intl", "univ", "govt", "mgmt", "assoc", "al", "cf",
+  // Revision 3, Y2: short ones a claim may state ("Mt. Hood", "Ft. Worth", "a Lt.", "Mx. Quill"), and titles and addresses.
+  "mt", "ft", "pt", "lt", "mx", "rd",
+  "sgt", "capt", "cpl", "pvt", "col", "gen", "maj", "adm", "cmdr", "rev", "hon", "gov", "sen", "rep", "supt", "ave", "blvd",
 ]);
 
 /**
@@ -136,6 +139,17 @@ export function isAbbreviation(word: string): boolean {
   return parts >= 2 && DOTTED.test(bare) && !TWO_WORDS_RUN_TOGETHER.test(bare);
 }
 
+/**
+ * The one-part dotted word a sentence ends in, when it is neither listed nor an initial: "it.", "UK.", "Sq." (revision
+ * 3, Y2). Such a word ends its sentence, so when what it ends is refused as uncited, the refusal says where the
+ * sentence seemed to end: if the word was an abbreviation, writing it out is the way through.
+ */
+export function unlistedDottedEnd(sentence: string): string | undefined {
+  const last = sentence.trim().split(/\s+/).at(-1) ?? "";
+  const word = last.replace(/^[\p{Ps}\p{Pi}"']+/u, "").replace(/[\p{Pe}\p{Pf}"']+$/u, "");
+  return /^[A-Za-z]{1,2}\.$/.test(word) && !isAbbreviation(word) ? word : undefined;
+}
+
 /** The index of the first character at or after `from` that isn't an invisible format character. */
 function nextVisible(text: string, from: number): number {
   let index = from;
@@ -221,8 +235,8 @@ function splitLine(line: string): string[] {
  * - A period never ends one when it ends an abbreviation or an initial
  *   (`B.S.`, `B.Eng.`, `Ph.D.`, `Inc.`, `incl.`, `J. Doe`), sits inside a
  *   number (`3.5`) or a name (`Node.js`, `ASP.NET`). A dotted word of one
- *   part ends one unless it is listed: "… for it. Shipped …" is two
- *   sentences (revision 2, X2).
+ *   part ends one unless it is listed (`Mt.`, `Ft.`, `Lt.`, `Mx.`: revision
+ *   3, Y2): "… for it. Shipped …" is two sentences (revision 2, X2).
  * - Invisible format characters are looked through, never at.
  *
  * Citation markers that open a sentence (`… Labs. [C1] Maintains …`) belong

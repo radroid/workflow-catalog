@@ -869,3 +869,42 @@ describe("revision 3, Y1: the present, and dates counted from today", () => {
     expect(datesIn("Platform Engineer at Fernwood Labs, 2019–2021.")).toEqual({ years: ["2019", "2021"], months: [], endYears: ["2021"], startOnly: false });
   });
 });
+
+describe("revision 3, Y2: short abbreviations a claim may state, and a way out for the rest", () => {
+  const cited = "Shipped the on-call rotation tooling used by three engineering teams";
+  const places = confirmedClaim("C9", "fact", "Moved the Harbor deploy fleet from the Mt. Hood data centre to the Ft. Worth region in 2022.");
+  const reserve = confirmedClaim("C10", "fact", "Served as a Lt. in the Fernwood reserve signals unit, 2015–2018.");
+
+  it("passes the reviewer's three: Mt. and Ft. and Lt. cited verbatim from their claims, and Mx. as an honorific", () => {
+    expect(rulesWith([places, reserve], "Moved the Harbor deploy fleet from the Mt. Hood data centre to the Ft. Worth region in 2022 [C9].")).toEqual([]);
+    expect(rulesWith([places, reserve], "Served as a Lt. in the Fernwood reserve signals unit, 2015–2018 [C10].")).toEqual([]);
+    expect(rules(resume("Led the payments infrastructure team at Northwind Labs, mentored by Mx. Quill [C1]."))).toEqual([]);
+    expect(splitSentences("Moved the Harbor deploy fleet from the Mt. Hood data centre to the Ft. Worth region in 2022 [C9].")).toHaveLength(1);
+  });
+
+  it.each(["mt", "ft", "pt", "lt", "mx", "rd", "sgt", "capt", "cpl", "pvt", "col", "gen", "maj", "adm", "cmdr", "rev", "hon", "gov", "sen", "rep", "supt", "ave", "blvd"])(
+    "keeps a sentence whole at “%s.”",
+    (abbreviation) => {
+      const title = `${abbreviation[0]!.toUpperCase()}${abbreviation.slice(1)}`;
+      expect(splitSentences(`Shipped the on-call rotation tooling with ${title}. Quill for three engineering teams [C3].`)).toHaveLength(1);
+      expect(splitSentences(`Shipped the on-call rotation tooling on Quill ${abbreviation}. for three engineering teams [C3].`)).toHaveLength(1);
+    },
+  );
+
+  it("still splits at a one-part dotted word that isn't listed: “it.” and “UK.”", () => {
+    expect(rules(resume(`The on-call team loved it. ${cited} [C3].`))).toEqual(["uncited"]);
+    expect(rules(resume(`${cited} in the UK. Won the Fernwood award [C3].`))).toEqual(["uncited"]);
+    expect(splitSentences(`Won the award for it. ${cited} [C3].`)).toHaveLength(2);
+  });
+
+  it("tells the model and the person where an unlisted one seemed to end the sentence, so writing it out is the way through", () => {
+    const hint = "This sentence seems to end at “Sq.”. If that's an abbreviation, write the word out.";
+    const result = check(resume("Ran the Harbor ops desk on Quill Sq. Fernwood for three engineering teams [C3]."));
+    expect(result.refusals.map((refusal) => [refusal.rule, refusal.sentence])).toEqual([["uncited", "Ran the Harbor ops desk on Quill Sq."]]);
+    expect(result.refusals[0]!.message).toBe(`Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out. ${hint}`);
+    expect(result.forModel[0]!.message).toBe(result.refusals[0]!.message);
+    // An ordinary sentence end gets no hint.
+    const plain = check(resume(`Won the Fernwood award. ${cited} [C3].`));
+    expect(plain.refusals[0]!.message).toBe("Every sentence needs the labels of the confirmed claims it states, like [C1]. Cite them, or take the sentence out.");
+  });
+});
