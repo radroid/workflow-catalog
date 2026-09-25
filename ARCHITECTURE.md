@@ -54,7 +54,7 @@ Owned by `packages/contracts`; full shapes in spec §5. Main entities:
 - **Job snapshot** — `jobs/<jobId>/snapshot-<rev>.json`: url, capturedAt, extractorVersion, contentHash, text, structured.
 - **Application** — `applications/<taskId>.json` (stage, revision, documents, notes, deadlines) plus generated documents and diffs (`applications/<taskId>/docs/`), its latest preparation attempt (`applications/<taskId>/preparation.json`: running, parked on gap questions with the answers so far, failed and why, or done), each prepared version (`applications/<taskId>/versions/v<n>.json`: the validated draft, the claims it cites, the per-sentence diff and the changes since the version it replaces), and the name and contact line on every document (`applications/details.json`, never sent to the model).
 - **Session manifest** and **bridge envelopes** — `open_application_group`, `browser_command_result`, `job_capture`, `application_status_changed`, `protocol: 1`.
-- **Run log** — `runs/<date>/<runId>.json`; budget pause and schedules read from it. `runs/budget.json` holds the daily run limit, the per-run item cap and the pause with its reason.
+- **Run log** — `runs/<date>/<runId>.json`; budget pause and schedules read from it. `runs/budget.json` holds the daily run limit, the per-run item cap and the pause with its reason. `scheduler/state.json` (P08-B) holds each schedule's own pause (independent of the budget's) and its last attempt/last successful run; `scheduler/claims/<id>--<slot>.json` is a one-shot marker so a fallback tick and a startup catch-up can never both fire the same overdue slot.
 - **Bridge state** — `.runner/` in the workspace: paired devices (token hashes), hashed one-time codes, the event journal (holds captured job text, so personal), and the command queue. Every POST carries the paired extension `Origin`; a GET without one is accepted on a valid device token (spec §5).
 
 ## 5. Key flows
@@ -78,7 +78,7 @@ Each flow names the packet that ships it; acceptance lives in the packet and spe
 ### Flow 4 — Prepare with evidence (P05, P08)
 1. For a job, the runner drafts resume and cover documents; every claim used carries a confirmed claim ID.
 2. The citation validator rejects any statement without a confirmed source; excluded claims never appear; a diff against the prior version is written.
-3. Runs are logged; the budget pause halts scheduled work at the cap; daily schedule catches up after missed days.
+3. Runs are logged; the budget pause halts scheduled work at the cap, and a schedule can also be paused on its own; both survive a restart, and a missed daily or weekly fire catches up exactly once, from the bridge's own recurring check — not eve's cron (P08-B: eve fires nothing while stopped, and signals no fire when running).
 
 ### Flow 5 — Apply as a tab group (P06, P07)
 1. Board moves an application through stages; a session manifest lists documents and steps.

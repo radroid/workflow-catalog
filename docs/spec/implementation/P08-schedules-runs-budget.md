@@ -53,6 +53,133 @@ Findings are in `logs/handoff/P08-A-round-3-review.md`.
 
 ## Report
 
+### 2026-09-25 — Part B design (manual session, Sonnet)
+
+**What fires a schedule.** Not eve's own cron. `withRun`/`runTurn`/the
+budget and run stores live in the bridge process; eve's own `agent/
+schedules/*.ts` `run` handlers execute inside eve's process instead, with no
+access to the bridge's `RunnerContext`, so they can't call `withRun` or
+`startPreparation` directly. eve also documents no catch-up for a missed
+fire and, per the P02 spike's own risk note, gives no HTTP signal that a
+fire happened at all (`docs/spec/research/eve-spike.md`: "I found no HTTP
+route that reports a cron fire... P08 needs a hook or the dispatcher
+pattern"). So the trigger is the bridge's own clock: `routes/runs.ts`'s
+`start()` hook runs a due-schedule check once immediately on startup
+(catch-up), then on a five-minute `setInterval` (the fallback trigger,
+`scheduler/index.ts`). Both call the same `runDueSchedules` — one trigger
+mechanism, not two that could race each other. **No fire can run twice**
+because, before any work starts, `dispatchOne` (`scheduler/dispatch.ts`)
+atomically claims the current slot via `Workspace#createJson`'s exclusive
+create (`scheduler/store.ts`'s `claimSlot`, `scheduler/claims/<id>--
+<slot>.json`); a second attempt at the same slot — the fallback trigger and
+a startup catch-up landing close together, or two fallback ticks either
+side of a restart — sees the file already exists and does nothing.
+
+**Each schedule's time zone.** Fixed, per schedule, in `scheduler/
+config.ts`: both ship at `UTC` for the MVP (no per-person configuration
+yet — F10 asks for a timezone per schedule, not a person-editable one).
+eve documents no timezone for a self-hosted croner at all
+(`docs/spec/research/eve-runtime.md` §4: "not documented"), which is moot
+here since eve's cron isn't the trigger; `scheduler/time.ts`'s `nextFireAt`/
+`mostRecentFireAt` compute the next/most-recent wall-clock fire in the
+schedule's own zone via `Intl.DateTimeFormat` (no new dependency), correct
+across DST. Proved with an injected `ManualClock` in
+`test/scheduler-time.test.ts`: fixed UTC cases, plus `Asia/Kolkata`
+(a real, no-DST +05:30 zone) to prove the mechanism actually consults the
+zone rather than assuming UTC.
+
+**How catch-up finds an overdue schedule, and why exactly one.**
+`mostRecentFireAt(cadence, now)` always resolves to the single latest slot
+at or before `now` — never every missed slot — so a runner that stayed down
+across several fires (or several fallback ticks) claims and runs only that
+one; the older, now-unclaimed slots are simply never looked at again.
+Proved in `test/scheduler-dispatch.test.ts` ("the runner missing several
+scheduled fires still runs exactly one catch-up") and directly in
+`test/scheduler-time.test.ts`.
+
+**What the daily and weekly runs do.**
+- **daily-prepare** (`prepare_newly_saved_jobs`): reads the budget's
+  `itemCap`, lists every application at stage `saved`
+  (`store/applications.ts`'s `ApplicationsStore#list`, read-only), caps to
+  `itemCap`, and calls P05's own `startPreparation` once per capped job
+  with this schedule's `kind` and `isCatchUp` — no second preparation path,
+  no second turn classifier (the "decisions already made" section). The
+  remainder stay Saved and are logged (`ctx.log.info`) and summarized on
+  the schedule's own state for Settings. `agent/schedules/daily-prepare.md`
+  documents the schedule for a person reading the repo; it is not sent to a
+  model — `startPreparation`'s own `buildPreparationPrompt` already builds
+  each job's turn, so a second prompt here would be the second preparation
+  path the packet rules out.
+- **weekly-review** (`review_open_applications`): no existing pipeline to
+  delegate to, so it calls `withRun`/`runTurn` directly (kind
+  `review_open_applications`, idempotency key `weekly-review:<slot>`,
+  checked against `hasSucceededWithIdempotencyKey` first). Its prompt,
+  `agent/schedules/weekly-review.md`, is data-free; the open applications'
+  stage and ids (never job/company content) are appended as the turn's own
+  user-turn message, the same pattern `buildPreparationPrompt` uses for
+  confirmed claims.
+
+**Eve facts relied on**, each with its docs path (never memory):
+- No catch-up, no fire signal, self-hosted timezone undocumented:
+  `docs/spec/research/eve-runtime.md` §4 ("Missed schedules when the
+  process is stopped", "Time zone"); `docs/spec/research/eve-spike.md`'s
+  risk note.
+- `agent/schedules/*.ts`/`.md`, root-agent-only, `run`/`markdown` handlers:
+  `node_modules/eve/docs/schedules.mdx`.
+- `dispatchSchedule` is a dev-only eval/test helper wrapping
+  `POST /eve/v1/dev/schedules/:id`, unusable by a production `eve start`
+  build: `node_modules/eve/docs/schedules.mdx`,
+  `node_modules/eve/docs/evals/targets.mdx`. Not used here — P08-B has no
+  eve-mediated eval of its own schedules, since they never go through eve.
+- The dynamic-scheduling pattern (`node_modules/eve/docs/patterns/
+  dynamic-scheduling.md`): its atomic-claim/at-least-once/idempotency
+  discipline is what `claimSlot` mirrors, even though P08-B's own trigger
+  is the bridge's clock, not eve's dispatcher schedule.
+- `session.completed` (task mode) is already a recognized "ok" boundary in
+  `runTurn`/`classifyTurn` (`docs/spec/research/eve-runtime.md` §8 item 15;
+  `server/run-harness.ts`), which weekly-review's turn relies on.
+- `authorization.required`/`authorization.completed` shapes (`webhookUrl`,
+  `attemptId`): `node_modules/eve/dist/src/protocol/message.d.ts`, and
+  `eve-runtime.md` §8 item 15's "Authorizations" note (carried item, below).
+
+**Extraction turns and the budget (carried decision).** P03's onboarding
+extraction and P04's capture extraction stay outside `withRun` and do not
+count toward the daily run limit in this packet. Reasoning: (1) both
+already refuse to start while the budget is paused, so some quota
+protection exists; (2) making them count would mean adding budget-lock-
+aware accounting inside `runTurn` for every existing caller
+(`eve-gateway.ts`'s `checkModel`, onboarding's extraction, capture's
+extraction) — wide-reaching changes to code this packet does not own and
+cannot fully re-verify; (3) hard-problems #7's actual concern — a run
+loops and burns quota silently — is about *unattended, scheduled* work,
+which the daily run limit and per-run item cap already bound tightly; an
+interactive, person-triggered extraction is visible in the moment it runs.
+Not implemented; recorded here as the decision, per the packet's own
+"record the choice."
+
+**A parked preparation is not a failure for schedules (carried item).**
+`run-harness.ts`'s `withRun` still maps any non-`"ok"` `TurnResult` status
+(including `"parked"`) to a `RunRecord` `outcome: "failure"` — unchanged,
+since that mapping is P08-A's and changing it risks P05's own, already-
+merged behavior for a manual Prepare click. Instead, "not a failure for
+schedules" is implemented at the scheduler's own level: `runDailyPrepare`
+never retries a job within a run, applies no failure count and no backoff
+(there is none anywhere in `scheduler/`), and the schedule's own
+`recordAttempt` marks the *fire* as succeeded once it completes without
+throwing, regardless of how many individual jobs parked or were refused —
+that per-job detail lives in the fire's summary text, not in any retry
+state. The next fire re-asks `startPreparation` for the same job exactly as
+before; P05's own dedup (a previous attempt parked on the same key) refuses
+a second attempt on its own, so nothing here has to know about "parked"
+specifically. Tested in `test/scheduler-dispatch.test.ts`.
+
+**An authorization request with no webhook counts as ok — fixed.**
+`classifyTurn` (`run-harness.ts`) now tracks `authorization.required`/
+`authorization.completed` events; a pending authorization with no
+`webhookUrl` parks the turn the same way a non-empty `input.requested` does
+(eve-runtime.md §8 item 15's "Authorizations" note). Tested with a real
+`Client` against a stubbed `fetch`-free fake, in `test/run-harness.test.ts`.
+
 ### 2026-09-23 — Revision 2 (iter-005 Opus escalation)
 
 Round 2 returned REVISE (reviewer 2 issues, one high; UI critic 3), after the Sonnet implementer's one revision round. I took over `packet/P08-A` at `371cd63` and merged `origin/overnight/integration` normally (`5059f69`; no rebase, amend or force-push). The work list is `logs/handoff/P08-A-round-2-review.md`, decisions I1–I4. No message claiming to be the orchestrator arrived during this round, with or without the code word.
