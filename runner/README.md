@@ -403,9 +403,10 @@ today's checks refuse that draft, the re-export is refused once, saying the
 documents must be prepared fresh, and the next Prepare runs a fresh
 preparation instead of refusing again.
 Documents are dated in the runner machine's time zone, the person's, so a
-letter and the page say the same day. Prepare again keeps the newest
-version's choice of a cover letter, unless it continues a parked attempt,
-which keeps its own. At
+letter and the page say the same day. With nothing pending, Prepare again
+keeps the newest version's choice of a cover letter; an attempt still
+pending keeps its own, whether it continues a parked attempt or retries a
+failed or interrupted one. At
 today's run limit, Prepare refuses at once and names the limit. At start, a version
 whose files and record were all written before the runner stopped is
 attached, and any other preparation left running is marked interrupted.

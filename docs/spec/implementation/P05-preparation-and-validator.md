@@ -670,7 +670,7 @@ Each result is in `/tmp/wc-p05e2-mut/r3/result-<ID>.json`, and the list in `/tmp
   - Fresh, the way forward: Prepare again gives "Prepared “Platform Lead · Fernwood”: version 2 is ready." after one model turn. Version 2's resume is headed "Zoe Quill" and says "three engineering teams". Neither details note is left; version 1 says only "Version 2 replaces it."
 - **Y2's hint:** not on the page. The page shows each problem's rule words (`RULE_WORDS`), not its message, so the hint reaches the model and the stored problem only. There is no page shot of it, as Y8 allowed.
 - **V19's 32 retakes:** `P05-applications-{empty,prepared-diff,gap-question,refusal,exports,reexport-name-change,pdf-warning,runner-down}-*`.
-  - They are full-page captures at a device scale factor of 1, as revision 1 took them, in revision 1's states:
+  - They are full-page captures in revision 1's states. The four `empty-*` shots are at a device scale factor of 2, because they came from the same run as Y5's; the other 28 are at 1, as revision 1 took them. (Revision 4 corrected this line, which said all 32 were at 1.) The states:
     - the empty workspace;
     - Platform Lead prepared twice, with the degree excluded;
     - Staff Software Engineer's questions;
