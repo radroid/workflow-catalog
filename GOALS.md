@@ -36,7 +36,7 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 
 ## Phase 4 — Ship the pilot
 
-- [ ] P4.A — P10.A Pilot docs: success test, privacy checklist, known limitations — spec P10; blocked by P3.C.
+- [x] P4.A — P10.A Pilot docs: success test, privacy checklist, known limitations — spec P10; blocked by P3.C. Done 2026-09-25 (manual session), PR #22 (squash 2bf591b).
 - [ ] P4.B — P10.B Upgrade flow and full acceptance run — spec P10; blocked by every other item.
 
 ## Open dependencies (waiting on user)
