@@ -91,6 +91,7 @@ write `pnpm run setup`: a bare `pnpm setup` is pnpm's own command.
 | `runner` | Builds when needed, then starts eve and the bridge on loopback. Ctrl-C, SIGTERM or closing the terminal (SIGHUP) stops both, even during startup (`lib/launcher.ts`: route modules load and the bridge is built before eve is spawned, so a startup failure never leaves eve running). |
 | `pair` | A new pairing code (10 minutes, single use). |
 | `ui` | A new one-time sign-in link for the local UI. |
+| `upgrade` | Checks for a release newer than the workspace's recorded version, shows the changelog, asks to confirm, then migrates the workspace and records the new version. `--yes` confirms without asking. |
 | `eval` | `eve eval --strict` on the fixture agent (no model, no credentials). |
 | `test` | The unit tests (vitest), then the eval. |
 | `typecheck`, `lint` | As everywhere in the repo. |
@@ -176,6 +177,49 @@ warn (P02.2). The detail names both paths and says which one the
 runner uses; the fix line reads `npm run setup -- --workspace <path>`. The
 JSON form is
 `{ ok, checkedAt, items: [{ id, label, status, detail, required, fix? }] }`.
+
+### Upgrade
+
+F12: an instance stays pinned to its workspace's own recorded version
+(`workspace.json`'s `packageVersion`, not the code this checkout happens to
+have — that only ever changes by `git pull`, per Install above) until the
+person explicitly confirms. Nothing about a newer release ever applies on
+its own.
+
+```sh
+npm run upgrade                # interactive: shows the changelog, asks to confirm
+npm run upgrade -- --yes       # confirms without asking
+```
+
+1. Fetches the latest GitHub release (https only, the same address rules as
+   `lib/safe-fetch.ts`, though not that function itself — it decodes every
+   body as text and only accepts `text/html`/`text/plain`, wrong for a
+   binary tarball and for the GitHub API's JSON; `runner/upgrade/release-source.ts`
+   is its own small transport built the same way). Nothing newer than the
+   workspace's version: "Already on the latest release."
+2. Downloads the release's tarball and its `.sha256` asset
+   (`.github/workflows/release-package.yml` publishes both) and verifies
+   the digest before anything is unpacked. A mismatch refuses plainly and
+   changes nothing.
+3. Reads `workflow.json` out of the verified tarball (never off disk — this
+   checkout's own copy may still be the old version) for the authoritative
+   changelog: every entry newer than the workspace's current version.
+4. Asks to confirm (or requires `--yes`). Declining changes nothing.
+5. Runs the workspace migrations
+   (`packages/contracts/migrations/`, one file per version step) forward
+   from the current version to the release's version. Every step's writes
+   are staged in memory; a step that throws leaves the workspace exactly as
+   it was — nothing reaches disk until every step in the chain has
+   succeeded. Only then does `workspace.json`'s `packageVersion` get the
+   new version.
+
+The Settings page's Upgrade section (`ui/settings.html`,
+`ui/assets/settings-upgrade.js`) is the same flow through
+`GET/POST /api/upgrade[/confirm]` (`server/routes/upgrade.ts`): a check, the
+changelog, an inline confirm panel, and — the one difference from the
+CLI — confirming always re-fetches and re-verifies the release itself
+rather than trusting an earlier page load, refusing a stale confirmation if
+what is actually available has moved on since.
 
 ## The bridge (`server/`)
 
@@ -733,7 +777,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 | P07-B | Nothing here. The extension uses the four bridge routes. |
 | P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn`, and the `classifyTurn` P03.2 split out of `runTurn` — free functions over `ctx`, now called from `routes/onboarding.ts`'s extraction route and `eve-gateway.ts`'s `checkModel`), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
 | P08-B | `scheduler/` (`config.ts` the two fixed schedules and `SCHEDULES_PROMPT_DIR`, `time.ts` pure cadence math, `store.ts` per-schedule pause/attempt state and the slot-claim, `dispatch.ts` the daily-prepare/weekly-review bodies and the catch-up/fallback dispatcher, `status.ts` the `GET /status` and Settings shapes, `index.ts` the `start()` wiring, `prompts/` — the schedules' prompt files, `daily-prepare.md` documents the schedule and `weekly-review.md` is its turn's own prompt; they live here, not under `runner/agent/schedules/`, because in mode A the runner's own scheduler owns firing, and eve would otherwise discover and compile them as its own cron schedules — a second, uncontrolled trigger the design rules out), the schedules section of `ui/settings.html` + `ui/assets/settings-schedules.js`, and `server/routes/runs.ts`'s `status()` for `schedules`, `start()` (catch-up), and `GET`/`POST /api/runs/schedules[...]`. Calls into `run-harness.ts`'s `withRun`/`runTurn` and `routes/applications.ts`'s `startPreparation` to actually run something; never edits either. |
-| P10 | `upgrade/`, the upgrade section of `ui/settings.html`, and an optional `server/routes/upgrade.ts`. |
+| P10-B | `upgrade/` (`release-source.ts` the https-only GitHub fetch, `checksum.ts`, `tar.ts` the bounded gzip+tar reader, `migrate.ts` the migration-chain runner and loader, `semver.ts`, `upgrade.ts` `checkForUpgrade`/`applyUpgrade`), `server/routes/upgrade.ts`, `cli/upgrade.ts`, the upgrade section of `ui/settings.html` + `ui/assets/settings-upgrade.js`, and `packages/contracts/migrations/` (outside `runner/`: versioned migration scripts, loaded the same way route modules are — a computed `import()` by file path, never through `@workflow-catalog/contracts`'s package export). |
 
 **Commands.** `GET /commands` is already complete over
 `store/commands.ts`. P06 only has to fill the queue and acknowledge
