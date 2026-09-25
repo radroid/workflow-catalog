@@ -28,7 +28,8 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 - [x] P3.B — P08.A Run log and budget pause — no schedules yet; spec P08; blocked by P1.D. Done iter 005, PR #13 (squash 360ac69).
 - [x] P3.F — P02.1 Runner follow-ups — HEAD must not spend the one-time sign-in link; a unit test for an error inside the /pair queue; spec P02.1-runner-followups.md; blocked by P1.D. Done iter 004, PR #9 (squash d9454f2).
 - [x] P3.G — P02.2 Runner workspace precedence — `.env.local` wins for the workspace so an ambient `RUNNER_WORKSPACE` (GitHub Actions sets one) can't redirect a set-up runner; doctor warns on disagreement; spec P02.2-runner-workspace-precedence.md; not blocked (found by the P04 round-2 reviewer, iter 006). Done iter 006, PR #15 (squash 2b93cf0).
-- [ ] P3.C — P06 Board and application sessions — stages, manifests, commands, reconciliation; spec P06; blocked by P3.A.
+- [ ] P3.C — P06 Board and application sessions — stages, manifests, commands, reconciliation, plus the Applications-page follow-ups; spec P06; blocked by P3.A.
+- [ ] P3.H — P06.1 Jobs and Status page follow-ups — the Jobs-page and Status-page items P04's, P03.2's and P05's reviews carried to P06, the `.secondary` border and the `.error` colour; split from P06 in iter 007; spec P06.1-jobs-and-status-followups.md; blocked by P3.A (the runner-down notice).
 - [ ] P3.D — P08.B Schedules and catch-up — daily and weekly, last-run marker, idempotent retries; also the part-A review follow-ups (P08 packet, "Carried into part B"); spec P08; blocked by P3.A, P3.B.
 - [ ] P3.E — P07.C Extension: sessions, tab group, side panel, the nine gates — spec P07; blocked by P3.C, P2.E.
 

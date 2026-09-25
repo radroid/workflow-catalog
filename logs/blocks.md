@@ -1523,3 +1523,47 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
 - **Carried:**
   - **to P06:** the Applications page's request timeout, the focus drop on the runner line, and long-title download names;
   - **to P10 part A:** the PDF's script coverage, as a known limitation.
+
+## 2026-09-25 — The orchestrator's session died mid-escalation; P05 resumed [RESUMED]
+
+**Iter:** 007 (in progress)
+**Source:** owner
+**Severity:** info
+
+**Charter / context:** the orchestrator's session died some time after 15:48 on 09-24, while P05's Opus escalation was running. The owner restarted the loop at about 00:05 on 09-25.
+
+**What the new session found:**
+- The escalation had pushed ce49ca9 (X5 and X7), and CI run 36022914464 is green on it.
+- Its worktree held an uncommitted, unverified half of X2 in `runner/validate/text.ts`.
+- No loop port was held.
+- Round 2's reviewer and UI critic had died with the session too.
+
+**What was done:**
+- The X2 diff was saved to `/tmp/wc-p05e2-wip/text.ts.wip.patch`.
+- The dead worktree was detached with `git switch --detach` (its files are untouched), which freed `packet/P05`.
+- A fresh Opus escalation resumed from ce49ca9 with `logs/handoff/P05-escalation-resume-prompt.md`: X1–X4, X6 and X8–X10, plus mutation proofs for X5 and X7.
+- Round 3 will use a fresh reviewer and UI critic, from `logs/handoff/P05-round-3-prompts.md`.
+
+**Lesson:** pushing at every green step bounded the loss to one unverified edit. The resume prompt now says so explicitly.
+
+## 2026-09-25 — P06 split, and iter 008 runs three packets side by side [DECISION]
+
+**Iter:** 007 (preparing 008)
+**Source:** orchestrator
+**Severity:** low
+
+**Charter / context:** four packets' reviews had carried about 17 Jobs-page, Status-page and shared-style items into P06, on top of the board, sessions, commands and reconciliation. The loop's history shows that large mixed packets take three review rounds.
+
+**Decision:**
+- **New P06.1** (GOALS P3.H, `P06.1-jobs-and-status-followups.md`) takes:
+  - the Jobs-page items (P04's P1–P4 and its two server nits, the pinned line, and the runner-down notice);
+  - the `.secondary` border and the `.error` colour in `runner.css`;
+  - the Status page's model check, eve line, and the screenshot retake.
+- **P06 keeps** the board, sessions and commands, the waiting state, the nav order, the Applications-page items, and the board's display of the budget pause.
+- **Iter 008:** P06 ∥ P08-B ∥ P03.1, all Sonnet, as the wave plan's model choice. Their Owns were checked pairwise, and each packet has a section on where the lines are:
+  - P08-B imports `startPreparation` and `waitForPreparationQueue` and doesn't edit `routes/applications.ts`. P06 keeps both signatures stable.
+  - P08-B reads a parked preparation from P05's preparation record, not from P06's new contract value.
+  - `runner/package.json` and the lockfile are P03.1's alone. P06 and P08-B add no dependency.
+  - `runner.css` is P06.1's.
+- **P06.1** starts as soon as the subagent budget has room.
+- **A third implementer port, 4360, and a third UI-critic port, 4370,** join the port map.

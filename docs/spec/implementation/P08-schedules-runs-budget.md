@@ -43,6 +43,14 @@ Findings are in `logs/handoff/P08-A-round-3-review.md`.
 - **A parked preparation is not a failure for schedules** (P05 round-1 reviewer, iter 007). P05 records a preparation parked on gap questions as a run-log `failure`. Schedules and catch-up must not treat it as one: no retry, no failure count, no backoff. P06 adds a waiting state for it.
 - **A stale comment** (from P03.2's round-3 reviewer). `run-harness.ts:12` still says no real route calls the classifier; since P03.2, the onboarding extraction, the model check, P04's capture extraction and P05's preparation all do. Fix it with the run-harness grant above.
 
+## Part B alongside P06 and P03.1 (iter 008)
+- **Starting preparations.** Import `startPreparation` and `waitForPreparationQueue` from `runner/server/routes/applications.ts`, and don't edit that file: P06 extends it. P06 keeps both signatures stable.
+- **A parked preparation.** Read it from P05's preparation record (`status: "parked"` in `runner/store/applications.ts`, read-only), not from the waiting value P06 is adding to the contract.
+- **The board.** P06 shows the budget pause on the board. P08-B keeps Settings, and adds its schedules as a new `<section>` in `settings.html` with its own script. The budget section stays as it is.
+- **Extraction turns and the budget.** If they count toward a limit, do it inside `run-harness.ts`. Never edit `routes/onboarding.ts` (P03.1) or `routes/captures.ts` (P06.1).
+- **No new dependencies.** `runner/package.json` and the lockfile belong to P03.1 in this wave. If you need one (a cron parser, say), stop and ask.
+- **Styles.** `runner.css` belongs to P06.1. Settings and Runs styles go in `settings.css` and `runs.css`.
+
 ## Report
 
 ### 2026-09-23 — Revision 2 (iter-005 Opus escalation)
