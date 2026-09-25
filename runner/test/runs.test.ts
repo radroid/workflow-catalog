@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { runRecordSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ManualClock, DAY_MS } from "../lib/clock.ts";
@@ -339,6 +339,53 @@ describe("store/runs.ts: listing and reading", () => {
     } finally {
       listSpy.mockRestore();
     }
+  });
+
+  // P08-A round-3 review, carried nit 4: "GET /api/runs/:runId returns 500 when runs/ is unreadable (runs.ts:286).
+  // Catch it as listRuns does."
+  it.skipIf(!canDenyAccess)("P08-B carried nit 4: getRun over an unreadable runs/ resolves undefined, never throws", async () => {
+    const clock = new ManualClock();
+    const workspace = await newWorkspace(clock);
+    const runId = randomUUID();
+    await writePausedRun(workspace, clock, { runId, kind: "manual", isCatchUp: false, idempotencyKey: "hidden", inputs: {}, reason: "r" });
+    const runs = workspace.resolve("runs");
+    await chmod(runs, 0o000);
+    try {
+      await expect(getRun(workspace, runId)).resolves.toBeUndefined();
+    } finally {
+      await chmod(runs, 0o700);
+    }
+  });
+
+  // P08-A round-3 review, carried P-b (UI critic polish): "Folders are listed before files in the skipped note,
+  // or flagged by the server, and a lone folder reads as a folder."
+  describe("P08-B carried P-b: folder skips are reported before file skips", () => {
+    it("a folder skip from an older date is never pushed out of the top 10 by newer file skips", async () => {
+      const clock = new ManualClock();
+      const workspace = await newWorkspace(clock);
+      const goodId = randomUUID();
+      await writePausedRun(workspace, clock, { runId: goodId, kind: "manual", isCatchUp: false, idempotencyKey: "good", inputs: {}, reason: "r" });
+      const olderDate = localDateString(clock.now());
+      clock.advance(DAY_MS);
+      const newerDate = localDateString(clock.now());
+      await mkdir(workspace.resolve("runs", newerDate), { recursive: true });
+      // 10 unreadable *files* on the newer date (encountered first: dates are walked newest-first).
+      for (let i = 0; i < 10; i += 1) await writeFile(workspace.resolve("runs", newerDate, `${randomUUID()}.json`), "{ not json", "utf8");
+
+      const original = workspace.list.bind(workspace);
+      const listSpy = vi.spyOn(workspace, "list").mockImplementation(async (...segments: string[]) => {
+        if (segments[0] === "runs" && segments[1] === olderDate) throw new Error("EACCES (simulated)");
+        return original(...segments);
+      });
+      try {
+        const { skippedFiles, invalidCount } = await listRuns(workspace, clock);
+        expect(invalidCount).toBe(11); // 10 files + the one unreadable folder
+        expect(skippedFiles).toHaveLength(10); // capped
+        expect(skippedFiles[0]).toBe(`runs/${olderDate}/`); // the folder leads, despite being the older/later-encountered entry
+      } finally {
+        listSpy.mockRestore();
+      }
+    });
   });
 });
 
