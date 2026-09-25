@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0003 · Upgrading the pinned eve version</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">Lesson 0003 · Bumping the eve pin</div>
+  <h1>Upgrade the pinned eve version without breaking the runner</h1>
+  <p class="lede"><strong>One tangible win:</strong> outline only — this lesson is written after the owner does the first real bump of the <code>eve@0.63.0</code> pin, so it teaches from an actual diff and changelog instead of a guess.</p>
+  <div class="meta"><span>eve pinned: 0.63.0</span><span>prev: <a href="0002-where-the-prompts-live-in-eve.html">0002 · where the prompts live in eve</a></span></div>
+
+  <div class="callout"><span class="tag">Why this is a stub</span>eve is in beta and shipped 27 releases, 12 of them API-breaking minors, in the two weeks before this course was written (mvp-spec.md §8). CLAUDE.md's rule is to bump deliberately, with the changelog open, never mid-run — so this lesson can't be written responsibly from memory or prediction. It waits for a real bump to record the real commands, the real breakage (if any), and the real fix.</div>
+
+  <h2>1. Knowledge: why the pin is exact, and what "deliberately" means</h2>
+  <p class="small">To be written after the first real bump. Will cover: why <code>runner/</code> and <code>eval-agent/</code> pin <code>eve</code> with no caret, what "between runs, never mid-run" (CLAUDE.md) protects against for a long-horizon build loop, and where the changelog actually lives for this project's pinned commit range.</p>
+
+  <h2>2. Knowledge: what a version bump can and cannot be proven by</h2>
+  <p class="small">To be written after the first real bump. Will cover: the smoke test (<code>pnpm typecheck && pnpm test</code>, which runs <code>runner/</code>'s vitest suite and <code>eve eval --strict</code>) as the first gate, why that's necessary but not sufficient for an API-breaking minor, and what else has to be re-checked by hand (mode A's four conditions in <code>runner/README.md</code>, the model-slug allowlist, the build stamp in <code>lib/build.ts</code>).</p>
+
+  <h2>3. Skill: the change-one-version loop</h2>
+  <p class="small">To be written after the first real bump. Will cover, as a numbered loop like lessons 0001 and 0002: read the changelog for every release between the old and new pin; change the version string in every place it's pinned (<code>runner/package.json</code>, <code>eval-agent/</code>, the lockfile); rebuild and run the full chain; re-run the P02 spike's mode-A checks by hand if a release touches auth, cron, or the chatgpt() model path; commit with the changelog range and the diff that proves it still works.</p>
+
+  <h2>4. Retrieval practice</h2>
+  <p class="small">To be written after the first real bump. Will cover, as short recall questions like lessons 0001 and 0002: where the pin lives, what the smoke test does and doesn't prove, and which mode-A condition is most likely to silently break on an upgrade.</p>
+
+  <h2>5. Do it for real</h2>
+  <p class="small">To be written after the first real bump. Will point at the actual bump's PR and diff as the worked example, the same way lesson 0002 points at a real skill file to edit.</p>
+
+  <div class="callout"><span class="tag">Ask your teacher</span>If you're doing a real bump before this lesson is written, treat <code>docs/spec/research/eve-runtime.md</code>, <code>docs/spec/research/eve-spike.md</code>, and <code>node_modules/eve/docs</code> at the new pinned commit as the sources of truth — never memory — and write down what you find. That record is what fills in section 1 above.</div>
+
+  <div class="nav"><a href="0002-where-the-prompts-live-in-eve.html">← Previous lesson</a></div>
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

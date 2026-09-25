@@ -8,6 +8,7 @@ import type { EveGateway } from "../server/eve-gateway.ts";
 import {
   EMPTY_ERROR_FALLBACK,
   EMPTY_IDEMPOTENCY_KEY_ERROR,
+  EVE_NOT_RUNNING_DETAIL,
   MINIMAL_FINISH_ERROR,
   PROVIDER_LIMIT_REASON,
   RUN_NOT_STARTED_ERROR,
@@ -691,5 +692,79 @@ describe("run-harness.ts: simulated 429 storm end to end", () => {
     const third = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "storm-3", isCatchUp: false }, body);
     expect(third.outcome).toBe("failure"); // the fake still rate-limits every call
     expect(calls.length).toBe(2); // Resume let the harness try again, exactly once
+  });
+});
+
+// P08-A round-3 review, carried into part B (logs/handoff/P08-A-round-3-review.md).
+describe("run-harness.ts: carried nit 1 — a body with no turns", () => {
+  it("withRun over a body that returns { turns: [] } keeps the model at NO_MODEL (n/a), not UNKNOWN_MODEL", async () => {
+    const { ctx } = await contextWith(undefined);
+    const record = await withRun(ctx, { kind: "manual", idempotencyKey: "no-turns", isCatchUp: false }, async () => ({ turns: [] }));
+    expect(record.outcome).toBe("success");
+    expect(record.model).toBe(NO_MODEL);
+  });
+});
+
+describe("run-harness.ts: carried nit 2 — eve not running must stay n/a, not unknown", () => {
+  it("a run whose only turn never reached eve keeps model n/a (previously became 'unknown' with 0/0 tokens)", async () => {
+    const { ctx } = await contextWith(undefined); // no eve gateway: runTurn short-circuits before any Client call
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "eve-down", isCatchUp: false }, async (c) => ({ turns: [await runTurn(c, { message: "prepare" })] }));
+    expect(record.outcome).toBe("failure");
+    expect(record.error).toContain(EVE_NOT_RUNNING_DETAIL);
+    expect(record.model).toBe(NO_MODEL); // not UNKNOWN_MODEL
+    expect(record.tokens).toEqual({ input: 0, output: 0 });
+  });
+
+  it("contrast: a turn that did reach eve but timed out before any step still becomes UNKNOWN_MODEL", async () => {
+    const { eve } = fakeEve(async (_call, signal) => {
+      await new Promise((resolve) => signal.addEventListener("abort", resolve));
+      return [];
+    });
+    const { ctx } = await contextWith(eve);
+    // runTurn's timeout is a real AbortSignal.timeout, not the injected ManualClock, so this waits out a real
+    // (short) 50ms rather than advancing the clock.
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "reached-eve-timeout", isCatchUp: false }, async (c) => ({ turns: [await runTurn(c, { message: "prepare", timeoutMs: 50 })] }));
+    expect(record.model).toBe(UNKNOWN_MODEL);
+  });
+});
+
+describe("run-harness.ts: eve-runtime.md §8 item 15 — an authorization pending with no webhookUrl parks, not ok", () => {
+  function authRequired(webhookUrl?: string, attemptId = "auth-1"): MessageStreamEvent {
+    return { type: "authorization.required", data: { attemptId, description: "Connect your calendar", name: "calendar", sequence: 5, stepIndex: 0, turnId: "t1", ...(webhookUrl !== undefined ? { webhookUrl } : {}) }, meta: META };
+  }
+  function authCompleted(outcome: "authorized" | "declined" | "failed" | "timed-out" = "authorized", attemptId = "auth-1"): MessageStreamEvent {
+    return { type: "authorization.completed", data: { attemptId, name: "calendar", outcome, sequence: 6, stepIndex: 0, turnId: "t1" }, meta: META };
+  }
+
+  it("authorization.required with no webhookUrl, then session.waiting: parks and cancels (the reviewer's probe case)", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("m1"), completed({ inputTokens: 3, outputTokens: 1 }), authRequired(undefined), sessionWaiting()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result.status).toBe("parked");
+    expect(cancelCount()).toBe(1);
+  });
+
+  it("through withRun, an authorization pending with no webhook is a failure (not done) but never retried by us", async () => {
+    const { eve, calls } = fakeEve(async () => [started("m1"), authRequired(undefined), sessionWaiting()]);
+    const { ctx, workspace, clock } = await contextWith(eve);
+    const record = await withRun(ctx, { kind: "prepare_newly_saved_jobs", idempotencyKey: "auth-pending", isCatchUp: false }, async (c) => ({ turns: [await runTurn(c, { message: "prepare" })] }));
+    expect(record.outcome).toBe("failure");
+    expect(await hasSucceededWithIdempotencyKey(workspace, clock, "auth-pending")).toBe(false);
+    expect(calls.length).toBe(1);
+  });
+
+  it("authorization.required WITH a webhookUrl is eve's own async-authorization case, not ours to park on", async () => {
+    const { eve } = fakeEve(async () => [started("m1"), authRequired("https://connect.example/webhook"), sessionWaiting()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result.status).toBe("ok");
+  });
+
+  it("an authorization.completed for the same attempt clears the pending flag before the boundary — ok, not parked", async () => {
+    const { eve, cancelCount } = fakeEve(async () => [started("m1"), authRequired(undefined), authCompleted("authorized"), completed({ inputTokens: 2, outputTokens: 1 }), turnCompleted(), sessionWaiting()]);
+    const { ctx } = await contextWith(eve);
+    const result = await runTurn(ctx, { message: "go" });
+    expect(result.status).toBe("ok");
+    expect(cancelCount()).toBe(0);
   });
 });

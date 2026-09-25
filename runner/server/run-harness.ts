@@ -9,7 +9,9 @@ import type { RunnerContext } from "./context.ts";
  * Free functions that take `ctx` (never a class, never new context fields):
  * `withRun` is the budgeted, logged shell every scheduled or manual run goes
  * through; `runTurn` is one eve session turn for use inside a `withRun` body.
- * Nothing in part A calls these from a real route yet — P05 and P08-B do.
+ * P05's preparation route and P08-B's scheduler both call these from a real
+ * route/dispatcher now (P03.2's onboarding extraction and `eve-gateway.ts`'s
+ * `checkModel` call `classifyTurn` directly instead — see its own doc below).
  *
  * Provider-limit detection (decision 1, extended by G5 in the round-1
  * revision): the primary signal is `details.semanticErrorId` from eve's
@@ -83,6 +85,8 @@ export const MINIMAL_FINISH_ERROR = "The run failed and its details could not be
 export const EMPTY_IDEMPOTENCY_KEY_ERROR = "The run did not start: it had no idempotency key.";
 /** I2: any other error before the body, such as a run folder that can't be written. The details go to the log. */
 export const RUN_NOT_STARTED_ERROR = "The run did not start: its run record could not be written.";
+/** `runTurn`'s early return when `ctx.eve` is undefined: no `Client` call was ever attempted. Distinct from every `classifyTurn` failure detail, so `withRun` (P08-B nit 2) can tell "never reached eve" apart from "reached eve but no step ever started" without adding a field to `TurnResult`. */
+export const EVE_NOT_RUNNING_DETAIL = "eve is not running.";
 
 function shorten(text: string, max = MAX_ERROR_LENGTH): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -232,6 +236,15 @@ export async function classifyTurn(client: Client, input: RunTurnInput): Promise
   let failure: TurnFailureStreamEvent | undefined;
   let cancelled = false;
   let inputRequests = 0;
+  // P08-B carried item (eve-runtime.md §8 item 15, "Authorizations"): a turn response keeps following past
+  // `session.waiting` only while a pending `authorization.required` with a `webhookUrl` exists. One with no
+  // `webhookUrl` ends the response at `session.waiting` and reads as ok to a classifier that only checks
+  // `input.requested` — but eve item 15 is explicit that a pending authorization with no webhook is waiting on
+  // the person the same way. Counted, not keyed by `attemptId` (optional on both events, and eve's own docs
+  // don't promise it's always present): every `authorization.required` with no `webhookUrl` increments this,
+  // every `authorization.completed` decrements it (floored at 0), so a turn is only parked while at least one
+  // is still outstanding when the stream ends.
+  let pendingAuthNoWebhook = 0;
 
   try {
     const created = await client.sessions.create({ message: input.message, signal });
@@ -254,6 +267,12 @@ export async function classifyTurn(client: Client, input: RunTurnInput): Promise
           break;
         case "turn.cancelled":
           cancelled = true;
+          break;
+        case "authorization.required":
+          if (event.data.webhookUrl === undefined) pendingAuthNoWebhook += 1;
+          break;
+        case "authorization.completed":
+          if (pendingAuthNoWebhook > 0) pendingAuthNoWebhook -= 1;
           break;
         default:
           break;
@@ -298,9 +317,10 @@ export async function classifyTurn(client: Client, input: RunTurnInput): Promise
     return withEvents({ status: "failed", ...partial, detail: "The turn ended without a result." });
   }
 
-  if (inputRequests > 0) {
+  if (inputRequests > 0 || pendingAuthNoWebhook > 0) {
     await cancelSession(session);
-    return withEvents({ status: "parked", ...partial, detail: "The model asked for input instead of finishing the run." });
+    const detail = inputRequests > 0 ? "The model asked for input instead of finishing the run." : "An authorization needs your attention before this can continue.";
+    return withEvents({ status: "parked", ...partial, detail });
   }
 
   // A session.waiting (conversation) or session.completed (task) boundary with no failure, no cancellation, no
@@ -319,7 +339,7 @@ export async function classifyTurn(client: Client, input: RunTurnInput): Promise
 export async function runTurn(ctx: RunnerContext, input: RunTurnInput): Promise<TurnResult> {
   const eve = ctx.eve;
   if (!eve) {
-    const notRunning: TurnResult = { status: "failed", tokens: ZERO_TOKENS, detail: "eve is not running." };
+    const notRunning: TurnResult = { status: "failed", tokens: ZERO_TOKENS, detail: EVE_NOT_RUNNING_DETAIL };
     return (input.collectEvents ?? false) ? { ...notRunning, events: [] } : notRunning;
   }
   const result = await classifyTurn(eve.client, input);
@@ -474,7 +494,10 @@ export async function withRun(ctx: RunnerContext, input: WithRunInput, body: Run
     }
     // At least one turn went to eve, but no step ever named the model (a turn that timed out before its first
     // step, say): "unknown", not "n/a", so the Runs page still shows the run's duration and tokens (I3, nit 8).
-    if (model === NO_MODEL && turns.length > 0) model = UNKNOWN_MODEL;
+    // P08-B nit 2 (round-3 review, carried): a turn that never reached eve at all ("eve is not running.", the
+    // early return in `runTurn` below) must not count as "went to eve" here — only a turn that actually opened
+    // a session bumps the placeholder from NO_MODEL ("n/a", nothing was ever contacted) to UNKNOWN_MODEL.
+    if (model === NO_MODEL && turns.some((turn) => turn.detail !== EVE_NOT_RUNNING_DETAIL)) model = UNKNOWN_MODEL;
   } catch (caught) {
     outcome = "failure";
     error = shorten(errorMessage(caught));

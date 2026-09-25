@@ -251,7 +251,12 @@ export async function listRuns(workspace: Workspace, clock: Clock, options: List
   }
   const records: RunRecordWithPath[] = [];
   let invalidCount = 0;
-  const skippedFiles: string[] = [];
+  // P08-A round-3 review, carried P-b: folder-level skips (a whole date directory that couldn't be listed) are
+  // reported before file-level skips, regardless of which was encountered first while walking the (newest-first)
+  // date directories — otherwise an unreadable folder from an older date could be pushed past
+  // MAX_SKIPPED_FILES_REPORTED by ten file skips from newer dates and never appear in the note at all.
+  const skippedFolders: string[] = [];
+  const skippedRecordFiles: string[] = [];
   for (const date of dateDirs) {
     if (date < cutoff) break; // sorted descending: every remaining directory is also out of the window
     let files: string[];
@@ -261,14 +266,14 @@ export async function listRuns(workspace: Workspace, clock: Clock, options: List
       // An error listing one date directory (e.g. a permissions problem) skips just that directory with a
       // note, never a 500 for the whole page (nit).
       invalidCount += 1;
-      pushSkipped(skippedFiles, `${RUNS_SEGMENT}/${date}/`);
+      pushSkipped(skippedFolders, `${RUNS_SEGMENT}/${date}/`);
       continue;
     }
     for (const file of files) {
       const record = await readRecord(workspace, date, file);
       if (!record) {
         invalidCount += 1;
-        pushSkipped(skippedFiles, `${RUNS_SEGMENT}/${date}/${file}`);
+        pushSkipped(skippedRecordFiles, `${RUNS_SEGMENT}/${date}/${file}`);
         continue;
       }
       records.push(withPath(workspace, record, date, file));
@@ -277,13 +282,27 @@ export async function listRuns(workspace: Workspace, clock: Clock, options: List
   // Every writer here stamps startedAt via Date#toISOString() (fixed-width, UTC "Z" suffix), so a lexical
   // sort is a chronological sort.
   records.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
+  const skippedFiles = [...skippedFolders, ...skippedRecordFiles].slice(0, MAX_SKIPPED_FILES_REPORTED);
   return { records: records.slice(0, limit), invalidCount, skippedFiles };
 }
 
-/** Undefined for a non-uuid `runId` (no filesystem touch), a missing run, one whose file does not validate, or one whose file's own `runId` field does not match (nit: defends a hand-edited or corrupted file). */
+/**
+ * Undefined for a non-uuid `runId` (no filesystem touch), a missing run, one
+ * whose file does not validate, or one whose file's own `runId` field does
+ * not match (nit: defends a hand-edited or corrupted file). P08-A round-3
+ * review, carried nit 4: also undefined (never thrown) when `runs/` itself
+ * can't be listed — the route then answers a clean 404, the same as a
+ * missing run, instead of a 500, matching `listRuns`'s own fail-closed
+ * handling of the same failure.
+ */
 export async function getRun(workspace: Workspace, runId: string): Promise<RunRecordWithPath | undefined> {
   if (!uuidSchema.safeParse(runId).success) return undefined;
-  const dateDirs = await dateDirectories(workspace);
+  let dateDirs: string[];
+  try {
+    dateDirs = await dateDirectories(workspace);
+  } catch {
+    return undefined;
+  }
   const file = `${runId}.json`;
   for (const date of dateDirs) {
     const record = await readRecord(workspace, date, file);
@@ -320,6 +339,15 @@ export interface HasSucceededOptions {
  * still reads as "done" and never causes a duplicate run. A `paused` record
  * is never a match (it never ran): the `outcome === "success"` check below
  * already excludes it, same as `listRuns`.
+ *
+ * P08-A round-3 review, carried nit 3: unlike `listRuns`, this function does
+ * NOT catch a date directory that fails to list (`workspace.list` below is
+ * not wrapped in try/catch) — it rejects. That is deliberate here: a
+ * rejection means "unknown whether this already ran", never "it hasn't run",
+ * so no caller may write `.catch(() => false)` around this call (that would
+ * silently read "unknown" as "not done" and risk a duplicate run/draft).
+ * Every caller — P05's preparation route and P08-B's scheduler — must fail
+ * closed on a rejection: don't run, and say why.
  */
 export async function hasSucceededWithIdempotencyKey(workspace: Workspace, clock: Clock, idempotencyKey: string, options: HasSucceededOptions = {}): Promise<boolean> {
   const sinceDays = options.sinceDays ?? DEFAULT_RUN_LIST_WINDOW_DAYS;
