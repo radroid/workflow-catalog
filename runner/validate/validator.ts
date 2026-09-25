@@ -27,10 +27,12 @@ import { citedLabels, hasUuid, ngrams, quoteSentence, splitSentences, strayBrack
  * - `number`: every quantity is one the cited claims state.
  * - `date`: every year, and every month in a date, is one the cited claims
  *   state; when the sentence states a date at all, a cited claim's end year
- *   ("2019–2021") is stated too; and nothing is said to be still going on
- *   ("since 2019", "2019–present", "still", "to this day", or a start with no
- *   end: "from 2019") unless a cited claim is itself open (it says so, or
- *   states only a start).
+ *   ("2019–2021") is stated too; nothing is said to be still going on
+ *   ("since 2019", "2019–present", "still", "now", "to date", "remains", "to
+ *   this day", or a start with no end: "from 2019") unless a cited claim is
+ *   itself open (it says so, or states only a start); and a date counted from
+ *   today ("recently", "last year", "two years ago") appears only where a
+ *   cited claim's own text has the same words.
  * - `title`: every job title equals one the cited claims state, word for
  *   word.
  * - `credential`: every degree or certification is one the cited claims
@@ -282,6 +284,13 @@ function checkSentence(sentence: string, where: DraftLocation, context: Context)
   if (sentenceDates.openEnd !== undefined && !claimDates.some(({ dates }) => isOpenEnded(dates))) {
     const says = sentenceDates.openStart ? "names a start and no end, so it says it is still going on" : "says it is still going on";
     dateProblems.push(`“${sentenceDates.openEnd}” ${says}, and the claims this sentence cites${citedLabelsNote} don't.`);
+  }
+  // A date counted from today ("last year", "recently") is only as true as the day it is read (revision 3, Y1): a
+  // sentence may use one only where a cited claim's own text uses the same words.
+  const claimRelative = new Set(claimDates.flatMap(({ dates }) => dates.relative ?? []));
+  const relative = (sentenceDates.relative ?? []).filter((phrase) => !claimRelative.has(phrase));
+  if (relative.length > 0) {
+    dateProblems.push(`${relative.map((phrase) => `“${phrase}”`).join(" and ")} ${relative.length === 1 ? "counts" : "count"} from today, and the claims this sentence cites${citedLabelsNote} don't. Use the years they state instead.`);
   }
   if (dateProblems.length > 0) refuse("date", `${dateProblems.join(" ")} Dates must match the claims exactly.`);
 

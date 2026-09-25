@@ -264,13 +264,19 @@ export interface DateFacts {
   /** Years that end something: the second year of a range ("2019–2021", "from 2019 to 2021", "between 2019 and 2021"), or a year after an end word ("until 2021", "left in 2021"). */
   readonly endYears: readonly string[];
   /**
-   * The words or mark that say something is still going on ("present", "since", "current", "still", "onward", "to
-   * date", "to this day", "and counting", a range left open: "2019–"), or a start with no end ("from 2019"), when
-   * there is one.
+   * The words or mark that say something is still going on ("present", "since", "current", "still", "onward", "now",
+   * "today", "to date", "as of now", "these days", "remains", "continues to", "and beyond", "to this day", "and
+   * counting", a range left open: "2019–"), or a start with no end ("from 2019"), when there is one.
    */
   readonly openEnd?: string;
   /** Set when `openEnd` is a start with no end anywhere: "from 2019", "starting in 2019" (revision 2, X4). */
   readonly openStart?: true;
+  /**
+   * Dates counted from today, as written ("recently", "last year", "this month", "two years ago"), when there are any
+   * (revision 3, Y1). A claim can't state such a date for a document read later, so a sentence may use one only
+   * where a claim it cites uses the same words.
+   */
+  readonly relative?: readonly string[];
   /** Whether it states when something started and never when it ended: "Started at Northwind Labs in 2022." */
   readonly startOnly: boolean;
 }
@@ -283,6 +289,19 @@ const END_WORDS = new Set(["until", "till", "through", "thru", "left", "leaving"
 const START_WORDS = new Set(["started", "start", "starting", "joined", "join", "joining", "began", "begin", "beginning", "since"]);
 /** Words that say something is still going on, wherever they are ("still" and "onward(s)": revision 2, X4). */
 const OPEN_WORDS = new Set(["present", "current", "currently", "ongoing", "since", "still", "onward", "onwards"]);
+/**
+ * The present, wherever it is said (revision 3, Y1): "now", "today", "presently", "nowadays", "remain(s)". Read after
+ * the range ends and phrases that hold them ("until now", "as of now"), so a refusal quotes the whole phrase.
+ */
+const PRESENT_WORDS = new Set(["now", "today", "presently", "nowadays", "remain", "remains"]);
+/** Words that date something from today (revision 3, Y1). */
+const RELATIVE_WORDS = new Set(["recently", "lately"]);
+/** The spans "last", "this" and "past" count back from today: "last year", "this month", "the past quarter" (Y1). */
+const RELATIVE_SPANS = new Set(["year", "month", "week", "quarter"]);
+/** The spans "N … ago" counts back in: "two years ago", "a month ago" (Y1). */
+const AGO_SPANS = new Set(["year", "years", "month", "months", "week", "weeks", "day", "days", "decade", "decades"]);
+/** How many spans back, written before "ago" or after "last"/"past": "two years ago", "a few months ago", "the last three years" (Y1). */
+const SPAN_COUNTS = new Set(["a", "an", "one", "few", "several", "many", "some", "couple"]);
 /** Words that mark a start right before its year; with no end anywhere, what started is still going on: "from 2019" (X4). */
 const START_MARKERS = new Set(["from", "starting"]);
 /** Words before "this day" that leave something open: "to this day" (X4). */
@@ -309,6 +328,62 @@ function isDay(word: string): boolean {
   return /^\d{1,2}$/.test(word);
 }
 
+/** The index of the word before `at`, past any hyphen: "up-to-date" reads as "up to date". */
+function wordBefore(lower: readonly string[], at: number): number {
+  let back = at - 1;
+  while (back >= 0 && lower[back] === "-") back -= 1;
+  return back;
+}
+
+/**
+ * A phrase ending at `index` that says something is still going on wherever it is (revision 3, Y1): "to date"
+ * (never "up to date"), "as of now", "at present", "these days", "continue(s) to" and "and beyond"; and X4's "to
+ * this day" and "and counting".
+ */
+function openPhraseAt(lower: readonly string[], index: number): string | undefined {
+  const word = lower[index]!;
+  const one = wordBefore(lower, index);
+  const previous = lower[one] ?? "";
+  const earlier = lower[wordBefore(lower, one)] ?? "";
+  if (word === "date" && previous === "to" && earlier !== "up") return "to date";
+  if (word === "now" && previous === "of" && earlier === "as") return "as of now";
+  if (word === "present" && previous === "at") return "at present";
+  if (word === "days" && previous === "these") return "these days";
+  if (word === "to" && (previous === "continue" || previous === "continues")) return `${previous} to`;
+  if (word === "beyond" && previous === "and") return "and beyond";
+  if (word === "day" && previous === "this" && THIS_DAY_JOINERS.has(earlier)) return `${earlier} this day`;
+  if (word === "counting" && previous === "and") return "and counting";
+  return undefined;
+}
+
+/** A count of spans: a numeral, a number word, or "a", "few", "several" and the like. */
+function isSpanCount(word: string | undefined): boolean {
+  return word !== undefined && (/^\d{1,3}$/.test(word) || SMALL_NUMBER_WORDS[word] !== undefined || SPAN_COUNTS.has(word));
+}
+
+/**
+ * A date counted from today that ends at `index`, as written (revision 3, Y1): "recently", "lately", "last year",
+ * "this month", "the past quarter", "the last three years", "two years ago", "a few months ago". "The last year of"
+ * a degree is its final year, not last year.
+ */
+function relativeDateAt(lower: readonly string[], index: number): string | undefined {
+  const word = lower[index]!;
+  if (RELATIVE_WORDS.has(word)) return word;
+  const previous = lower[index - 1] ?? "";
+  if (RELATIVE_SPANS.has(word) && (previous === "this" || previous === "past" || (previous === "last" && lower[index + 1] !== "of"))) return `${previous} ${word}`;
+  if (AGO_SPANS.has(word) && word.endsWith("s") && isSpanCount(previous) && (lower[index - 2] === "last" || lower[index - 2] === "past")) {
+    return `${lower[index - 2]} ${previous} ${word}`;
+  }
+  if (word === "ago" && AGO_SPANS.has(previous)) {
+    let start = index - 1;
+    if (isSpanCount(lower[start - 1])) start -= 1;
+    if (lower[start] === "few" && lower[start - 1] === "a") start -= 1;
+    if (lower[start] === "couple" && lower[start - 1] === "a") start -= 1;
+    return lower.slice(start, index + 1).join(" ");
+  }
+  return undefined;
+}
+
 /**
  * The dates in `text`: its years, its months where a month name sits next
  * to a day or a year, which years end something, and whether it leaves
@@ -322,6 +397,7 @@ export function datesIn(text: string): DateFacts {
   const years: string[] = [];
   const months: number[] = [];
   const endYears: string[] = [];
+  const relative: string[] = [];
   let openEnd: string | undefined;
   /** The first start marker with its year, as written: "from 2019", "starting in March 2019". */
   let startMark: string | undefined;
@@ -349,9 +425,11 @@ export function datesIn(text: string): DateFacts {
       const anchored = joiner === "-" || joiner === "to" ? yearBefore(index - 1) : END_WORDS.has(joiner) && joiner !== "left";
       if (anchored) openEnd = joiner === "-" ? `–${lower[index]}` : `${joiner} ${lower[index]}`;
     }
-    // "to this day" and "and counting" (X4).
-    if (openEnd === undefined && lower[index] === "day" && lower[index - 1] === "this" && THIS_DAY_JOINERS.has(lower[index - 2] ?? "")) openEnd = `${lower[index - 2]} this day`;
-    if (openEnd === undefined && lower[index] === "counting" && lower[index - 1] === "and") openEnd = "and counting";
+    // "to this day" and "and counting" (X4); "to date", "as of now", "these days", "continues to", "and beyond" (Y1).
+    if (openEnd === undefined) openEnd = openPhraseAt(lower, index);
+    if (openEnd === undefined && PRESENT_WORDS.has(lower[index]!)) openEnd = lower[index];
+    const counted = relativeDateAt(lower, index);
+    if (counted !== undefined && !relative.includes(counted)) relative.push(counted);
     if (!isYear(word)) continue;
 
     // Is this year the end of something? Look back past the words that may sit before a year.
@@ -379,7 +457,15 @@ export function datesIn(text: string): DateFacts {
 
   // "Graduated from Fernwood University in 2019." states no start: "from" marks one only right before its year.
   const startOnly = years.length > 0 && endYears.length === 0 && (startMark !== undefined || lower.some((word) => START_WORDS.has(word)));
-  return { years, months, endYears, ...(openEnd !== undefined ? { openEnd } : {}), ...(openStart ? { openStart: true as const } : {}), startOnly };
+  return {
+    years,
+    months,
+    endYears,
+    ...(openEnd !== undefined ? { openEnd } : {}),
+    ...(openStart ? { openStart: true as const } : {}),
+    ...(relative.length > 0 ? { relative } : {}),
+    startOnly,
+  };
 }
 
 /** Whether a claim leaves its dates open: it says so ("present", "since", "2019–"), or states a start and no end. */

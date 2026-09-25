@@ -773,3 +773,99 @@ describe("revision 2: an honest resume and cover letter still pass every rule", 
     expect(result.ok).toBe(true);
   });
 });
+
+/**
+ * Revision 3 (Y1–Y4): every probe the round-3 reviewer found passing, each as a whole draft that must now be
+ * refused, the false refusals Y2 and Y3 rule away, and the honest controls that must still pass. Extra claims are
+ * test-local and fictional, labelled after the fixture's eight.
+ */
+describe("revision 3, Y1: the present, and dates counted from today", () => {
+  // C9 is FERNWOOD_LABS, "Platform Engineer at Fernwood Labs, 2019–2021."; C10 is a closed billing claim.
+  const billing = confirmedClaim("C10", "fact", "Built the billing pipeline at Fernwood Labs between 2019 and 2021.");
+  const closed = [FERNWOOD_LABS, billing];
+
+  it.each([
+    ["“Now” with no year", "Now a Platform Engineer at Fernwood Labs [C9]."],
+    ["“Presently” with no year", "Presently a Platform Engineer at Fernwood Labs [C9]."],
+    ["“Nowadays” with no year", "Nowadays a Platform Engineer at Fernwood Labs [C9]."],
+    ["“to date” with no year", "Platform Engineer at Fernwood Labs to date [C9]."],
+    ["“as of now”", "Platform Engineer at Fernwood Labs as of now [C9]."],
+    ["“now” mid-sentence, citing two closed claims", "Platform Engineer at Fernwood Labs, where I now own the billing pipeline [C9][C10]."],
+    ["“today”", "Today I run the billing pipeline at Fernwood Labs [C10]."],
+    ["“at present”", "Platform Engineer at Fernwood Labs at present [C9]."],
+    ["“these days”", "Built the billing pipeline at Fernwood Labs, which these days runs nightly [C10]."],
+    ["“continues to”", "Built the billing pipeline at Fernwood Labs, which continues to run nightly [C10]."],
+    ["“Remains”", "Remains a Platform Engineer at Fernwood Labs [C9]."],
+    ["“and beyond” after the claim's own range", "Platform Engineer at Fernwood Labs, 2019–2021 and beyond [C9]."],
+    ["“now” beside the claim's own range", "Built and now run the billing pipeline at Fernwood Labs [C10]."],
+  ])("refuses %s against claims that end", (_name, statement) => {
+    expect(rulesWith(closed, statement)).toEqual(["date"]);
+  });
+
+  it.each([
+    ["“last year”", "Built the billing pipeline at Fernwood Labs last year [C10]."],
+    ["“this year”", "Built the billing pipeline at Fernwood Labs this year [C10]."],
+    ["“Recently”", "Recently built the billing pipeline at Fernwood Labs [C10]."],
+    ["“lately”", "Lately rebuilt the billing pipeline at Fernwood Labs [C10]."],
+    ["“last month”", "Rebuilt the billing pipeline at Fernwood Labs last month [C10]."],
+    ["“this month”", "Rebuilt the billing pipeline at Fernwood Labs this month [C10]."],
+    ["“a few years ago”", "Built the billing pipeline at Fernwood Labs a few years ago [C10]."],
+    ["“the past quarter”", "Rebuilt the billing pipeline at Fernwood Labs over the past quarter [C10]."],
+  ])("refuses a date counted from today: %s", (_name, statement) => {
+    expect(rulesWith(closed, statement)).toEqual(["date"]);
+  });
+
+  it("refuses “N years ago”, and says to use the claims' years", () => {
+    const [number, date] = validateDraft({ draft: resume("Built the billing pipeline at Fernwood Labs two years ago [C10]."), claims: [...LABELLED, ...closed], postingText: POSTING, coverLetterRequested: false }).refusals;
+    expect(number!.rule).toBe("number");
+    expect(date!.message).toBe("“two years ago” counts from today, and the claims this sentence cites (C10) don't. Use the years they state instead. Dates must match the claims exactly.");
+  });
+
+  it("names the phrase that leaves it open", () => {
+    const [refusal] = validateDraft({ draft: resume("Platform Engineer at Fernwood Labs as of now [C9]."), claims: WITH_C9, postingText: POSTING, coverLetterRequested: false }).refusals;
+    expect(refusal!.message).toBe("C9 ends in “2021”, and this sentence doesn't say so. “as of now” says it is still going on, and the claims this sentence cites (C9) don't. Dates must match the claims exactly.");
+  });
+
+  it("passes the present on a claim that is itself open, and a date counted from today that the claim states in the same words", () => {
+    const staff = confirmedClaim("C11", "title", "Staff Engineer at Northwind Labs since 2022.");
+    const recent = confirmedClaim("C12", "fact", "Recently rebuilt the ledger reconciliation runs at Northwind Labs.");
+    const claims = [...closed, staff, recent];
+    expect(rulesWith(claims, "Staff Engineer at Northwind Labs since 2022, where I now lead the payments infrastructure team [C11].")).toEqual([]);
+    expect(rules(resume("Senior Platform Engineer at Northwind Labs since 2022, where I now lead the payments infrastructure team [C8][C7][C1]."))).toEqual([]);
+    expect(rules(resume("Senior Platform Engineer at Northwind Labs, which I remain today [C8][C7]."))).toEqual([]);
+    expect(rulesWith(claims, "Recently rebuilt the ledger reconciliation runs at Northwind Labs [C12].")).toEqual([]);
+    // …and never another such date: "lately" is not "recently".
+    expect(rulesWith(claims, "Lately rebuilt the ledger reconciliation runs at Northwind Labs [C12].")).toEqual(["date"]);
+  });
+
+  it("keeps the honest controls: “up to date”, a degree's last year, and the claim's own range", () => {
+    expect(rules(resume("Kept the on-call rotation tooling up to date for three engineering teams [C3]."))).toEqual([]);
+    expect(rules(resume("Kept the on-call rotation tooling up-to-date for three engineering teams [C3]."))).toEqual([]);
+    expect(rules(resume("Completed the last year of the B.S. Computer Science at Fernwood University in 2019 [C6]."))).toEqual([]);
+    expect(rulesWith(closed, "Platform Engineer at Fernwood Labs, 2019–2021 [C9].")).toEqual([]);
+    expect(rulesWith(closed, "Built the billing pipeline at Fernwood Labs [C10].")).toEqual([]);
+  });
+
+  it("reads each as written", () => {
+    expect(datesIn("Now a Platform Engineer").openEnd).toBe("now");
+    expect(datesIn("Platform Engineer as of now").openEnd).toBe("as of now");
+    expect(datesIn("Platform Engineer until now").openEnd).toBe("until now");
+    expect(datesIn("Platform Engineer to date").openEnd).toBe("to date");
+    expect(datesIn("which continues to run").openEnd).toBe("continues to");
+    expect(datesIn("2019–2021 and beyond").openEnd).toBe("and beyond");
+    expect(datesIn("these days").openEnd).toBe("these days");
+    expect(datesIn("Remains a Platform Engineer").openEnd).toBe("remains");
+    expect(datesIn("kept up-to-date").openEnd).toBeUndefined();
+    expect(datesIn("recently, last year and this month, two years ago, a few weeks ago, the past quarter, the last three years").relative).toEqual([
+      "recently",
+      "last year",
+      "this month",
+      "two years ago",
+      "a few weeks ago",
+      "past quarter",
+      "last three years",
+    ]);
+    expect(datesIn("the last year of the degree, in 2019").relative).toBeUndefined();
+    expect(datesIn("Platform Engineer at Fernwood Labs, 2019–2021.")).toEqual({ years: ["2019", "2021"], months: [], endYears: ["2021"], startOnly: false });
+  });
+});
