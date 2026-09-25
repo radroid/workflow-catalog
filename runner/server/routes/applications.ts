@@ -67,7 +67,9 @@ import { runTurn, withRun, type TurnResult } from "../run-harness.ts";
  *    made from the same inputs but the newest documents differ (another
  *    header, or a newer version made from other inputs), that version's
  *    draft is checked again (X7) and exported as a new version naming the
- *    newest: no model turn runs, and no run is used.
+ *    newest: no model turn runs, and no run is used. A draft the checks now
+ *    refuse is refused once, saying the documents must be prepared fresh;
+ *    the next Prepare runs a fresh preparation (revision 3, Y7).
  * 3. A preparation attempt (`applications/<taskId>/preparation.json`)
  *    records the labelled claims and the job revision, and the application's
  *    `processing` goes to `running`. Its stage never moves until documents
@@ -324,6 +326,14 @@ async function reexportSource(applications: ApplicationsStore, application: Appl
 }
 
 /**
+ * Whether `source`'s re-export was refused since the newest version was made (revision 3, Y7): its draft no longer
+ * passed the checks, the person was told, and the next Prepare runs a fresh preparation instead of refusing again.
+ */
+function refusedSinceNewest(source: VersionRecord, application: Application): boolean {
+  return source.reexportRefused !== undefined && source.reexportRefused.newest === newestDocument(application.documents)?.version;
+}
+
+/**
  * Starts preparing `request.jobId`'s latest revision, or says why not, or
  * that it is already prepared or already running. Resolves as soon as the
  * turn is queued; `waitForPreparationQueue` resolves once it has finished.
@@ -366,8 +376,10 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
     if (IN_FLIGHT.has(flightKey(ctx, existing.taskId))) return { outcome: "already_running", taskId: existing.taskId };
     // V8, X5: the same inputs, but not as the newest documents carry them (another name or contact line, or a
     // newer version made for other inputs): export the checked draft again as the newest version, with no turn.
+    // Y7: unless that re-export was refused since the newest version was made; then this is the fresh preparation
+    // the refusal said preparing again would run.
     const source = await reexportSource(applications, existing, content);
-    if (source) return reexport(ctx, existing, source, key, details, claims);
+    if (source && !refusedSinceNewest(source, existing)) return reexport(ctx, existing, source, key, details, claims);
     const previous = await applications.readPreparation(existing.taskId);
     if (previous && previous !== "unreadable" && previous.status === "parked" && contentKey(previous.idempotencyKey) === content) {
       const answered = new Map(previous.answers.map((answer) => [answer.requirement, answer.answer]));
@@ -430,9 +442,12 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
   }
 }
 
-/** Why a re-export was refused (X7): its stored draft no longer passes the checks, so nothing was exported. */
+/**
+ * Why a re-export was refused (X7), and the way forward (revision 3, Y7): its stored draft no longer passes the
+ * checks, so nothing was exported, and the next Prepare runs a fresh preparation.
+ */
 export function reexportRefusedMessage(version: number): string {
-  return `Version ${version}'s sentences no longer pass the runner's checks, so they weren't exported again. Nothing was written.`;
+  return `Version ${version}'s sentences no longer pass the runner's checks, so they weren't exported again. The documents must be prepared fresh: preparing again runs a new preparation.`;
 }
 
 /**
@@ -442,14 +457,19 @@ export function reexportRefusedMessage(version: number): string {
  *
  * X7: the stored draft is checked again first, against the profile as it is now and the posting, exactly as a
  * model's draft is. A draft today's checks refuse (the rules grew stricter since, or the file was edited) is
- * never exported: the re-export is refused, plainly, and nothing is written. The check reads and writes nothing
- * of the application's, so it runs before the flight begins: a refused re-export never reads as running.
+ * never exported: the re-export is refused, plainly, and no document is written. The check runs before the flight
+ * begins: a refused re-export never reads as running. Y7: the refusal is noted on the source's record (when, and
+ * the newest version then), so the next Prepare runs a fresh preparation instead of refusing the same again.
  */
 async function reexport(ctx: RunnerContext, application: Application, source: VersionRecord, key: string, details: PersonDetails, claims: readonly PreparedClaim[]): Promise<PrepareStart> {
   const read = await new JobsStore(ctx.workspace).readSnapshot(application.jobId, source.jobRevision);
   if (read.kind !== "ok") return refused(409, "snapshot_unreadable", "This job's latest revision can't be read, so it can't be prepared.");
   const check = validateDraft({ draft: source.draft, claims, postingText: postingText(read.snapshot), coverLetterRequested: source.coverLetter });
-  if (!check.ok) return refused(409, "reexport_refused", reexportRefusedMessage(source.version));
+  if (!check.ok) {
+    const newest = newestDocument(application.documents)?.version ?? source.version;
+    await new ApplicationsStore(ctx.workspace, ctx.clock).writeVersion(application.taskId, { ...source, reexportRefused: { at: ctx.clock.now().toISOString(), newest } });
+    return refused(409, "reexport_refused", reexportRefusedMessage(source.version));
+  }
 
   const flight = flightKey(ctx, application.taskId);
   if (IN_FLIGHT.has(flight)) return { outcome: "already_running", taskId: application.taskId };
@@ -956,6 +976,9 @@ async function detailView(ctx: RunnerContext, taskId: string) {
   const details = await applications.readDetails();
   const currentDetails = details ? detailsDigest(details) : undefined;
   const versions = (await applications.listVersions(taskId)).reverse();
+  const newestAttached = newestDocument(application.documents)?.version;
+  /** The version whose re-export was refused since the newest version was made (Y7): preparing again runs fresh. */
+  const reexportRefused = versions.find((version) => version.reexportRefused !== undefined && version.reexportRefused.newest === newestAttached)?.version ?? null;
   const latest = await latestSnapshot(jobs, application.jobId);
   const snapshots = new Map<number, JobSnapshot | undefined>();
   const jobAt = async (revision: number) => {
@@ -969,6 +992,7 @@ async function detailView(ctx: RunnerContext, taskId: string) {
     jobName: jobName(latest),
     stage: application.stage,
     state: stateOf(ctx, application, attempt, mark),
+    reexportRefused,
     preparation: known
       ? {
           status: known.status,

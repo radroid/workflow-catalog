@@ -187,6 +187,12 @@ export const versionRecordSchema = z
     /** Set on a re-export (revision 1, V8): the version whose validated draft this one carries unchanged, with a new header. */
     sameDraftAs: z.number().int().positive().optional(),
     pdfMissing: pdfMissingSchema.optional(),
+    /**
+     * Set when a re-export of this version's draft was refused because the draft no longer passes the checks (revision
+     * 3, Y7): when, and which version was the newest then. Until a newer version exists, preparing again runs a fresh
+     * preparation instead of refusing the same re-export again.
+     */
+    reexportRefused: z.object({ at: isoDateTimeSchema, newest: z.number().int().positive() }).strict().optional(),
   })
   .strict();
 export type VersionRecord = z.infer<typeof versionRecordSchema>;

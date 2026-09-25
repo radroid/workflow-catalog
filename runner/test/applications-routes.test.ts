@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { postingText } from "../agent/lib/prepare-logic.ts";
 import { actionsOutsidePreparation, requestedActions } from "../agent/lib/prepare-schema.ts";
 import { letterDate } from "../export/document.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
@@ -11,7 +12,9 @@ import { getBudgetState, pauseBudget, setBudgetLimits } from "../store/budget.ts
 import { JobsStore } from "../store/jobs.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { listRuns } from "../store/runs.ts";
+import { labelClaims } from "../validate/claims.ts";
 import { citedLabels } from "../validate/text.ts";
+import { validateDraft } from "../validate/validator.ts";
 import { docxAllText, docxText, flat, pdfText } from "./document-text.ts";
 import { BRIDGE, makeBridge, UI_TOKEN, type TestBridge } from "./helpers.ts";
 import {
@@ -115,6 +118,7 @@ interface DetailView {
   readonly jobName: string;
   readonly stage: string;
   readonly state: StateView;
+  readonly reexportRefused: number | null;
   readonly preparation: null | {
     readonly status: string;
     readonly coverLetter: boolean;
@@ -1459,7 +1463,7 @@ describe("documents dated where the person is (revision 3, Y6)", () => {
 });
 
 describe("a re-export checks its draft again (revision 2, X7)", () => {
-  it("a stored draft today's checks refuse is never exported under a new name: the re-export is refused plainly, and nothing is written", async () => {
+  it("a stored draft today's checks refuse is never exported under a new name: the re-export is refused plainly, and nothing is exported", async () => {
     const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
     const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
     const taskId = (await prepare(bridge, jobId)).body.application.taskId;
@@ -1476,7 +1480,10 @@ describe("a re-export checks its draft again (revision 2, X7)", () => {
     await post(bridge, "/details", { name: "Zoe Quill", contact: "" });
     const refusal = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false });
     expect(refusal.status).toBe(409);
-    expect(refusal.body.error).toEqual({ code: "reexport_refused", message: "Version 1's sentences no longer pass the runner's checks, so they weren't exported again. Nothing was written." });
+    expect(refusal.body.error).toEqual({
+      code: "reexport_refused",
+      message: "Version 1's sentences no longer pass the runner's checks, so they weren't exported again. The documents must be prepared fresh: preparing again runs a new preparation.",
+    });
     await waitForPreparationQueue(bridge.workspace.root);
     expect((await applicationRecord(bridge, taskId)).documents).toEqual(documentsBefore);
     expect(await readdir(bridge.workspace.resolve("applications", taskId, "docs"))).toEqual(filesBefore);
@@ -1489,6 +1496,113 @@ describe("a re-export checks its draft again (revision 2, X7)", () => {
     await writeFile(recordFile, JSON.stringify(record));
     expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "reexported", version: 2, replaces: 1 });
     expect(flat(await documentText(bridge, taskId, "resume-v2.pdf"))).toContain("Zoe Quill");
+  });
+});
+
+describe("a refused re-export has a way forward (revision 3, Y7)", () => {
+  /** Edits version `version`'s stored draft to state a number no claim does: today's checks refuse it. */
+  async function tamper(bridge: TestBridge, taskId: string, version: number): Promise<unknown> {
+    const recordFile = bridge.workspace.resolve("applications", taskId, "versions", `v${version}.json`);
+    const record = JSON.parse(await readFile(recordFile, "utf8"));
+    expect(record.draft.resume.sections[1].statements[1]).toBe("Shipped the on-call rotation tooling used by three engineering teams [C3].");
+    record.draft.resume.sections[1].statements[1] = "Shipped the on-call rotation tooling used by five engineering teams [C3].";
+    await writeFile(recordFile, JSON.stringify(record));
+    return record.draft;
+  }
+
+  /** Today's checks on version `version`'s stored draft, exactly as a re-export runs them. */
+  async function checks(bridge: TestBridge, taskId: string, jobId: string, version: number) {
+    const record = JSON.parse(await rawFile(bridge, "applications", taskId, "versions", `v${version}.json`));
+    const read = await new JobsStore(bridge.workspace).readSnapshot(jobId, record.jobRevision);
+    if (read.kind !== "ok") throw new Error("no job snapshot");
+    const claims = labelClaims((await new ProfileStore(bridge.workspace, bridge.clock).read()).claims);
+    return validateDraft({ draft: record.draft, claims, postingText: postingText(read.snapshot), coverLetterRequested: record.coverLetter });
+  }
+
+  it("is refused once, saying the documents must be prepared fresh; the next Prepare runs a fresh preparation, and its new version passes the checks", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId)).body.application.taskId;
+    const tampered = await tamper(bridge, taskId, 1);
+    expect((await checks(bridge, taskId, jobId, 1)).ok).toBe(false);
+    await post(bridge, "/details", { name: "Zoe Quill", contact: "" });
+
+    const refusal = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false });
+    expect(refusal.status).toBe(409);
+    expect(refusal.body.error).toEqual({
+      code: "reexport_refused",
+      message: "Version 1's sentences no longer pass the runner's checks, so they weren't exported again. The documents must be prepared fresh: preparing again runs a new preparation.",
+    });
+    await waitForPreparationQueue(bridge.workspace.root);
+    // The refusal is noted on version 1's record, and nothing else of it changes: no document, no version, no run.
+    const noted = JSON.parse(await rawFile(bridge, "applications", taskId, "versions", "v1.json"));
+    expect(noted.reexportRefused).toEqual({ at: bridge.clock.now().toISOString(), newest: 1 });
+    expect(noted.draft).toEqual(tampered);
+    expect(await readdir(bridge.workspace.resolve("applications", taskId, "versions"))).toEqual(["v1.json"]);
+    expect(model.prompts).toHaveLength(1);
+    const refused = await detail(bridge, taskId);
+    expect(refused.reexportRefused).toBe(1);
+    expect(refused.versions.map((version) => [version.version, version.olderDetails])).toEqual([[1, true]]);
+
+    // The next Prepare runs fresh: a model turn and a run, and a new version with the new name, not the refusal again.
+    bridge.clock.advance(60_000);
+    const fresh = await prepare(bridge, jobId);
+    expect(fresh.status).toBe(200);
+    expect(fresh.body.outcome).toBe("started");
+    expect(model.prompts).toHaveLength(2);
+    expect((await listRuns(bridge.workspace, bridge.clock)).records).toHaveLength(2);
+    const view = await detail(bridge, taskId);
+    expect(view.versions.map((version) => [version.version, version.replaces, version.sameDraftAs, version.olderDetails])).toEqual([
+      [2, 1, null, false],
+      [1, null, null, true],
+    ]);
+    expect(view.reexportRefused).toBeNull();
+    expect(flat(await documentText(bridge, taskId, "resume-v2.pdf"))).toContain("Zoe Quill");
+    // Its draft passes today's checks, and states only what the claims do.
+    expect((await checks(bridge, taskId, jobId, 2)).refusals).toEqual([]);
+    expect(await documentText(bridge, taskId, "resume-v2.md")).toContain("used by three engineering teams");
+
+    // With nothing changed since, preparing again writes nothing new.
+    expect((await prepare(bridge, jobId)).body).toMatchObject({ outcome: "already_prepared", version: 2 });
+    expect(model.prompts).toHaveLength(2);
+  });
+
+  it("an older version's refused re-export (X5) runs fresh for that version's inputs only; the newest version's inputs are untouched", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const taskId = (await prepare(bridge, jobId, false)).body.application.taskId;
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "started" });
+    expect(model.prompts).toHaveLength(2);
+    await tamper(bridge, taskId, 1);
+
+    // Resume only again: version 1's draft would go out as the newest (X5), but today's checks refuse it.
+    const refusal = await post<ErrorBody>(bridge, "/prepare", { jobId, coverLetter: false });
+    expect(refusal.status).toBe(409);
+    expect(refusal.body.error.code).toBe("reexport_refused");
+    await waitForPreparationQueue(bridge.workspace.root);
+    expect(JSON.parse(await rawFile(bridge, "applications", taskId, "versions", "v1.json")).reexportRefused).toEqual({ at: bridge.clock.now().toISOString(), newest: 2 });
+    const refused = await detail(bridge, taskId);
+    expect(refused.reexportRefused).toBe(1);
+    expect(refused.versions.map((version) => [version.version, version.olderDetails])).toEqual([
+      [2, false],
+      [1, false],
+    ]);
+    // Version 2's inputs, the cover letter, are still prepared as they were.
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "already_prepared", version: 2 });
+    expect(model.prompts).toHaveLength(2);
+
+    // Resume only once more: a fresh preparation, not the refusal again.
+    const fresh = await prepare(bridge, jobId, false);
+    expect(fresh.body.outcome).toBe("started");
+    expect(model.prompts).toHaveLength(3);
+    const view = await detail(bridge, taskId);
+    expect(view.versions.map((version) => [version.version, version.coverLetter, version.sameDraftAs])).toEqual([
+      [3, false, null],
+      [2, true, null],
+      [1, false, null],
+    ]);
+    expect(view.reexportRefused).toBeNull();
+    expect((await checks(bridge, taskId, jobId, 3)).refusals).toEqual([]);
   });
 });
 

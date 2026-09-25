@@ -694,7 +694,14 @@ function renderVersion(detail, version, latest) {
   const notes = [];
   if (latest) {
     if (version.olderProfile) notes.push(el("p", { className: "version-note small", text: "Your career profile has changed since this version. Prepare again to use its current version." }));
-    if (version.olderDetails) notes.push(el("p", { className: "version-note small", text: "Your name or contact line has changed since this version. Prepare again to put it on your documents." }));
+    // After this version's re-export was refused, preparing again runs a fresh preparation, and the note says so
+    // (revision 3, Y7). An older version's refused re-export (X5) leaves this one's note as it is: Prepare again
+    // keeps this version's letter choice (Y5), so it re-exports this version's sentences, which the refusal didn't touch.
+    const olderDetails =
+      detail.reexportRefused === version.version
+        ? "Your name or contact line has changed since this version, and its sentences no longer pass the runner's checks. Prepare again runs a fresh preparation."
+        : "Your name or contact line has changed since this version. Prepare again to put it on your documents.";
+    if (version.olderDetails) notes.push(el("p", { className: "version-note small", text: olderDetails }));
     if (version.noLongerConfirmed.length > 0) {
       const n = version.noLongerConfirmed.length;
       notes.push(el("p", { className: "version-note small", text: `It cites ${plural(n, "claim")} you have since excluded or changed. Prepare again for a version without ${n === 1 ? "it" : "them"}.` }));
@@ -1044,7 +1051,7 @@ const PREPARE_REFUSALS = {
   no_model: "Not prepared: no model is set up.",
   budget_paused: "Not prepared: the run budget is paused; resume it in [Settings](/ui/settings).",
   snapshot_unreadable: "Not prepared: this job's saved posting can't be read.",
-  reexport_refused: "Not re-exported: its saved sentences no longer pass the runner's checks.",
+  reexport_refused: "Not re-exported: its sentences no longer pass the checks; preparing again starts fresh.",
   job_not_found: "Not prepared: that job couldn't be found.",
   profile_busy: "Not prepared: your profile is busy; try again in a moment.",
   unreachable: CANT_REACH,

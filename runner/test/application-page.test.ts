@@ -994,12 +994,52 @@ describe("Applications page: a re-export whose saved draft no longer passes (rev
     await saveName(page, "Zoe Quill");
     const button = press(page, "detail-prepare");
     await until(() => page.outcomes().at(-1)?.startsWith("Not re-exported") === true, "the refusal");
-    expect(page.outcomes().at(-1)).toBe("Not re-exported: its saved sentences no longer pass the runner's checks.");
+    expect(page.outcomes().at(-1)).toBe("Not re-exported: its sentences no longer pass the checks; preparing again starts fresh.");
     expect(page.byId("last-action").className).toContain("refused");
     expect(page.document.activeElement).toBe(button);
     expect(button.getAttribute("aria-disabled")).toBe("false");
     await page.quiet();
     expect(all(page, ".version")).toHaveLength(1);
+  });
+});
+
+describe("Applications page: a refused re-export has a way forward (revision 3, Y7)", () => {
+  const DETAILS_NOTE = "Your name or contact line has changed since this version. Prepare again to put it on your documents.";
+  const REFUSED_NOTE = "Your name or contact line has changed since this version, and its sentences no longer pass the runner's checks. Prepare again runs a fresh preparation.";
+  const notes = (page: Page) => all(page, ".version-note").map((note) => note.textContent);
+
+  it("the refusal and the note say the sentences no longer pass and preparing again starts fresh; Prepare again then runs a fresh preparation", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    const [task] = (await readdir(bridge.workspace.resolve("applications"))).filter((entry) => entry.endsWith(".json") && entry !== "details.json");
+    const recordFile = bridge.workspace.resolve("applications", task!.replace(/\.json$/, ""), "versions", "v1.json");
+    const record = JSON.parse(await readFile(recordFile, "utf8"));
+    record.draft.resume.sections[1].statements[1] = "Shipped the on-call rotation tooling used by five engineering teams [C3].";
+    await writeFile(recordFile, JSON.stringify(record));
+    const page = await openPage(bridge);
+    page.document.querySelector(".app-open")!.click();
+    await until(() => page.document.querySelector(".version") !== null, "version 1");
+
+    await saveName(page, "Zoe Quill");
+    await until(() => notes(page).includes(DETAILS_NOTE), "the details note");
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().at(-1)?.startsWith("Not re-exported") === true, "the refusal");
+    expect(page.outcomes().at(-1)).toBe("Not re-exported: its sentences no longer pass the checks; preparing again starts fresh.");
+    await until(() => notes(page).includes(REFUSED_NOTE), "the note to say so");
+    expect(notes(page)).toEqual([REFUSED_NOTE]);
+    expect(page.byId("detail-prepare").textContent).toBe("Prepare again");
+    expect(model.prompts).toHaveLength(1);
+    await page.quiet();
+
+    const before = page.outcomes().length;
+    press(page, "detail-prepare");
+    await until(() => page.outcomes().slice(before).includes("Prepared “Platform Lead · Fernwood”: version 2 is ready."), "version 2", 10_000);
+    expect(page.outcomes().slice(before).some((line) => line.startsWith("Not re-exported"))).toBe(false);
+    expect(model.prompts).toHaveLength(2);
+    await until(() => all(page, ".version").length === 2, "version 2 in the detail");
+    // Version 2 carries the new name, so neither note stays; version 1 says what replaced it.
+    expect(notes(page)).toEqual(["Version 2 replaces it."]);
   });
 });
 

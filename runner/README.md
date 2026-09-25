@@ -398,7 +398,10 @@ new version that names the one it replaces. A changed name or contact line
 alone re-exports the validated draft under it, checked again first, as a
 new version naming the one it replaces, with no model turn and no run; its
 cover letter keeps the date it was first written, and its note says whose
-sentences it carries and what changed since the version it replaces.
+sentences it carries and what changed since the version it replaces. If
+today's checks refuse that draft, the re-export is refused once, saying the
+documents must be prepared fresh, and the next Prepare runs a fresh
+preparation instead of refusing again.
 Documents are dated in the runner machine's time zone, the person's, so a
 letter and the page say the same day. Prepare again keeps the newest
 version's choice of a cover letter, unless it continues a parked attempt,
