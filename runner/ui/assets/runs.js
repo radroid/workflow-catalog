@@ -186,6 +186,12 @@ function renderRun(run) {
  * Neutral note (G9: not a decision) naming the skipped files as short paths in <code>, one per line, full path in
  * `title` (I4). A folder that couldn't be listed at all is one entry ("runs/2026-09-23/", or "runs/" for the whole
  * log; I2), so the count then says "records or folders" rather than claim it counted records inside it.
+ *
+ * P08-A round-3 review, carried P-b: when every skipped entry the server actually named is a folder (never
+ * truncated past it — `invalidCount === skippedFiles.length`), the note reads plain "folder(s)", not the vaguer
+ * "record(s) or folders" — a lone unreadable folder (`invalidCount: 1`) now reads "1 folder could not be read",
+ * not "1 run record or folder". A genuine mix, or a folder hidden among more entries than were named, keeps the
+ * "record(s) or folders" wording rather than guess.
  */
 function renderSkippedNote(node, invalidCount, skippedFiles) {
   node.replaceChildren();
@@ -193,7 +199,13 @@ function renderSkippedNote(node, invalidCount, skippedFiles) {
     node.hidden = true;
     return;
   }
-  const noun = skippedFiles.some((file) => file.endsWith("/")) ? `run record${invalidCount === 1 ? " or folder" : "s or folders"}` : `run record${invalidCount === 1 ? "" : "s"}`;
+  const anyFolder = skippedFiles.some((file) => file.endsWith("/"));
+  const allNamedAreFolders = anyFolder && skippedFiles.every((file) => file.endsWith("/")) && invalidCount === skippedFiles.length;
+  const noun = allNamedAreFolders
+    ? `folder${invalidCount === 1 ? "" : "s"}`
+    : anyFolder
+      ? `run record${invalidCount === 1 ? " or folder" : "s or folders"}`
+      : `run record${invalidCount === 1 ? "" : "s"}`;
   node.append(el("p", { text: `${invalidCount} ${noun} could not be read:` }));
   const list = el("ul", { className: "skipped-files" });
   for (const file of skippedFiles) list.append(el("li", {}, el("code", { text: shortRunPath(file), attrs: { title: file } })));
@@ -211,7 +223,10 @@ async function loadRuns() {
     list.replaceChildren();
     renderSkippedNote(invalidNote, invalidCount, skippedFiles);
     if (runs.length === 0) {
-      empty.hidden = false;
+      // P08-A round-3 review, carried P-a: "No runs yet." is only true when nothing was skipped either — with
+      // skipped records or folders, the skipped-note above already says what happened, and claiming there are
+      // no runs at all would be misleading (there may well be some, just unreadable right now).
+      empty.hidden = invalidCount > 0;
       list.hidden = true;
       // No live-region echo on load (issue 6): the empty state is ordinary page content, not an interruption.
       return;
