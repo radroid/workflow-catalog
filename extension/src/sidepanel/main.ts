@@ -81,10 +81,18 @@ function defaultCurrent(): { sessionId: string; taskId: string } | undefined {
   return item ? { sessionId: session.sessionId, taskId: item.taskId } : undefined;
 }
 
-async function activeTask(): Promise<{ sessionId: string; taskId: string } | undefined> {
+/** The active tab the panel last followed: switching to another tab selects its task; a redraw doesn't undo Show. */
+let followedTabId: number | undefined;
+
+/** The task of the active tab, when the person has just switched to it (undefined otherwise). */
+async function newlyActiveTask(): Promise<{ sessionId: string; taskId: string } | undefined> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return await sessionTaskOfTab(tab?.id);
+    const recorded = await sessionTaskOfTab(tab?.id);
+    const tabId = recorded ? tab?.id : undefined;
+    if (tabId === followedTabId) return undefined;
+    followedTabId = tabId;
+    return recorded;
   } catch {
     return undefined;
   }
@@ -107,14 +115,7 @@ function draw(): void {
 async function reload(): Promise<void> {
   view.sessions = await listSessions();
   view.tabMaps = await listTabMaps();
-  // A "not sent yet" line goes once a background send got the choice through.
-  for (const [key, line] of view.lines) {
-    if (line.action !== "retry" || !key.startsWith("task:")) continue;
-    const taskId = key.slice("task:".length);
-    const item = view.sessions.flatMap((session) => session.items).find((candidate) => candidate.taskId === taskId);
-    if (item?.choiceProblem !== "unreachable") view.lines.delete(key);
-  }
-  const active = await activeTask();
+  const active = await newlyActiveTask();
   if (active) selected = active;
   view.current = exists(selected) ? selected : defaultCurrent();
   draw();
@@ -310,7 +311,10 @@ const handlers: PanelHandlers = {
       const outcome = await busyWhile(`${status}:${taskId}`, () => chooseStatus(sessionId, taskId, status, bridgeClient));
       if (!outcome) return;
       const line = choiceLine(outcome, status);
-      view.lines.set(`task:${taskId}`, line);
+      // A problem is kept on the item in storage (it changes when a later send gets through or is refused),
+      // and the card draws its line from there; the other outcomes are this press's own.
+      if (outcome.kind === "problem") view.lines.delete(`task:${taskId}`);
+      else view.lines.set(`task:${taskId}`, line);
       nextFocus = `task:${taskId}`;
       announce(line.text);
       await reload();
@@ -336,6 +340,13 @@ const handlers: PanelHandlers = {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   const keys = Object.keys(changes);
+  if (areaName === "session" && "deviceToken" in changes) {
+    // Paired or un-paired elsewhere (Settings): say so, without a request of the panel's own. The next
+    // check -- the button, or the worker's alarm -- asks the runner.
+    const paired = changes.deviceToken?.newValue != null;
+    if (!paired) view.connection = { kind: "not_paired" };
+    else if (view.connection.kind === "not_paired" || view.connection.kind === "problem") view.connection = { kind: "unchecked" };
+  }
   if (areaName === "local" && keys.some(isSessionStorageKey)) scheduleReload();
   if (areaName === "session" && keys.some((key) => isSessionStorageKey(key) || key === "deviceToken")) scheduleReload();
 });

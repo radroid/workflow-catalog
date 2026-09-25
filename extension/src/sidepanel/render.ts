@@ -29,6 +29,8 @@ export type ConnectionView =
   | { readonly kind: "checking" }
   | { readonly kind: "connected"; readonly at: string }
   | { readonly kind: "not_paired" }
+  /** Paired since the last check (in Settings); nothing asked the runner yet. */
+  | { readonly kind: "unchecked" }
   | { readonly kind: "problem"; readonly message: string };
 
 export interface Line {
@@ -124,6 +126,7 @@ function connectionSection(view: PanelView, handlers: PanelHandlers): HTMLElemen
   if (connection.kind === "not_paired") {
     children.push(el("p", { className: FLASH_CLASS.act, text: "Pair this browser in Settings to receive sessions from the runner." }));
   }
+  if (connection.kind === "unchecked") children.push(el("p", { className: "small", text: "Paired. Check for sessions to see what the runner sent." }));
   if (connection.kind === "problem") children.push(el("p", { className: FLASH_CLASS.act, attrs: { "data-connection-problem": "" } }, withInlineCode(connection.message)));
   const actions = el("div", { className: "row" }, [
     button("Check for sessions", "check", handlers.checkNow, { ghost: true, busy: view.busy.has("check"), busyLabel: "Checking…" }),

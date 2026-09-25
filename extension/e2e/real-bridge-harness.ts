@@ -35,8 +35,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { JobCapture } from "@workflow-catalog/contracts";
 import { ManualClock } from "@workflow-catalog/runner/lib/clock.ts";
-import { createBridgeApp, listen, type RunningBridge } from "@workflow-catalog/runner/server/app.ts";
+import { ROUTES_DIR } from "@workflow-catalog/runner/lib/paths.ts";
+import { createBridgeApp, listen, startModules, type RunningBridge } from "@workflow-catalog/runner/server/app.ts";
 import { createRunnerContext, silentLogger, type RunnerContext } from "@workflow-catalog/runner/server/context.ts";
+import { loadRouteModules, type LoadedRouteModule, type StopFunction } from "@workflow-catalog/runner/server/route-modules.ts";
 import { Workspace } from "@workflow-catalog/runner/store/workspace.ts";
 import { createBridgeClient, type BridgeClient } from "../src/shared/bridge-client";
 
@@ -136,6 +138,13 @@ export interface BridgeHarness {
 }
 
 const workspaceDirs: string[] = [];
+const moduleStops: StopFunction[] = [];
+
+/** Where scratch workspaces go: `WC_E2E_SCRATCH_DIR` when set (an agent
+ * passes its own scratch folder), else the OS temp folder. */
+function scratchParent(): string {
+  return process.env.WC_E2E_SCRATCH_DIR ?? os.tmpdir();
+}
 
 export interface StartBridgeHarnessOptions {
   /** Defaults to BRIDGE_PORT (4310). `"ephemeral"` binds port 0 and uses
@@ -143,19 +152,38 @@ export interface StartBridgeHarnessOptions {
    * vitest-only harness that never needs to be the one real extension's
    * fixed bridge origin (P07-B revision 1, B1). */
   readonly port?: number | "ephemeral";
+  /**
+   * P07 part C (carried from the P04 round-1 review): `"real"` loads every
+   * route module in runner/server/routes/ and runs their start hooks, the
+   * way `npm run runner` does (cli/runner.ts), so a `job_capture` reaches
+   * P04's handler and a session's events reach P06's. `"none"` (the
+   * default) is the bare P02 bridge, which journals an event with no
+   * handler as no_handler -- what the bridge-client tests exercise.
+   */
+  readonly modules?: "none" | "real";
+  /** Where the runner's clock starts. ManualClock's own default is
+   * 2026-09-22T09:00Z; a session's command expires a day after the runner's
+   * now, and the extension checks that against the browser's real clock, so
+   * the sessions e2e starts the runner at the real now. */
+  readonly clockStart?: Date;
 }
 
 export async function startBridgeHarness(options: StartBridgeHarnessOptions = {}): Promise<BridgeHarness> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wc-p07b-bridge-"));
+  const root = await mkdtemp(path.join(scratchParent(), "wc-p07-bridge-"));
   workspaceDirs.push(root);
-  const clock = new ManualClock();
+  const clock = options.clockStart ? new ManualClock(options.clockStart) : new ManualClock();
   const workspace = await Workspace.create(path.join(root, "JobAssistant"), { packageVersion: "0.1.0-test", clock });
   const ctx = createRunnerContext({ workspace, clock, packageVersion: "0.1.0-test", log: silentLogger });
-  // No route modules: job_capture has no handler until P04 (runner/README.md
-  // "The bridge": "journals a job_capture with no handler as no_handler"),
-  // which is exactly the real, shipped P02 behaviour this repo is at right
-  // now -- not a stand-in for a handler this harness doesn't have.
-  const buildApp = (port: number): BridgeApp => createBridgeApp({ ctx, modules: [], uiToken: undefined, port });
+  // With no route modules, job_capture has no handler (runner/README.md
+  // "The bridge": "journals a job_capture with no handler as no_handler"):
+  // the bare P02 bridge. `modules: "real"` is the bridge `npm run runner`
+  // starts.
+  let modules: readonly LoadedRouteModule[] = [];
+  if (options.modules === "real") {
+    modules = await loadRouteModules(ROUTES_DIR);
+    moduleStops.push(...(await startModules(ctx, modules)));
+  }
+  const buildApp = (port: number): BridgeApp => createBridgeApp({ ctx, modules, uiToken: undefined, port });
   if (options.port === "ephemeral") {
     const { app, port, bridge } = await listenOnEphemeralPort(buildApp);
     return { ctx, clock, app, port, bridge };
@@ -166,10 +194,12 @@ export async function startBridgeHarness(options: StartBridgeHarnessOptions = {}
   return { ctx, clock, app, port, bridge };
 }
 
-/** Deletes every scratch workspace `startBridgeHarness` has created so far
- * in this process. Call once, from the last `afterEach`/`afterAll` in
- * whichever suite owns it -- safe to call with nothing pending. */
+/** Stops every started route module, then deletes every scratch workspace
+ * `startBridgeHarness` has created so far in this process. Call once, from
+ * the last `afterEach`/`afterAll` in whichever suite owns it -- safe to call
+ * with nothing pending. */
 export async function cleanScratchWorkspaces(): Promise<void> {
+  for (const stop of moduleStops.splice(0, moduleStops.length)) await Promise.resolve().then(stop).catch(() => undefined);
   const dirs = workspaceDirs.splice(0, workspaceDirs.length);
   await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
 }

@@ -33,6 +33,20 @@ export type PollOutcome =
   | { readonly kind: "error"; readonly error: BridgeError }
   | { readonly kind: "ok"; readonly received: number; readonly refused: number };
 
+/** The longest session title kept (the runner's own cap, MAX_SESSION_TITLE_LENGTH); a longer one is cut, never refused. */
+export const MAX_TITLE_LENGTH = 80;
+
+/** How many commands one poll takes in. The runner queues a handful; more than this is not the runner's
+ * answer, and the rest wait (gate 7: oversized messages are handled safely, never stored wholesale). */
+export const MAX_COMMANDS_PER_POLL = 20;
+
+/** A session title as the panel and the tab group show it: one line, at most MAX_TITLE_LENGTH characters. */
+export function sessionTitle(raw: string): string {
+  const oneLine = raw.replace(/\s+/g, " ").trim();
+  const title = oneLine.length === 0 ? "Untitled session" : oneLine;
+  return title.length > MAX_TITLE_LENGTH ? `${title.slice(0, MAX_TITLE_LENGTH - 1)}…` : title;
+}
+
 function itemsFrom(checked: readonly CheckedItem[]): SessionItem[] {
   return checked.map((item) => ({ taskId: item.taskId, jobRevision: item.jobRevision, url: item.url, ...(item.urlProblem ? { urlProblem: item.urlProblem } : {}) }));
 }
@@ -54,7 +68,7 @@ async function takeCommand(command: OpenApplicationGroup, deviceId: string, now:
     }
     const base: LocalSession = {
       sessionId: command.sessionId,
-      title: command.payload.title,
+      title: sessionTitle(command.payload.title),
       source: "bridge",
       commandId: command.commandId,
       deviceId: command.deviceId,
@@ -86,7 +100,7 @@ export async function pollCommands(client: BridgeClient, now: () => Date = () =>
   if (!result.ok) return { kind: "error", error: result.error };
   let received = 0;
   let refused = 0;
-  for (const command of result.value.commands) {
+  for (const command of result.value.commands.slice(0, MAX_COMMANDS_PER_POLL)) {
     const outcome = await takeCommand(command, token.deviceId, now());
     if (outcome === "received") received += 1;
     if (outcome === "refused") refused += 1;
@@ -118,7 +132,7 @@ export async function importManifest(manifest: SessionManifest, now: Date = new 
     }
     const session: LocalSession = {
       sessionId: manifest.sessionId,
-      title: manifest.title,
+      title: sessionTitle(manifest.title),
       source: "file",
       receivedAt: now.toISOString(),
       phase: refusal ? "refused" : "waiting",

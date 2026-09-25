@@ -134,6 +134,26 @@ describe("gate 6 and gate 7: commands this browser won't act on", () => {
     expect(fake.calls.create).toBe(0);
   });
 
+  it("gate 7, oversized: a title is kept to one line of at most 80 characters, and one poll takes at most 20 commands in", async () => {
+    await pair();
+    const bridge = fakeBridge();
+    const many = Array.from({ length: 25 }, (_, index) => {
+      const hex = index.toString(16).padStart(2, "0");
+      return command({ commandId: `a0${hex}1111-1111-4111-8111-111111111111`, sessionId: `b0${hex}1111-1111-4111-8111-111111111111`, payload: { title: `Line one\n\n${"x".repeat(5000)}`, items: command().payload.items } });
+    });
+    bridge.commands = many;
+    const { pollCommands, listSessions, MAX_COMMANDS_PER_POLL, MAX_TITLE_LENGTH } = await modules();
+    expect(await pollCommands(bridge.client)).toEqual({ kind: "ok", received: MAX_COMMANDS_PER_POLL, refused: 0 });
+    const sessions = await listSessions();
+    expect(sessions).toHaveLength(20);
+    for (const session of sessions) {
+      expect(session.title.length).toBe(MAX_TITLE_LENGTH);
+      expect(session.title.startsWith("Line one x")).toBe(true);
+      expect(session.title.endsWith("…")).toBe(true);
+    }
+    expect(fake.calls.create).toBe(0);
+  });
+
   it("a file manifest's unsafe addresses are marked, and one with nothing safe to open is refused", async () => {
     const { importManifest } = await modules();
     const mixed = await importManifest({

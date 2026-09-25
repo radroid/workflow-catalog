@@ -765,7 +765,9 @@ function completionBlock(exportStatus: HTMLElement): { node: HTMLElement; refres
   const summary = el("p", { className: "small" });
   const exportButton = el("button", { attrs: { type: "button" }, text: "Export session updates" }) as HTMLButtonElement;
   const localNote = el("p", { className: "small" });
-  const node = el("div", { className: "stack", attrs: { "data-completion-export": "" } }, [summary, el("div", { className: "row" }, [exportButton]), localNote]);
+  const buttonRow = el("div", { className: "row" }, [exportButton]);
+  // Empty until there is something to export: nothing is added to the section before then (not even hidden).
+  const node = el("div", { className: "stack", attrs: { "data-completion-export": "" } });
   node.hidden = true;
   exportButton.addEventListener("click", () => {
     void (async () => {
@@ -779,14 +781,12 @@ function completionBlock(exportStatus: HTMLElement): { node: HTMLElement; refres
     const { events, localChoices } = await completionEvents();
     const updates = `${events.length} session update${events.length === 1 ? "" : "s"}`;
     summary.textContent = `${updates} from this browser: which tabs opened or closed, and your Applied and Defer choices. If the runner couldn't be reached, export them for its inbox/ folder.`;
-    exportButton.hidden = events.length === 0;
-    summary.hidden = events.length === 0;
-    localNote.textContent =
-      localChoices > 0
-        ? `${localChoices} choice${localChoices === 1 ? "" : "s"} on sessions from a file ${localChoices === 1 ? "is" : "are"} kept in this browser only. Mark ${localChoices === 1 ? "it" : "them"} on the runner's Board.`
-        : "";
-    localNote.hidden = localChoices === 0;
-    node.hidden = events.length === 0 && localChoices === 0;
+    localNote.textContent = `${localChoices} choice${localChoices === 1 ? "" : "s"} on sessions from a file ${localChoices === 1 ? "is" : "are"} kept in this browser only. Mark ${localChoices === 1 ? "it" : "them"} on the runner's Board.`;
+    const shown: HTMLElement[] = [...(events.length > 0 ? [summary, buttonRow] : []), ...(localChoices > 0 ? [localNote] : [])];
+    const focusedInside = node.contains(document.activeElement);
+    mount(node, ...shown);
+    node.hidden = shown.length === 0;
+    if (focusedInside && events.length > 0) exportButton.focus();
   };
   return { node, refresh };
 }

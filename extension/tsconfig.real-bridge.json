@@ -35,5 +35,5 @@
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["e2e/real-bridge-harness.ts", "src/shared/bridge-client.realbridge.test.ts", "e2e/bridge-e2e.spec.ts"]
+  "include": ["e2e/real-bridge-harness.ts", "src/shared/bridge-client.realbridge.test.ts", "e2e/bridge-e2e.spec.ts", "e2e/session-seed.ts", "e2e/sessions-e2e.spec.ts"]
 }

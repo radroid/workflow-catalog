@@ -150,6 +150,26 @@ function looksLikeWireErrorBody(value: unknown): value is WireErrorBody {
  * `origin_not_allowed`, 429 `too_many_attempts`, ...), so this never
  * invents its own wording for those.
  */
+/**
+ * P07 part C, gate 7 ("oversized messages: reject safely"): the most of an
+ * answer this reads. The runner's answers are a few kilobytes; a `GET
+ * /commands` with many full-size commands stays well under it. A larger
+ * answer is read as no answer at all (so as another program's), and never
+ * parsed: a declared length over it isn't read, and an undeclared one is
+ * measured before parsing.
+ */
+export const MAX_RESPONSE_CHARS = 1_048_576;
+
+async function boundedText(response: Response): Promise<string | undefined> {
+  const declared = Number(response.headers.get("content-length") ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_CHARS) {
+    await response.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
+  const text = await response.text();
+  return text.length > MAX_RESPONSE_CHARS ? undefined : text;
+}
+
 async function request(baseUrl: string, path: string, init: RequestInit): Promise<BridgeResult<unknown>> {
   let response: Response;
   try {
@@ -166,7 +186,8 @@ async function request(baseUrl: string, path: string, init: RequestInit): Promis
 
   let body: unknown;
   try {
-    body = await response.json();
+    const text = await boundedText(response);
+    body = text === undefined ? undefined : (JSON.parse(text) as unknown);
   } catch {
     body = undefined;
   }

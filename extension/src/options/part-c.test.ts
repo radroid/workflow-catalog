@@ -198,9 +198,12 @@ describe("the file bridge for sessions: import application-session.json into the
 });
 
 describe("the file bridge for sessions: export completion events", () => {
-  it("is hidden while there is nothing to export", async () => {
+  it("adds nothing to File bridge while there is nothing to export (its one button is still Export last capture)", async () => {
     await openSettings();
-    expect((document.querySelector("[data-completion-export]") as HTMLElement).hidden).toBe(true);
+    const block = document.querySelector("[data-completion-export]") as HTMLElement;
+    expect(block.hidden).toBe(true);
+    expect(block.childElementCount).toBe(0);
+    expect([...document.querySelectorAll('[data-section="fileBridge"] button')].map((button) => button.textContent)).toEqual(["No capture saved yet"]);
   });
 
   it("exports every event this browser made for a runner's session, in order, as completion-events.json { events }, leaving refused ones out", async () => {

@@ -380,6 +380,26 @@ test("refuses to save when the tab navigates between reading its URL and reading
   await page.close();
 });
 
+test("gate 5 (P07 part C): a posting inside an embedded frame gets the fallback, never the careers page around it", async () => {
+  const page = await harness.context.newPage();
+  await page.goto(`${fixtureServer.origin}/posting-iframe.html`);
+  await expect(page.frameLocator("iframe").getByRole("heading", { name: "Site Reliability Engineer" })).toBeVisible();
+
+  const tabTargetId = await getTabTargetId(harness.bs, harness.context, page);
+  const popup = await triggerRealPopup(harness.bs, harness.extId, tabTargetId);
+  expect(await waitForPopupState(popup)).toBe("fallback");
+  const fallbackText = await popup.evaluate<string>(`document.querySelector('[role="alert"]').textContent`);
+  expect(fallbackText).toBe("This posting is inside an embedded frame, which the extension can't read.");
+  expect(await popup.evaluate<boolean>(`document.querySelector("#app button.primary") === null`), "nothing to save").toBe(true);
+  expect(await popup.evaluate<string>(`document.querySelector("#app").textContent`)).toContain("Paste the posting in the runner's Jobs page instead");
+
+  await assertNoAxeViolations((expression) => popup.evaluate(expression), "popup fallback (iframe)");
+
+  await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
+  await popup.detach();
+  await page.close();
+});
+
 test("options page: 0 axe violations unpaired, light and dark; screenshots captured", async () => {
   const page = await harness.context.newPage();
   // Viewport-size label off for this page's own overlay too, before the
