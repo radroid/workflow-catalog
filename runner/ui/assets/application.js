@@ -626,8 +626,9 @@ function renderChanges(detail, version) {
   const shown = version.changes.filter((change) => change.kind !== "unchanged");
   const unchanged = version.changes.length - shown.length;
   const items = shown.map(changeItem);
-  // A re-export (revision 1, V8): the same sentences under a new name or contact line, in diff-v<n>.md's words.
-  if (version.sameDraftAs) items.unshift(el("li", { text: `Only the name and contact line at the top changed. Every sentence is the same as in version ${version.sameDraftAs}, and no model ran.` }));
+  // A re-export (revision 1, V8): checked sentences exported again, in diff-v<n>.md's words, true to the version
+  // these changes are against (revision 2, X8).
+  if (version.reexportNote) items.unshift(el("li", { text: version.reexportNote }));
   else if (items.length === 0) items.push(el("li", { text: "Nothing changed in the wording." }));
   if (shown.length > 0 && unchanged > 0) items.push(el("li", { className: "muted", text: `Unchanged: ${plural(unchanged, "sentence")}.` }));
   return [el("h5", { text: `Since version ${version.replaces}` }), el("ul", { className: "changes" }, ...items)];
@@ -662,9 +663,12 @@ function renderVersion(detail, version, latest) {
   const id = `changes-${detail.taskId}-${version.version}`;
   const open = isOpenNow(id);
   const replaces = version.replaces ? ` It replaces version ${version.replaces}.` : "";
-  const meta = version.sameDraftAs
-    ? `Prepared ${formatDate(version.createdAt)} with your updated name and contact line: the same sentences as version ${version.sameDraftAs}.${replaces}`
-    : `Prepared ${formatDate(version.createdAt)} from career profile version ${version.profileVersion} and job revision ${version.jobRevision}.${replaces}`;
+  const prepared = `Prepared ${formatDate(version.createdAt)}`;
+  // A re-export says "the same sentences as" only of the version it replaces, and only when every sentence is (X8).
+  const sameAsReplaced = version.changes.every((change) => change.kind === "unchanged");
+  let meta = `${prepared} from career profile version ${version.profileVersion} and job revision ${version.jobRevision}.${replaces}`;
+  if (version.sameDraftAs && sameAsReplaced && version.newHeader) meta = `${prepared} with your updated name and contact line: the same sentences as version ${version.replaces}.${replaces}`;
+  else if (version.sameDraftAs) meta = `${prepared} from version ${version.sameDraftAs}'s sentences, exported again${version.newHeader ? " with your updated name and contact line" : ""}; no model ran.${replaces}`;
   // What to prepare again for belongs to the latest version alone; an older one says which version replaced it (revision 1, V15).
   const notes = [];
   if (latest) {

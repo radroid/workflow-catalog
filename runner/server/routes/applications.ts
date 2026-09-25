@@ -5,7 +5,7 @@ import { z } from "zod";
 import { postingText, requirementsDigest, reviewPreparation } from "../../agent/lib/prepare-logic.ts";
 import { buildPreparationPrompt } from "../../agent/lib/prepare-prompt.ts";
 import { actionsOutsidePreparation, preparationCall, type PrepareApplicationOutput } from "../../agent/lib/prepare-schema.ts";
-import { presentationSummary, renderDiffMarkdown, statementDiffs, versionChanges, type SourceClaim, type StatementDiff } from "../../export/diff.ts";
+import { presentationSummary, reexportNote, renderDiffMarkdown, statementDiffs, versionChanges, type SourceClaim, type StatementDiff } from "../../export/diff.ts";
 import { coverLetterModel, letterDate, resumeModel, type DocumentModel } from "../../export/document.ts";
 import { renderDocx } from "../../export/docx.ts";
 import { contentDisposition, downloadName } from "../../export/file-names.ts";
@@ -692,9 +692,31 @@ async function render(format: ApplicationDocument["format"], model: DocumentMode
 }
 
 /**
+ * When the draft that version `version` carries was first exported: re-exports (`sameDraftAs`) are followed back
+ * to the version a model turn wrote. A re-export keeps its cover letter's date (revision 2, X8): it is the same
+ * letter, however many times its name or contact line has changed since.
+ */
+function firstExportedAt(versions: readonly VersionRecord[], version: number): Date | undefined {
+  const byNumber = new Map(versions.map((record) => [record.version, record]));
+  const seen = new Set<number>();
+  let current = byNumber.get(version);
+  while (current?.sameDraftAs !== undefined && !seen.has(current.version) && byNumber.has(current.sameDraftAs)) {
+    seen.add(current.version);
+    current = byNumber.get(current.sameDraftAs);
+  }
+  return current ? new Date(current.createdAt) : undefined;
+}
+
+/** Whether `version` carries a name or contact line other than the version it replaces: what a re-export's note says changed (X8). */
+function headerChanged(version: Pick<VersionRecord, "idempotencyKey">, replaced: Pick<VersionRecord, "idempotencyKey"> | undefined): boolean {
+  return replaced === undefined || detailsPartOf(replaced.idempotencyKey) !== detailsPartOf(version.idempotencyKey);
+}
+
+/**
  * Writes one version: every document file, then the version record, last, so a record whose files are all
  * there is a finished export (the start-up sweep relies on it). Returns the version and the documents to attach.
- * `sameDraftAs` marks a re-export (V8) of that version's draft under a new header.
+ * `sameDraftAs` marks a re-export (V8) of that version's draft under a new header: its cover letter keeps the
+ * date it was first written (X8).
  */
 async function exportVersion(
   ctx: RunnerContext,
@@ -721,7 +743,8 @@ async function exportVersion(
   const changes = previous ? versionChanges(previous.statements, statements, new Set(confirmed.map((claim) => claim.label))) : [];
 
   const models: Partial<Record<ApplicationDocument["kind"], DocumentModel>> = { resume: resumeModel(draft, person) };
-  if (plan.coverLetter) models.cover_letter = coverLetterModel(draft, person, snapshot.structured.company, at);
+  const letterAt = sameDraftAs !== undefined ? (firstExportedAt(versions, sameDraftAs) ?? at) : at;
+  if (plan.coverLetter) models.cover_letter = coverLetterModel(draft, person, snapshot.structured.company, letterAt);
   const diff = renderDiffMarkdown({
     version: number,
     ...(previous ? { replaces: previous.version } : {}),
@@ -730,7 +753,7 @@ async function exportVersion(
     jobRevision: plan.jobRevision,
     statements,
     changes,
-    ...(sameDraftAs !== undefined ? { sameDraftAs } : {}),
+    ...(sameDraftAs !== undefined ? { sameDraftAs, coverLetter: plan.coverLetter, newHeader: headerChanged(plan, previous) } : {}),
   });
   for (const file of versionFiles(number, plan.coverLetter)) {
     const model = models[file.kind];
@@ -957,12 +980,21 @@ async function detailView(ctx: RunnerContext, taskId: string) {
         const job = await jobAt(version.jobRevision);
         const names: NameSources = { person: version.header?.name ?? details?.name, job, missing: version.pdfMissing };
         const carried = detailsPartOf(version.idempotencyKey);
+        const replaced = versions.find((other) => other.version === version.replaces);
+        const newHeader = version.sameDraftAs !== undefined ? headerChanged(version, replaced) : null;
         return {
           version: version.version,
           replaces: version.replaces ?? null,
           /** For an older version, the one that replaced it (V15); null on the latest. */
           replacedBy: index === 0 ? null : (versions.find((other) => other.replaces === version.version)?.version ?? versions[index - 1]!.version),
           sameDraftAs: version.sameDraftAs ?? null,
+          /** For a re-export: whether its name or contact line differs from the version it replaces (X8); null otherwise. */
+          newHeader,
+          /** For a re-export: what changed, in diff-v<n>.md's words (X8); null otherwise. */
+          reexportNote:
+            version.sameDraftAs !== undefined
+              ? reexportNote({ sameDraftAs: version.sameDraftAs, replaces: version.replaces ?? version.sameDraftAs, changes: version.changes, coverLetter: version.coverLetter, newHeader: newHeader ?? true })
+              : null,
           createdAt: version.createdAt,
           profileVersion: version.profileVersion,
           jobRevision: version.jobRevision,

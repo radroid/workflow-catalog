@@ -915,6 +915,38 @@ describe("Applications page: a re-export whose saved draft no longer passes (rev
   });
 });
 
+describe("Applications page: a re-export's lines (revision 2, X8)", () => {
+  it("after the cover letter is switched off and back on, version 3 says whose sentences it carries, and its changes are against version 2", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    for (const coverLetter of [true, false]) {
+      const response = await bridge.request("/api/applications/prepare", { method: "POST", headers: SAME_ORIGIN, body: JSON.stringify({ jobId, coverLetter }) });
+      expect(response.status).toBe(200);
+      await waitForPreparationQueue(bridge.workspace.root);
+    }
+    const page = await openPage(bridge);
+    // Where the name and contact line go, as the documents place them.
+    expect(page.document.querySelector("section[aria-labelledby='details-title'] p.muted")?.textContent).toBe(
+      "The runner puts these at the top of every resume and at the end of every cover letter. The model never sees them.",
+    );
+
+    pressPrepare(page, jobId, true);
+    await until(() => page.outcomes().some((line) => line.startsWith("Re-exported")), "the re-export");
+    expect(page.outcomes().at(-1)).toBe("Re-exported “Platform Lead · Fernwood” as version 3, from version 1's sentences.");
+    expect(model.prompts).toHaveLength(2);
+    await until(() => all(page, ".version").length === 3, "version 3");
+    const [v3] = all(page, ".version");
+    expect(v3!.querySelector("p.muted")?.textContent).toMatch(/^Prepared .+ from version 1's sentences, exported again; no model ran\. It replaces version 2\.$/);
+    const taskId = taskIdOf(page);
+    expect(page.byId(`changes-${taskId}-3`).querySelector("h5")?.textContent).toBe("Since version 2");
+    const changes = all(page, `#changes-${taskId}-3 .changes li`).map((node) => node.textContent ?? "");
+    expect(changes[0]).toBe("No model ran: version 1's checked sentences were exported again.");
+    expect(changes.some((line) => line.startsWith("Added, Cover letter: "))).toBe(true);
+    expect(v3!.textContent).not.toContain("the same as in version 1");
+    expect(v3!.textContent).not.toContain("Only the name and contact line");
+  });
+});
+
 describe("Applications page: characters the PDF can't draw (revision 1, V16)", () => {
   it("warns at the name field and beside each PDF, naming the formats that keep them", async () => {
     const bridge = await bridgeWith(honest(PLATFORM_LEAD), { details: false });

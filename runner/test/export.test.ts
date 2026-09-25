@@ -3,7 +3,7 @@ import path from "node:path";
 import { claimSchema } from "@workflow-catalog/contracts";
 import { describe, expect, it } from "vitest";
 import { JOB_ASSISTANT_DIR } from "../lib/paths.ts";
-import { renderDiffMarkdown, statementDiffs, versionChanges, presentationSummary, type SourceClaim } from "../export/diff.ts";
+import { reexportNote, renderDiffMarkdown, statementDiffs, versionChanges, presentationSummary, type SourceClaim, type VersionChange } from "../export/diff.ts";
 import { coverLetterModel, letterDate, modelText, plainCompanyName, resumeModel } from "../export/document.ts";
 import { renderDocx } from "../export/docx.ts";
 import { asciiFileName, contentDisposition, downloadName, fileNamePart, jobFilePart } from "../export/file-names.ts";
@@ -293,6 +293,53 @@ describe("what changed and why", () => {
     });
     expect(markdown).toContain("## Since version 1\n\n- Only the name and contact line at the top changed. Every sentence is the same as in version 1, and no model ran.\n");
     expect(markdown).not.toContain("Nothing changed in the wording.");
+  });
+});
+
+describe("a re-export's note (revision 2, X8)", () => {
+  const unchanged: readonly VersionChange[] = [{ kind: "unchanged", part: "resume", heading: "Experience", text: "Led the payments infrastructure team.", labels: ["C1"] }];
+  const letterAdded: readonly VersionChange[] = [...unchanged, { kind: "added", part: "cover_letter", text: "I maintain Ledgerkit.", labels: ["C5"] }];
+
+  it("says where the name and contact line sit: at the top of a resume, and closing a cover letter", () => {
+    expect(reexportNote({ sameDraftAs: 1, replaces: 1, changes: unchanged, coverLetter: false, newHeader: true })).toBe(
+      "Only the name and contact line at the top changed. Every sentence is the same as in version 1, and no model ran.",
+    );
+    expect(reexportNote({ sameDraftAs: 1, replaces: 1, changes: unchanged, coverLetter: true, newHeader: true })).toBe(
+      "Only the name and contact line changed, at the top of the resume and the end of the cover letter. Every sentence is the same as in version 1, and no model ran.",
+    );
+  });
+
+  it("says “the same as in version N” only of the version it replaces, and only when every sentence is", () => {
+    // Version 1's sentences, re-exported after version 2 (made for other inputs) replaced it: the changes are against version 2.
+    expect(reexportNote({ sameDraftAs: 1, replaces: 2, changes: letterAdded, coverLetter: true, newHeader: false })).toBe("No model ran: version 1's checked sentences were exported again.");
+    expect(reexportNote({ sameDraftAs: 1, replaces: 2, changes: letterAdded, coverLetter: true, newHeader: true })).toBe(
+      "No model ran: version 1's checked sentences were exported again, with your updated name and contact line.",
+    );
+    expect(reexportNote({ sameDraftAs: 1, replaces: 2, changes: unchanged, coverLetter: false, newHeader: false })).toBe(
+      "No model ran: version 1's checked sentences were exported again. Every sentence is the same as in version 2.",
+    );
+    expect(reexportNote({ sameDraftAs: 1, replaces: 2, changes: unchanged, coverLetter: false, newHeader: true })).toBe(
+      "Only the name and contact line at the top changed. Every sentence is the same as in version 2, and no model ran.",
+    );
+  });
+
+  it("diff-v<n>.md carries it above the changes against the version it replaces", () => {
+    const statements = statementDiffs(DRAFT, SOURCES);
+    const markdown = renderDiffMarkdown({
+      version: 3,
+      replaces: 2,
+      preparedOn: "September 26, 2026",
+      profileVersion: 1,
+      jobRevision: 1,
+      statements,
+      changes: letterAdded,
+      sameDraftAs: 1,
+      coverLetter: true,
+      newHeader: false,
+    });
+    expect(markdown).toContain("## Since version 2\n\n- No model ran: version 1's checked sentences were exported again.\n- Added, Cover letter: “I maintain Ledgerkit.” (cites C5)\n");
+    expect(markdown).not.toContain("the same as in version 1");
+    expect(markdown).not.toContain("Only the name and contact line");
   });
 });
 

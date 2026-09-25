@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { actionsOutsidePreparation, requestedActions } from "../agent/lib/prepare-schema.ts";
+import { letterDate } from "../export/document.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import applicationsModule, { EXCLUDED_PROBLEM_MESSAGE, INTERRUPTED_MESSAGE, keptProblems, waitForPreparationQueue } from "../server/routes/applications.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
@@ -83,6 +84,8 @@ interface VersionView {
   readonly replaces: number | null;
   readonly replacedBy: number | null;
   readonly sameDraftAs: number | null;
+  readonly newHeader: boolean | null;
+  readonly reexportNote: string | null;
   readonly olderDetails: boolean;
   readonly profileVersion: number;
   readonly jobRevision: number;
@@ -1227,7 +1230,8 @@ describe("a changed name or contact line (revision 1, V8)", () => {
     const v2Record = JSON.parse(await rawFile(bridge, "applications", taskId, "versions", "v2.json"));
     expect(v2Record).toMatchObject({ version: 2, replaces: 1, sameDraftAs: 1, header: corrected, profileVersion: 1, jobRevision: 1, coverLetter: true });
     expect(v2Record.draft).toEqual(v1Record.draft);
-    expect(await documentText(bridge, taskId, "diff-v2.md")).toContain("- Only the name and contact line at the top changed. Every sentence is the same as in version 1, and no model ran.");
+    // Revision 2, X8: this version has a cover letter, whose name and contact line close it (was "at the top changed").
+    expect(await documentText(bridge, taskId, "diff-v2.md")).toContain("- Only the name and contact line changed, at the top of the resume and the end of the cover letter. Every sentence is the same as in version 1, and no model ran.");
 
     const view = await detail(bridge, taskId);
     expect(view.versions.map((version) => [version.version, version.replaces, version.replacedBy, version.sameDraftAs, version.olderDetails])).toEqual([
@@ -1334,6 +1338,82 @@ describe("the newest documents decide “already prepared” (revision 2, X5)", 
     expect(view.versions[0]!.files.map((file) => file.name)).toEqual(["resume-v3.md", "resume-v3.docx", "resume-v3.pdf", "cover-v3.md", "cover-v3.docx", "cover-v3.pdf", "diff-v3.md"]);
     expect(await documentText(bridge, taskId, "cover-v3.md")).toContain(KNOWN_SENTENCE.cover_letter);
     expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "already_prepared", version: 3 });
+  });
+});
+
+describe("a re-export's documents and note (revision 2, X8)", () => {
+  const DAY = 86_400_000;
+  const firstLine = (text: string) => text.split("\n")[0];
+
+  it("a re-export on a later day keeps the letter's date, however many times it is re-exported, and says the name and contact line close the letter", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const writtenOn = letterDate(bridge.clock.now());
+    const taskId = (await prepare(bridge, jobId, true)).body.application.taskId;
+    expect(firstLine(await documentText(bridge, taskId, "cover-v1.md"))).toBe(writtenOn);
+
+    bridge.clock.advance(3 * DAY);
+    const reexportedOn = letterDate(bridge.clock.now());
+    expect(reexportedOn).not.toBe(writtenOn);
+    await post(bridge, "/details", { name: "Zoe Quill", contact: "zoe.quill@example.com · Remote" });
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "reexported", version: 2, sameDraftAs: 1 });
+    bridge.clock.advance(2 * DAY);
+    await post(bridge, "/details", { ...PERSON });
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "reexported", version: 3, sameDraftAs: 2 });
+    expect(model.prompts).toHaveLength(1);
+
+    // The same letter, under each name: its date is the day it was written, in every format.
+    for (const version of [2, 3]) {
+      expect(firstLine(await documentText(bridge, taskId, `cover-v${version}.md`)), `cover-v${version}.md`).toBe(writtenOn);
+      for (const format of ["docx", "pdf"]) {
+        const text = flat(await documentText(bridge, taskId, `cover-v${version}.${format}`));
+        expect(text, `cover-v${version}.${format}`).toContain(writtenOn);
+        expect(text, `cover-v${version}.${format}`).toContain(version === 2 ? "Zoe Quill" : PERSON.name);
+        expect(text, `cover-v${version}.${format}`).not.toContain(reexportedOn);
+      }
+    }
+    // The diff is dated the day its version was made, and says where the name and contact line sit.
+    const note = "Only the name and contact line changed, at the top of the resume and the end of the cover letter. Every sentence is the same as in version 1, and no model ran.";
+    const diff = await documentText(bridge, taskId, "diff-v2.md");
+    expect(diff).toContain(`Prepared ${reexportedOn} from career profile version 1`);
+    expect(diff).toContain(`## Since version 1\n\n- ${note}\n`);
+    const view = await detail(bridge, taskId);
+    expect(view.versions.map((version) => [version.version, version.newHeader, version.reexportNote])).toEqual([
+      [3, true, note.replace("version 1", "version 2")],
+      [2, true, note],
+      [1, null, null],
+    ]);
+  });
+
+  it("after the cover letter is switched off and back on, the note names the version its changes are against", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const writtenOn = letterDate(bridge.clock.now());
+    const taskId = (await prepare(bridge, jobId, true)).body.application.taskId;
+    bridge.clock.advance(DAY);
+    expect((await prepare(bridge, jobId, false)).body.outcome).toBe("started");
+    bridge.clock.advance(DAY);
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "reexported", version: 3, replaces: 2, sameDraftAs: 1, newDetails: false });
+    expect(model.prompts).toHaveLength(2);
+
+    // Version 3 carries version 1's sentences, and its changes are against version 2, the resume alone.
+    const note = "No model ran: version 1's checked sentences were exported again.";
+    const diff = await documentText(bridge, taskId, "diff-v3.md");
+    expect(diff).toContain(`## Since version 2\n\n- ${note}\n- Added, Cover letter: `);
+    expect(diff).not.toContain("the same as in version 1");
+    expect(diff).not.toContain("Only the name and contact line");
+    expect((await detail(bridge, taskId)).versions[0]).toMatchObject({ version: 3, replaces: 2, sameDraftAs: 1, newHeader: false, reexportNote: note });
+    expect(firstLine(await documentText(bridge, taskId, "cover-v3.md"))).toBe(writtenOn);
+
+    // A new name then re-exports version 3 as it is: every sentence the same as in version 3, the letter still dated the day it was written.
+    await post(bridge, "/details", { name: "Zoe Quill", contact: "zoe.quill@example.com · Remote" });
+    expect((await prepare(bridge, jobId, true)).body).toMatchObject({ outcome: "reexported", version: 4, replaces: 3, sameDraftAs: 3, newDetails: true });
+    expect((await detail(bridge, taskId)).versions[0]).toMatchObject({
+      version: 4,
+      newHeader: true,
+      reexportNote: "Only the name and contact line changed, at the top of the resume and the end of the cover letter. Every sentence is the same as in version 3, and no model ran.",
+    });
+    expect(firstLine(await documentText(bridge, taskId, "cover-v4.md"))).toBe(writtenOn);
   });
 });
 

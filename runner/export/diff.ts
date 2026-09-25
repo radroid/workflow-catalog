@@ -186,13 +186,40 @@ export interface DiffDocumentInput {
   readonly jobRevision: number;
   readonly statements: readonly StatementDiff[];
   readonly changes: readonly VersionChange[];
-  /** A re-export (revision 1, V8): the version whose sentences this one carries unchanged, under a new name or contact line. */
+  /** A re-export (revision 1, V8): the version whose checked sentences this one carries unchanged, exported again with no model turn. */
   readonly sameDraftAs?: number;
+  /** Whether this version has a cover letter, whose name and contact line close it (X8). Defaults to false. */
+  readonly coverLetter?: boolean;
+  /** For a re-export: whether its name or contact line differs from the version it replaces (X5, X8). Defaults to true. */
+  readonly newHeader?: boolean;
 }
 
-/** What a re-export changed, in the words the page and `diff-v<n>.md` both use. */
-export function headerOnlyChange(sameDraftAs: number): string {
-  return `Only the name and contact line at the top changed. Every sentence is the same as in version ${sameDraftAs}, and no model ran.`;
+export interface ReexportNoteInput {
+  /** The version whose checked sentences the re-export carries. */
+  readonly sameDraftAs: number;
+  /** The version it replaces: the one its changes are against. */
+  readonly replaces: number;
+  readonly changes: readonly VersionChange[];
+  readonly coverLetter: boolean;
+  readonly newHeader: boolean;
+}
+
+/**
+ * What a re-export changed, in the words the page and `diff-v<n>.md` both use (revision 2, X8). The name and
+ * contact line sit at the top of a resume and close a cover letter. "The same as in version N" is said only of
+ * the version the changes are against, the one it replaces, and only when every sentence is: after a newer
+ * version made for other inputs (the cover letter switched off and back on, say), the re-exported sentences
+ * are an older version's, and the changes against the one it replaces are listed as they are.
+ */
+export function reexportNote(input: ReexportNoteInput): string {
+  const sameAsReplaced = input.changes.every((change) => change.kind === "unchanged");
+  if (sameAsReplaced && input.newHeader) {
+    const where = input.coverLetter ? "changed, at the top of the resume and the end of the cover letter" : "at the top changed";
+    return `Only the name and contact line ${where}. Every sentence is the same as in version ${input.replaces}, and no model ran.`;
+  }
+  const header = input.newHeader ? ", with your updated name and contact line" : "";
+  const same = sameAsReplaced ? ` Every sentence is the same as in version ${input.replaces}.` : "";
+  return `No model ran: version ${input.sameDraftAs}'s checked sentences were exported again${header}.${same}`;
 }
 
 /** `diff-v<n>.md`: the changes since the version it replaces, then every sentence with the claim behind it. */
@@ -208,8 +235,10 @@ export function renderDiffMarkdown(input: DiffDocumentInput): string {
     lines.push(`## Since version ${input.replaces}`, "");
     const shown = input.changes.filter((change) => change.kind !== "unchanged");
     const unchanged = input.changes.length - shown.length;
-    if (input.sameDraftAs !== undefined) lines.push(`- ${headerOnlyChange(input.sameDraftAs)}`);
-    else if (shown.length === 0) lines.push("- Nothing changed in the wording.");
+    if (input.sameDraftAs !== undefined) {
+      const note = reexportNote({ sameDraftAs: input.sameDraftAs, replaces: input.replaces, changes: input.changes, coverLetter: input.coverLetter ?? false, newHeader: input.newHeader ?? true });
+      lines.push(`- ${note}`);
+    } else if (shown.length === 0) lines.push("- Nothing changed in the wording.");
     for (const change of shown) lines.push(changeLine(change));
     if (unchanged > 0 && shown.length > 0) lines.push(`- Unchanged: ${unchanged === 1 ? "1 sentence" : `${unchanged} sentences`}`);
     lines.push("");
