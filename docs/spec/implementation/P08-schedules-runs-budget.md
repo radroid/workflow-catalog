@@ -53,6 +53,90 @@ Findings are in `logs/handoff/P08-A-round-3-review.md`.
 
 ## Report
 
+### 2026-09-25 — Gate fix round 1 (manual session, Sonnet)
+
+Fixed the two BLOCKING findings from the gate review (`/tmp/wc-manual/
+P08-B-gate-review.md`, PR #20 head `e6d4333`). The 23 FOLLOW-UPs (F1–F23)
+are the orchestrator's to triage into `FOLLOWUPS.md`; none are touched here.
+
+**B1 — `eve build` failed.** eve discovers every `.md` under
+`runner/agent/schedules/` as its own markdown schedule, requiring `cron`
+frontmatter (`node_modules/eve/docs/schedules.mdx`, "Markdown form"); adding
+`cron` would hand both schedules to eve's own task-mode firing, outside
+`withRun` and the budget — the exact second trigger the design rules out.
+Fix: moved both prompt files to `runner/scheduler/prompts/`, which eve never
+scans, and updated `scheduler/config.ts`'s `SCHEDULES_PROMPT_DIR` and every
+reference (`runner/README.md`'s P08-B row, the two rows in
+`docs/learn/reference/eve-prompt-map.html`, this packet's Deliverables and
+Owns lines) to the new path, each with a short note on why. Added
+`test/scheduler-config.test.ts`: asserts `runner/agent/schedules/` holds no
+`.md` files, and — as a regression guard — that any `.md` that does show up
+there in the future must declare `cron` frontmatter or the test fails with
+that reason named, before `eve build` would ever hit it again.
+
+Verified against the real build, exactly as the reviewer reproduced it
+(`sh /tmp/wc-manual/eve-build-check.sh <worktree>`: adapter `sync-skills.mjs`
++ `eve extension build`, then `eve build` in `runner/`, with a temp `HOME`
+and `RUNNER_MODEL_PROVIDER=chatgpt RUNNER_MODEL=gpt-5.6-luna`): exit code
+`EVE_BUILD_EXIT=0`, last real build line `[BUILD] built output at
+.../runner/.output`. `git status --porcelain` afterward showed only this
+round's own source edits — the `.eve/`/`.output/` build directories are
+gitignored, so nothing leaked in.
+
+**B2 — three Acceptance bullets mapped to tests that stayed green with the
+behaviour broken.** `scheduler-dispatch.test.ts` mocks `startPreparation`
+and asserts only the tally of its own mocked return value, so it could not
+see the real pipeline's actual document/turn count or claim-file set. Added
+`test/scheduler-dispatch-real.test.ts`: no `vi.mock` anywhere in the file,
+driving `runDailyPrepare`/`runDueSchedules` over the real (imported, unmocked)
+`startPreparation`/`waitForPreparationQueue`, with P05's own `scriptedModel`
+and `seedReadyProfile`/`seedDetails`/`seedJob` (`test/preparation-helpers.ts`)
+— the same helpers and fixture (Ada Quill, `platformLeadJob()`) P05's own
+suite uses, so a real document is really written and a real (scripted) model
+turn really runs.
+
+- Bullet 1 ("zero new documents"): one job, run twice. Asserts
+  `model.prompts.length` is unchanged after the second run (zero new turns)
+  and the application's document count is unchanged (zero new documents) —
+  the correct mechanism is that a prepared job's stage moves off `"saved"`,
+  so the schedule's own Saved-stage-only scan finds nothing left to do, not
+  a same-inputs/"already prepared" branch.
+- Bullet 2 ("exactly one catch-up"): one job prepared on an on-time fire,
+  then a second job saved during a simulated multi-day outage (no calls made
+  during the "down" days — a stopped process makes none), then a catch-up
+  fire several days later. Asserts the *exact* claim files on disk
+  (`scheduler/claims/daily-prepare--2026-09-20.json` and `…--2026-09-25.json`
+  only, never `…--09-21/22/23/24.json`) and the exact total model-turn count
+  (2: one per legitimate fire) — `getScheduleState`'s own `lastSlotId`/
+  `lastAttemptAt` can't distinguish "ran once" from "ran five times", since
+  `recordAttempt` overwrites both every call; the claim files are the one
+  place that distinction is visible on disk.
+- Bullet 4 ("reason logged"): item cap 1, two Saved jobs. Asserts one job
+  reaches `"ready"` and the other stays `"saved"` (not refused, not
+  skipped), and that the cap's reason is present in *both* a captured
+  `ctx.log.info` line and the schedule state's `lastSummary` (two independent
+  surfaces, so dropping either one alone still fails the test).
+
+Proved against the reviewer's own three mutations (M1b, M6, M3b), applied
+one at a time to a clean `scheduler/dispatch.ts` via `cp`/`python3` (never
+git stash, matching the reviewer's own restore method), each run against
+only its targeted new test, then restored via `cp` back to the committed
+original — `git diff` was empty after every restore:
+- **M6** (daily-prepare also re-prepares `"ready"` jobs, with a cover
+  letter): bullet 1's test fails — the first job never reaches `"ready"`
+  (the mutated `coverLetter: true` doesn't match the scripted turn's plan,
+  which is itself already evidence the mutation changed real behaviour).
+- **M1b** (`runDueSchedules` loops every missed slot back to the last
+  attempt, not just the latest): bullet 2's test fails on the second fire's
+  own `ran`/`isCatchUp` shape once multiple slots are dispatched in one
+  call.
+- **M3b** (drop both the cap log line and the summary's cap sentence):
+  bullet 4's test fails on the captured-log assertion.
+
+Full chain: 65 test files, 1469 tests, all green (runner alone: was 64/1466
+after B1's `scheduler-config.test.ts`, now 65/1469 with B2's three new
+tests). Typecheck and lint clean on every touched/new file.
+
 ### 2026-09-25 — Part B design (manual session, Sonnet)
 
 **What fires a schedule.** Not eve's own cron. `withRun`/`runTurn`/the
