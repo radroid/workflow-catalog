@@ -524,3 +524,82 @@ describe("revision 2, X2: an abbreviation is no longer mistaken for a sentence e
     expect(splitSentences("Built ASP.NET services for the U.S.Army team [C1].")).toHaveLength(1);
   });
 });
+
+describe("revision 2, X1: titles, whatever their case", () => {
+  // C9 is FERNWOOD_LABS, "Platform Engineer at Fernwood Labs, 2019–2021.". C11 and C12 are written in sentence case.
+  const harborStaff = confirmedClaim("C11", "title", "Staff engineer at Harbor, 2021–2023.");
+  const harborFounding = confirmedClaim("C12", "title", "Founding engineer at Harbor.");
+  const cofounder = confirmedClaim("C13", "title", "Cofounder at Harbor.");
+  const claims = [FERNWOOD_LABS, harborStaff, harborFounding, cofounder];
+
+  it.each([
+    ["a sentence-case seniority", "Senior platform engineer at Fernwood Labs, 2019–2021 [C9]."],
+    ["“Staff engineer” opening the sentence", "Staff engineer at Fernwood Labs, 2019–2021 [C9]."],
+    ["“Principal engineer” opening the sentence", "Principal engineer at Fernwood Labs, 2019–2021 [C9]."],
+    ["“Lead platform engineer” opening the sentence", "Lead platform engineer at Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening phrase that ends in a role word", "Engineering manager at Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening VP with what it heads", "VP engineering at Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening “Head of”", "Head of platform at Fernwood Labs, 2019–2021 [C9]."],
+    ["an opening “Chief architect”", "Chief architect at Fernwood Labs, 2019–2021 [C9]."],
+    ["“and became” mid-sentence", "Platform Engineer at Fernwood Labs, 2019–2021, and became engineering manager there [C9]."],
+    ["“later named” mid-sentence", "Platform Engineer at Fernwood Labs, 2019–2021, later named platform architect [C9]."],
+    ["“named” with “of the”", "Platform Engineer at Fernwood Labs, 2019–2021, and named engineer of the year [C9]."],
+    ["a lower-case role of the X", "director of the platform group at Fernwood Labs, 2019–2021 [C9]."],
+    ["“Was named” opening the sentence", "Was named platform architect at Fernwood Labs, 2019–2021 [C9]."],
+    ["a Senior in mixed case after “as a”", "Worked at Fernwood Labs as a Senior platform engineer, 2019–2021 [C9]."],
+    ["a capitalized phrase with a lower-case role word", "Senior Platform engineer at Fernwood Labs, 2019–2021 [C9]."],
+  ])("refuses %s against a claim that says otherwise", (_name, statement) => {
+    expect(rulesWith(claims, statement)).toEqual(["title"]);
+  });
+
+  it("refuses “Staff engineer” against “Senior Platform Engineer”, with the open start C7 beside it", () => {
+    expect(rules(resume("Staff engineer at Northwind Labs since 2022 [C8][C7]."))).toEqual(["title"]);
+  });
+
+  it("names the title it read, whatever its case", () => {
+    const [refusal] = validateDraft({ draft: resume("Staff engineer at Fernwood Labs, 2019–2021 [C9]."), claims: [...LABELLED, ...claims], postingText: POSTING, coverLetterRequested: false }).refusals;
+    expect(refusal!.message).toBe("The title “staff engineer” must match a title in the claims this sentence cites (C9) word for word.");
+  });
+
+  it("reads a claim in sentence case for its title, so the same title in title case passes", () => {
+    expect(titlesIn("Staff engineer at Harbor, 2021–2023.")).toEqual(["staff engineer"]);
+    expect(titlesIn("Founding engineer at Harbor.")).toEqual(["founding engineer"]);
+    expect(rulesWith(claims, "Staff Engineer at Harbor, 2021–2023 [C11].")).toEqual([]);
+    expect(rulesWith(claims, "Staff engineer at Harbor, 2021–2023 [C11].")).toEqual([]);
+    expect(rulesWith(claims, "Founding Engineer at Harbor [C12].")).toEqual([]);
+    expect(rulesWith(claims, "Founding engineer at Harbor [C12].")).toEqual([]);
+  });
+
+  it("passes a title that differs from its claim only in case or a hyphen", () => {
+    expect(rulesWith(claims, "Platform engineer at Fernwood Labs, 2019–2021 [C9].")).toEqual([]);
+    expect(rulesWith(claims, "PLATFORM ENGINEER at Fernwood Labs, 2019–2021 [C9].")).toEqual([]);
+    expect(rulesWith(claims, "Platform-Engineer at Fernwood Labs, 2019–2021 [C9].")).toEqual([]);
+    expect(rulesWith(claims, "Worked at Fernwood Labs as a Platform engineer, 2019–2021 [C9].")).toEqual([]);
+    expect(rules(resume("Senior platform engineer at Northwind Labs [C8]."))).toEqual([]);
+    expect(rules(resume("Senior Platform-Engineer at Northwind Labs [C8]."))).toEqual([]);
+    expect(rulesWith(claims, "Co-founder at Harbor [C13].")).toEqual([]);
+  });
+
+  it("reads each form the way the rule compares it", () => {
+    expect(titlesIn("Became engineering manager at Fernwood Labs, and was named engineer of the year.")).toEqual(["engineering manager", "engineer of the year"]);
+    expect(titlesIn("director of the platform group")).toEqual(["director of the platform group"]);
+    expect(titlesIn("Head of the Platform Group at Harbor.")).toEqual(["head of the platform group"]);
+    expect(titlesIn("Director of engineering at Harbor.")).toEqual(titlesIn("Director of Engineering at Harbor."));
+    expect(titlesIn("VP engineering, Harbor.")).toEqual(["vp engineering"]);
+    expect(titlesIn("Joined Harbor in 2021. Staff engineer there until 2023.")).toEqual(["staff engineer"]);
+  });
+
+  it("leaves verbs and names alone: “Lead the …”, “Head the …”, a certificate, someone else's role", () => {
+    for (const text of [
+      "Lead the migration at Fernwood Labs, then head the team.",
+      "Head the platform team at Fernwood Labs.",
+      "Lead platform engineering for the payments team at Northwind Labs.",
+      "Led platform engineer hiring at Harbor.",
+      "Certified Kubernetes administrator who maintains Ledgerkit.",
+      "Worked with the platform architect at Harbor.",
+      "Maintainer of Ledgerkit, an open-source ledger reconciliation library.",
+    ]) {
+      expect(titlesIn(text), text).toEqual([]);
+    }
+  });
+});

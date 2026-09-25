@@ -280,8 +280,10 @@ function checkSentence(sentence: string, where: DraftLocation, context: Context)
   }
   if (dateProblems.length > 0) refuse("date", `${dateProblems.join(" ")} Dates must match the claims exactly.`);
 
-  const claimTitles = new Set(cited.flatMap((claim) => titlesIn(claim.text)));
-  const wrongTitles = titlesIn(facts).filter((title) => !claimTitles.has(title));
+  // Word for word, whatever the case, and a hyphen or space inside the title aside: "Co-founder" is "Cofounder" (X1).
+  const sameTitle = (title: string) => title.replace(/\s+/g, "");
+  const claimTitles = new Set(cited.flatMap((claim) => titlesIn(claim.text)).map(sameTitle));
+  const wrongTitles = titlesIn(facts).filter((title) => !claimTitles.has(sameTitle(title)));
   if (wrongTitles.length > 0) {
     refuse("title", `The title ${wrongTitles.map((title) => `“${title}”`).join(", ")} must match a title in the claims this sentence cites${citedLabelsNote} word for word.`);
   }

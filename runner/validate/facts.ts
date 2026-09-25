@@ -13,7 +13,7 @@
  * invisible character hides nothing.
  */
 
-import { normalizeForChecks } from "./text.ts";
+import { normalizeForChecks, splitSentences } from "./text.ts";
 
 export type NumberUnit = "" | "%" | "x";
 
@@ -295,7 +295,7 @@ const ROLE_NOUNS = new Set([
   "engineer", "developer", "manager", "director", "designer", "architect", "scientist", "analyst", "consultant", "specialist", "administrator", "officer",
   "lead", "head", "president", "intern", "researcher", "programmer", "technician", "coordinator", "founder", "cofounder", "owner",
   "principal", "fellow", "associate", "assistant", "executive", "strategist", "editor", "writer", "producer", "supervisor", "chief",
-  "cto", "ceo", "cfo", "coo", "cio", "cpo", "vp", "sre", "partner",
+  "cto", "ceo", "cfo", "coo", "cio", "cpo", "vp", "svp", "evp", "avp", "sre", "partner",
 ]);
 
 /** Words that raise or lower a title: a lower-case phrase with one of these before a role noun is a title too ("staff engineer"). */
@@ -310,15 +310,23 @@ const PHRASE_BREAKS = new Set(["a", "an", "the", "and", "or", "of", "to", "with"
 /** Abbreviations whose period stays inside a title: "Sr. Platform Engineer". */
 const TITLE_ABBREVIATIONS = new Set(["sr", "jr", "snr", "jnr", "assoc", "asst", "exec", "mgr", "dir", "eng", "engr", "vp", "svp", "evp", "avp"]);
 
-/** Role words that open a sentence as a verb as often as a title ("Lead the migration", "Head the team"). */
-const VERB_LIKE_ROLES = new Set(["lead", "head"]);
-
-/** What follows a role word that opens a sentence as a title: "Director at …", "CTO of …", "Engineer for …", or a comma. */
+/**
+ * What follows a phrase that opens a sentence and ends in a role word, when that phrase is a title: "Director at
+ * …", "Engineering manager at …", "CTO of …", "Engineer for …", or a comma. A verb-like role word followed by
+ * anything else ("Lead the migration", "Head the team") is a verb, not a title.
+ */
 const AFTER_OPENING_TITLE = new Set(["at", "of", "for"]);
 
-/** Words after which a lower-case role phrase is a title: "as a platform engineer", "became head of platform", "promoted to director". */
-const TITLE_CONTEXTS = new Set(["as", "became", "named", "appointed"]);
+/**
+ * Words after which a role phrase is a title: "as a platform engineer", "became head of platform", "promoted to
+ * director". A title's words never reach back past one of these (X1): "and became engineering manager" states
+ * "engineering manager".
+ */
+const TITLE_CONTEXTS = new Set(["as", "became", "become", "becoming", "named", "appointed", "promoted", "elected"]);
 const ARTICLES = new Set(["a", "an", "the"]);
+
+/** Role words that name what they head right after them, in a word or two, when they open a sentence: "VP engineering at …" (X1). */
+const DEPARTMENT_HEADS = new Set(["vp", "svp", "evp", "avp", "director", "head"]);
 
 function bareWord(word: string): string {
   return word.replace(/[,;:.]+$/, "");
@@ -355,74 +363,98 @@ function inTitleContext(lower: readonly string[], at: number): boolean {
 }
 
 /**
- * The job titles `text` states, in comparable form (`titleKey`):
+ * The job titles `text` states, in comparable form (`titleKey`), read one
+ * sentence at a time. A sentence's first word is read whatever its case
+ * (revision 2, X1): it is capitalized only because it opens the sentence, so
+ * "Staff engineer at Harbor" states "staff engineer" as "Staff Engineer at
+ * Harbor" does, in a draft and in a claim alike.
  *
- * - a capitalized phrase that names a role ("Senior Platform Engineer",
- *   "Head of Platform", "Sr. Platform Engineer", "Staff Platform-Engineer");
- * - a single capitalized role word, except as the first word, where it counts
- *   only when "at", "of", "for" or a comma follows it ("Director at Fernwood
- *   Labs", "CTO, Harbor") and it isn't a verb-like word ("Lead the
- *   migration");
- * - a lower-case role phrase with a seniority word before its role word
- *   ("senior platform engineer"), with "of X" after it ("director of
- *   platform"), or after "as", "became", "named", "appointed" or "promoted
- *   to" ("worked as a platform engineer").
+ * - A capitalized phrase that names a role ("Senior Platform Engineer",
+ *   "Head of the Platform Group", "Sr. Platform Engineer", "Staff
+ *   Platform-Engineer"), with a lower-case role word right after it ("Senior
+ *   Platform engineer").
+ * - A phrase that opens the sentence and ends in a role word, before "at",
+ *   "of", "for" or a comma ("Director at Fernwood Labs", "Engineering manager
+ *   at …", "CTO, Harbor"). "Lead the migration" and "Head the team" are verbs.
+ * - An opening "VP", "Director" or "Head" with what it heads, in a word or
+ *   two, before "at", "of", "for" or a comma ("VP engineering at Harbor").
+ * - A role phrase with a seniority word before its role word ("senior
+ *   platform engineer", "a Senior platform engineer"), with "of X" after it,
+ *   an article allowed ("director of the platform group", "engineer of the
+ *   year"), or after "as", "became", "named", "appointed" or "promoted to"
+ *   ("worked as a platform engineer"). The words before the role word never
+ *   reach back past such a word: "and became engineering manager" states
+ *   "engineering manager".
  *
  * The validator compares titles whole: a sentence's title must equal one its
  * cited claims state, so "Platform Engineer" doesn't pass on a claim that
  * says "Senior Platform Engineer", and "Staff Engineer" never passes on it.
  */
 export function titlesIn(text: string): string[] {
-  const words = normalizeForChecks(text).replace(/[“”"()[\]]/g, " ").split(/\s+/).filter(Boolean);
   const titles = new Set<string>();
+  for (const sentence of splitSentences(text)) for (const title of sentenceTitles(sentence)) titles.add(title);
+  return [...titles];
+}
 
+function sentenceTitles(sentence: string): string[] {
+  const words = normalizeForChecks(sentence).replace(/[“”"()[\]]/g, " ").split(/\s+/).filter(Boolean);
+  const lower = words.map((word) => bareWord(word).toLowerCase());
+  const punctuated = words.map((word) => bareWord(word) !== word);
+  const capitalized = words.map((word) => isCapitalized(bareWord(word)));
+  const titles: string[] = [];
+
+  // Capitalized phrases. One capitalized role word opening the sentence is left to the opening rule below.
   let index = 0;
   while (index < words.length) {
-    if (!isCapitalized(bareWord(words[index]!))) {
+    if (!capitalized[index]) {
       index += 1;
       continue;
     }
     const phrase: string[] = [];
     let cursor = index;
-    let endedWithComma = false;
+    let stopped = false;
     while (cursor < words.length) {
       const word = words[cursor]!;
       const bare = bareWord(word);
-      if (isCapitalized(bare)) {
+      if (capitalized[cursor]) {
         phrase.push(bare);
         cursor += 1;
         if (bare === word) continue;
         // A comma, colon or full stop ends the phrase, except an abbreviation's period: "Sr. Platform Engineer".
         if (word === `${bare}.` && TITLE_ABBREVIATIONS.has(bare.toLowerCase())) continue;
-        endedWithComma = word.endsWith(",");
+        stopped = true;
         break;
       }
-      const following = words[cursor + 1];
-      if (TITLE_CONNECTORS.has(word.toLowerCase()) && following !== undefined && isCapitalized(bareWord(following))) {
-        phrase.push(word.toLowerCase());
-        cursor += 1;
+      // "of", "and", "&" or "for" joins two capitalized words; "of" may take an article: "Head of the Platform Group".
+      const article = lower[cursor] === "of" && !punctuated[cursor] && ARTICLES.has(lower[cursor + 1] ?? "") && !punctuated[cursor + 1] ? 1 : 0;
+      if (TITLE_CONNECTORS.has(lower[cursor]!) && !punctuated[cursor] && capitalized[cursor + 1 + article]) {
+        for (let at = cursor; at <= cursor + article; at += 1) phrase.push(lower[at]!);
+        cursor += 1 + article;
         continue;
       }
       break;
     }
-    if (phrase.some(isRoleNoun)) {
-      const opening = index === 0 && phrase.length === 1;
-      const next = bareWord(words[cursor] ?? "").toLowerCase();
-      const openingTitle = opening && !VERB_LIKE_ROLES.has(phrase[0]!.toLowerCase()) && (endedWithComma || AFTER_OPENING_TITLE.has(next));
-      if (!opening || openingTitle) titles.add(titleKey(phrase));
+    // A lower-case role word right after a phrase that raises a title, or stands where a title does, is part of it:
+    // "Senior Platform engineer", "as a Platform engineer". ("Certified Kubernetes administrator" names a certificate.)
+    const titleLike = phrase.some((word) => SENIORITY.has(word.toLowerCase())) || inTitleContext(lower, index);
+    if (!stopped && titleLike && cursor < words.length && !capitalized[cursor] && isRoleNoun(words[cursor]!)) {
+      phrase.push(bareWord(words[cursor]!));
+      cursor += 1;
     }
+    if (phrase.some(isRoleNoun) && !(index === 0 && phrase.length === 1)) titles.push(titleKey(phrase));
     index = Math.max(cursor, index + 1);
   }
 
-  // Lower-case role phrases.
-  const lower = words.map((word) => bareWord(word).toLowerCase());
-  const punctuated = words.map((word) => bareWord(word) !== word);
-  const plainWord = (at: number) => at >= 0 && at < words.length && !PHRASE_BREAKS.has(lower[at]!) && !isCapitalized(bareWord(words[at]!));
+  // Role phrases in lower case, and the sentence's first word whatever its case.
+  const plain = (at: number) => at >= 0 && at < words.length && !PHRASE_BREAKS.has(lower[at]!) && (at === 0 || !capitalized[at]);
+  /** A word the phrase before a role word can take: plain, or a capitalized seniority word ("a Senior platform engineer"); never past punctuation or a context word. */
+  const extendsLeft = (at: number) =>
+    at >= 0 && !punctuated[at] && !PHRASE_BREAKS.has(lower[at]!) && !TITLE_CONTEXTS.has(lower[at]!) && (at === 0 || !capitalized[at] || SENIORITY.has(lower[at]!));
   for (let role = 0; role < words.length; role += 1) {
-    if (isCapitalized(bareWord(words[role]!)) || !isRoleNoun(words[role]!)) continue;
-    // Modifiers before the role word: up to three plain words, none followed by punctuation.
+    if ((role > 0 && capitalized[role]) || !isRoleNoun(words[role]!)) continue;
+    // Modifiers before the role word: up to three words.
     let left = role;
-    while (role - left < 3 && plainWord(left - 1) && !punctuated[left - 1]) left -= 1;
+    while (role - left < 3 && extendsLeft(left - 1)) left -= 1;
     let start = role;
     for (let at = left; at < role; at += 1) {
       if (SENIORITY.has(lower[at]!)) {
@@ -430,21 +462,43 @@ export function titlesIn(text: string): string[] {
         break;
       }
     }
-    // "of X" after it: up to three plain words.
+    // "of X" after it: up to three words, after an article if there is one.
     let end = role;
     if (!punctuated[role] && lower[role + 1] === "of") {
       let at = role + 2;
-      while (at - (role + 2) < 3 && plainWord(at)) {
+      if (ARTICLES.has(lower[at] ?? "") && !punctuated[at]) at += 1;
+      const first = at;
+      while (at - first < 3 && at < words.length && !PHRASE_BREAKS.has(lower[at]!)) {
         at += 1;
         if (punctuated[at - 1]) break;
       }
-      if (at > role + 2) end = at - 1;
+      if (at > first) end = at - 1;
+    }
+    // An opening "VP engineering at …": what it heads, in a word or two, before "at", "of", "for" or a comma.
+    if (role === 0 && end === role && DEPARTMENT_HEADS.has(lower[0]!) && !punctuated[0]) {
+      let headed = -1;
+      for (let at = 1; at <= 2 && plain(at); at += 1) {
+        if (punctuated[at]) {
+          if (words[at]!.endsWith(",")) headed = at;
+          break;
+        }
+        if (AFTER_OPENING_TITLE.has(lower[at + 1] ?? "")) {
+          headed = at;
+          break;
+        }
+      }
+      if (headed > 0) {
+        titles.push(titleKey(words.slice(0, headed + 1)));
+        continue;
+      }
     }
     const context = inTitleContext(lower, left);
-    if (start === role && end === role && !context) continue;
-    titles.add(titleKey(words.slice(context && start === role ? left : start, end + 1)));
+    // A phrase that opens the sentence and ends in its role word, before "at", "of", "for" or a comma.
+    const opening = left === 0 && end === role && (punctuated[role] ? words[role]!.endsWith(",") : AFTER_OPENING_TITLE.has(lower[role + 1] ?? ""));
+    if (start === role && end === role && !context && !opening) continue;
+    titles.push(titleKey(words.slice(opening ? left : context && start === role ? left : start, end + 1)));
   }
-  return [...titles];
+  return titles;
 }
 
 // --- Credentials -------------------------------------------------------------
