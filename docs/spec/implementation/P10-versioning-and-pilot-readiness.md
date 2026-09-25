@@ -1,7 +1,7 @@
 # P10 · Package versioning, upgrade, and pilot readiness
 
-Status: open (part A done 2026-09-25, PR #22, squash 2bf591b; part B not started)
-Assignee: manual session (Sonnet), part A
+Status: claimed (part B)
+Assignee: manual session (Sonnet), part B
 Blocked by: P02–P09
 Owns: runner/upgrade/, runner/server/routes/upgrade.ts, runner/ui/settings.html (upgrade section), packages/job-assistant/CHANGELOG.md, docs/pilot/
 Spec: F12, §10 definition of done
