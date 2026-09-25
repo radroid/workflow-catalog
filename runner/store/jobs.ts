@@ -88,6 +88,12 @@ export interface JobSummary {
   readonly url?: string;
   /** Snapshot files this summary had to step over, newest first: the latest one when it is damaged, and each damaged one below it until a readable revision. */
   readonly unreadable: readonly UnreadableSnapshot[];
+  /**
+   * Set, to the directory's own path, when the job's directory itself could not even be listed (e.g. no read
+   * permission on `jobs/<jobId>/`) -- not merely a file inside it. Every other field is then unknown, not merely
+   * absent: `revisionCount` and `latestRevisionNumber` read 0 (P06.1 item 2.2).
+   */
+  readonly directoryUnreadable?: string;
 }
 
 export interface JobDetail {
@@ -98,6 +104,8 @@ export interface JobDetail {
   readonly revisions: readonly JobSnapshot[];
   /** The damaged revisions, oldest first. */
   readonly unreadable: readonly UnreadableSnapshot[];
+  /** Same meaning as `JobSummary`'s: the job's own directory could not be listed (P06.1 item 2.2). */
+  readonly directoryUnreadable?: string;
 }
 
 /**
@@ -138,6 +146,11 @@ export type ExtractionState = z.infer<typeof extractionStateSchema>;
 /** The path a person would find a job file at, inside their workspace. */
 export function jobFilePath(jobId: string, file: string): string {
   return `${JOBS_DIR}/${jobId}/${file}`;
+}
+
+/** The path a person would find a job's own directory at, inside their workspace (P06.1 item 2.2). */
+export function jobDirectoryPath(jobId: string): string {
+  return `${JOBS_DIR}/${jobId}`;
 }
 
 export class JobsStore {
@@ -212,7 +225,14 @@ export class JobsStore {
 
   /** `jobId`'s summary: its latest revision when readable, the newest readable one, its url, and the damaged files stepped over to find them. Undefined when the job has no snapshot file at all. */
   async #summarise(jobId: string): Promise<JobSummary | undefined> {
-    const numbers = await this.revisions(jobId);
+    let numbers: number[];
+    try {
+      numbers = await this.revisions(jobId);
+    } catch {
+      // P06.1 item 2.2: the directory itself couldn't be listed (e.g. chmod 000), not merely a file inside it.
+      // Reported like a damaged file (T6), never dropped from the list silently.
+      return { jobId, revisionCount: 0, latestRevisionNumber: 0, unreadable: [], directoryUnreadable: jobDirectoryPath(jobId) };
+    }
     const latestRevisionNumber = numbers.at(-1);
     if (latestRevisionNumber === undefined) return undefined;
     const unreadable: UnreadableSnapshot[] = [];
@@ -260,7 +280,8 @@ export class JobsStore {
     try {
       revisionNumbers = await this.revisions(jobId);
     } catch {
-      return undefined;
+      // P06.1 item 2.2: report a directory that can't even be listed like a damaged file, not "no such job".
+      return { jobId, revisionNumbers: [], revisions: [], unreadable: [], directoryUnreadable: jobDirectoryPath(jobId) };
     }
     if (revisionNumbers.length === 0) return undefined;
     const revisions: JobSnapshot[] = [];

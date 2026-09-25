@@ -392,6 +392,7 @@ async function listEntry(ctx: RunnerContext, summary: JobSummary) {
     ...(summary.url !== undefined ? { url: summary.url } : {}),
     ...(summary.newestReadable ? { savedAt: summary.newestReadable.capturedAt } : {}),
     unreadable: summary.unreadable,
+    ...(summary.directoryUnreadable ? { directoryUnreadable: summary.directoryUnreadable } : {}),
     extraction: extraction ?? null,
   };
 }
@@ -438,6 +439,8 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
           revisions: detail.revisions,
           extraction: extraction.map((state) => state ?? null),
           unreadable: detail.unreadable,
+          // P06.1 item 2.2: the job's own directory couldn't be listed (readJob no longer answers 404 for this).
+          ...(detail.directoryUnreadable ? { directoryUnreadable: detail.directoryUnreadable } : {}),
         });
       });
 
@@ -503,7 +506,14 @@ export function createCapturesRouteModule(fetchUrl: typeof safeFetch = safeFetch
         if (read.kind === "unreadable") {
           return errorResponse(409, "snapshot_unreadable", `That revision's file can't be read: ${jobFilePath(jobId.data, `snapshot-${revision.data}.json`)}.`);
         }
-        const extraction = await queueExtraction(ctx, jobId.data, revision.data);
+        let extraction: ShownExtractionState;
+        try {
+          extraction = await queueExtraction(ctx, jobId.data, revision.data);
+        } catch {
+          // P06.1 item 2.1: queueExtraction's write of the waiting state can throw (extraction-N.json exists as a
+          // directory, say); a plain typed refusal, never an unhandled 500.
+          return errorResponse(500, "extraction_not_queued", "Couldn't start extraction: the runner hit a problem saving its state.");
+        }
         return c.json({ ok: true, extraction, job: read.snapshot });
       });
     },
