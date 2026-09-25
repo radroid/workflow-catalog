@@ -1,6 +1,6 @@
 {
   "stage": "S3",
-  "stage_status": "in-progress",
+  "stage_status": "paused-manual",
   "iter": 7,
   "pr_mode": true,
   "pr_size_policy": "fat",

@@ -24,10 +24,11 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 
 ## Phase 3 — Apply
 
-- [ ] P3.A — P05 Preparation with evidence, validator, export — citations, excluded-claim proof, hostile pipeline test; spec P05; blocked by P2.A, P2.B.
+- [x] P3.A — P05 Preparation with evidence, validator, export — citations, excluded-claim proof, hostile pipeline test; spec P05; blocked by P2.A, P2.B. Done 2026-09-25 (manual session), PR #16 (squash fa66206).
 - [x] P3.B — P08.A Run log and budget pause — no schedules yet; spec P08; blocked by P1.D. Done iter 005, PR #13 (squash 360ac69).
 - [x] P3.F — P02.1 Runner follow-ups — HEAD must not spend the one-time sign-in link; a unit test for an error inside the /pair queue; spec P02.1-runner-followups.md; blocked by P1.D. Done iter 004, PR #9 (squash d9454f2).
 - [x] P3.G — P02.2 Runner workspace precedence — `.env.local` wins for the workspace so an ambient `RUNNER_WORKSPACE` (GitHub Actions sets one) can't redirect a set-up runner; doctor warns on disagreement; spec P02.2-runner-workspace-precedence.md; not blocked (found by the P04 round-2 reviewer, iter 006). Done iter 006, PR #15 (squash 2b93cf0).
+- [ ] P3.I — P05.1 Validator follow-ups — pin every P05 reviewer probe as a corpus test, and close the word-matching gaps P05's rounds 3–5 recorded but didn't count; spec P05.1-validator-followups.md; blocked by P3.A.
 - [ ] P3.C — P06 Board and application sessions — stages, manifests, commands, reconciliation, plus the Applications-page follow-ups; spec P06; blocked by P3.A.
 - [ ] P3.H — P06.1 Jobs and Status page follow-ups — the Jobs-page and Status-page items P04's, P03.2's and P05's reviews carried to P06, the `.secondary` border and the `.error` colour; split from P06 in iter 007; spec P06.1-jobs-and-status-followups.md; not blocked: pulled forward in iter 007, and it copies P05's runner-down notice from `packet/P05` until P05 merges.
 - [ ] P3.D — P08.B Schedules and catch-up — daily and weekly, last-run marker, idempotent retries; also the part-A review follow-ups (P08 packet, "Carried into part B"); spec P08; blocked by P3.A, P3.B.

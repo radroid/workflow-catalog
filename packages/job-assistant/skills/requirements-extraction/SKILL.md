@@ -18,6 +18,7 @@ Implements mvp-spec §3 F7 ("Requirements extraction → matching against confir
 ## Boundaries
 
 - `requirements[]` are short, discrete, literal requirement statements ("5+ years of backend experience," "US work authorization") — not a summary or a rewrite of the whole posting.
+- One requirement per entry, in the posting's own order: preparation (`claim-matching`, P05) numbers them 1, 2, 3… and accounts for every one, so two requirements merged into one entry would be matched, or asked about, as one. `niceToHave[]` keeps what the posting calls optional apart; preparation never asks about those. (Fixtures: `job-fernwood.json`, `job-harbor.json` and `job-hostile.json`, whose requirements `runner/eval-agent/evals/preparation.eval.ts` prepares by number.)
 - If the posting's formatting makes a field genuinely unrecoverable (no company name anywhere in the text), leave that field absent rather than guessing from the URL or elsewhere.
 - This skill only reads `JobSnapshot.text`; it never fetches the URL itself or follows any link the posting contains.
 
