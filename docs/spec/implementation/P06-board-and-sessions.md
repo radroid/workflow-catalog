@@ -1,7 +1,7 @@
 # P06 · Application board and application sessions
 
-Status: open
-Assignee: none
+Status: claimed
+Assignee: manual session (Opus)
 Blocked by: P05
 Owns: runner/store/sessions.ts, runner/server/routes/{applications,sessions,commands}.ts, runner/ui/board.html, runner/ui/sessions.html, runner/agent/tools/open_application_group.ts
 Spec: F8, F9, §5 session manifest and bridge envelopes, browser-boundary.md (protocol contract)
