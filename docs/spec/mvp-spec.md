@@ -89,6 +89,8 @@ applications/details.json         the name and contact line on every document (P
 sessions/<sessionId>.json         session manifest (below)
 runs/<date>/<runId>.json          run log records
 runs/budget.json                  daily run limit, per-run item cap, and the pause with its reason; survives restart (P08)
+scheduler/state.json              per-schedule state (P08-B): each schedule's own pause (independent of the budget's), its last attempt and last successful run
+scheduler/claims/<id>--<slot>.json  one-shot marker: this schedule already fired for this slot (P08-B; makes a double-fire, from the fallback trigger and a startup catch-up both finding the same overdue slot, harmless)
 outbox/, inbox/                   file-bridge fallback: job-capture.json out of the extension, application-session.json into it
 .runner/                          the bridge's own state (P02): devices/ (token hashes, paired origin, expiry), pairing/ and ui-login/ (hashed one-time codes), events/ (the event journal; holds captured job text, so personal), commands/ (the GET /commands queue), model-check.json
 ```

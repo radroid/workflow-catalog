@@ -31,12 +31,12 @@ Read by `autonomous-build-loop` every iteration. Each item points at its packet 
 - [x] P3.I — P05.1 Validator follow-ups — pin every P05 reviewer probe as a corpus test, and close the word-matching gaps P05's rounds 3–5 recorded but didn't count; spec P05.1-validator-followups.md; blocked by P3.A. Done 2026-09-25 (manual session), PR #19 (squash cfb2a3f).
 - [x] P3.C — P06 Board and application sessions — stages, manifests, commands, reconciliation, plus the Applications-page follow-ups; spec P06; blocked by P3.A. Done 2026-09-25 (manual session), PR #21 (squash 3e04e01).
 - [x] P3.H — P06.1 Jobs and Status page follow-ups — the Jobs-page and Status-page items P04's, P03.2's and P05's reviews carried to P06, the `.secondary` border and the `.error` colour; split from P06 in iter 007; spec P06.1-jobs-and-status-followups.md; not blocked: pulled forward in iter 007, and it copies P05's runner-down notice from `packet/P05` until P05 merges. Done 2026-09-25 (manual session), PR #18 (squash 202e636).
-- [ ] P3.D — P08.B Schedules and catch-up — daily and weekly, last-run marker, idempotent retries; also the part-A review follow-ups (P08 packet, "Carried into part B"); spec P08; blocked by P3.A, P3.B.
+- [x] P3.D — P08.B Schedules and catch-up — daily and weekly, last-run marker, idempotent retries; also the part-A review follow-ups (P08 packet, "Carried into part B"); spec P08; blocked by P3.A, P3.B. Done 2026-09-25 (manual session), PR #20 (squash c33689a).
 - [ ] P3.E — P07.C Extension: sessions, tab group, side panel, the nine gates — spec P07; blocked by P3.C, P2.E.
 
 ## Phase 4 — Ship the pilot
 
-- [ ] P4.A — P10.A Pilot docs: success test, privacy checklist, known limitations — spec P10; blocked by P3.C.
+- [x] P4.A — P10.A Pilot docs: success test, privacy checklist, known limitations — spec P10; blocked by P3.C. Done 2026-09-25 (manual session), PR #22 (squash 2bf591b).
 - [ ] P4.B — P10.B Upgrade flow and full acceptance run — spec P10; blocked by every other item.
 
 ## Open dependencies (waiting on user)

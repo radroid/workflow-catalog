@@ -19,8 +19,10 @@ workspace folder.
 Decided by the P02 spike (`docs/spec/research/eve-spike.md`). `npm run
 runner` builds when needed, then starts `eve start --host 127.0.0.1 --port
 3210` and the bridge on `127.0.0.1:4310`. The person runs one command. In
-mode A, eve fires cron schedules itself, and `chatgpt()` completes turns
-with the sign-in that Codex owns.
+mode A, `eve start` can fire its own cron schedules (the spike proved a
+`* * * * *` schedule fires and completes on its own) — but P08-B's two
+schedules don't use that mechanism; see "Schedules and catch-up" below for
+why. `chatgpt()` completes turns with the sign-in that Codex owns.
 
 Mode A holds only under four conditions, and the runner enforces each:
 
@@ -536,6 +538,20 @@ touching another's. Today it has:
   serialization (`store/budget.ts`'s `withBudgetLock`), so a Save racing a
   provider-limit pause can never lose either one.
 
+- **Schedules** (`ui/assets/settings-schedules.js`, P08-B): one card per
+  schedule (daily-prepare, weekly-review), each showing its cron and time
+  zone in plain words ("Daily at 09:00 UTC"), its next run, its last
+  successful run (or "No successful run yet"), daily-prepare's own per-run
+  item cap, and a Pause/Resume button. A schedule's own pause is independent
+  of the budget's above — pausing daily-prepare here never touches Budget,
+  and a provider-limit pause on Budget stops every schedule regardless of
+  its own pause state. Backed by `GET /api/runs/schedules` and
+  `POST /api/runs/schedules/:id/pause`/`/resume`; every card re-renders from
+  the state the server just returned, the same rule Budget follows. Pressing
+  Pause or Resume moves focus to the section heading first (`tabindex="-1"`),
+  the same as Budget's Resume, since the button pressed gets replaced when
+  the list re-renders.
+
 Both pages share one persistent live region (`role="status"
 aria-live="polite"`) per page for every success and error, with section-
 specific wording ("Budget saved.", "Runs resumed.") that is re-announced even
@@ -557,7 +573,44 @@ no failure event, no `turn.cancelled` and no abort. Only a non-empty
 is cancelled and the run fails. `turn.cancelled`, a failure event or
 `session.failed` is not ok. Every cancel goes through the session, bounded
 to 5 s, not the turn response, which eve does not reliably act on before a
-turn has started or once it is parked.
+turn has started or once it is parked. `classifyTurn` also parks on a
+pending `authorization.required` with no `webhookUrl` — eve keeps a turn
+response open past `session.waiting` only while one *with* a `webhookUrl` is
+pending (`docs/spec/research/eve-runtime.md` §8 item 15); one with none ends
+the response quietly and would otherwise read as ok.
+
+**Schedules and catch-up** (`scheduler/`, P08-B): two fixed schedules, daily
+`prepare_newly_saved_jobs` (09:00 UTC) and weekly `review_open_applications`
+(Monday, 09:00 UTC). What actually fires a schedule is **the bridge's own
+clock**, not eve's cron: eve documents no catch-up for a missed fire and no
+signal that a fire happened at all (`docs/spec/research/eve-runtime.md` §4;
+the P02 spike's own risk note), and `withRun`/`runTurn`/the budget and run
+stores all live in the bridge process, not inside eve's. `routes/runs.ts`'s
+`start()` hook (`scheduler/index.ts`'s `startScheduler`) runs a due-schedule
+check once immediately (catch-up) and then every five minutes (the fallback
+trigger) — the same function either way, so there is exactly one trigger
+mechanism, never two that could race. Each check resolves the schedule's
+current slot (the local calendar day, or Monday-anchored week, in its own
+fixed time zone; `scheduler/time.ts`, pure and `Intl`-based, no new
+dependency) and atomically claims it (`scheduler/store.ts`'s `claimSlot`, a
+`Workspace#createJson` exclusive create) before doing any work, so the
+fallback trigger and a startup catch-up can never both fire the same
+overdue slot — and a runner that missed several fires in a row still claims
+and runs only the single latest one. A fire more than five minutes late is
+`isCatchUp`. Daily-prepare calls P05's own `startPreparation` once per
+Saved-stage application (oldest first, up to the budget's `itemCap`; the
+rest stay Saved for next time) — no second preparation path, and no second
+turn classifier, since that function already runs its turn through
+`withRun`/`runTurn` itself. Weekly-review has no existing pipeline to
+delegate to, so it calls `withRun`/`runTurn` directly, with its own
+idempotency key per slot (checked through `hasSucceededWithIdempotencyKey`
+before running; a rejection there — an unreadable date folder — means
+"unknown", never "not done", so the run does not start rather than risk a
+duplicate). A schedule has its own pause, independent of the budget's; both
+persist to disk and so survive a restart. A parked preparation (open gap
+questions) is not a failure for the schedule: no retry, no failure count, no
+backoff — it is simply left for the person to answer on the Applications
+page, and P05's own dedup refuses a second attempt at it on its own.
 
 ## Workspace layout
 
@@ -590,6 +643,8 @@ outbox/application-session.json          a session for the extension to import b
 inbox/*.json                             results the extension exported, imported on the Sessions page (P06)
 runs/<date>/<runId>.json                one run record (P08-A); <date> is startedAt's OS-local calendar day
 runs/budget.json                        daily run limit, per-run item cap, and the pause (P08-A); survives restart
+scheduler/state.json                    each schedule's own pause, last attempt, last successful run (P08-B)
+scheduler/claims/<id>--<slot>.json      one-shot marker: this schedule already fired for this slot (P08-B)
 .runner/devices/<deviceId>.json         paired devices (token hash, origin, expiry)
 .runner/pairing/<sha256>.json           outstanding pairing codes
 .runner/ui-login/<sha256>.json          outstanding UI sign-in links
@@ -674,7 +729,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 | P06 | `server/routes/applications.ts`'s board (`GET /board`) and stage move (`POST /:taskId/stage`, at the revision the board showed), `server/routes/sessions.ts` (the `application_status_changed` handler; start a session, the Sessions view, write to the outbox, import from `inbox/`, mark a flag reviewed), `server/routes/commands.ts` (the `browser_command_result` handler), `store/sessions.ts`, `ui/board.html`, `ui/sessions.html`, and the body of `agent/tools/open_application_group.ts` (task IDs only; each resolves to the job URL the runner stored). Only the person's explicit Applied, or a board move, changes a stage; a tab report never does. The tool queues commands through the workspace files (see "Commands" below); the `browser_command_result` handler retires them with `ctx.commands.acknowledge()`. |
 | P07-B | Nothing here. The extension uses the four bridge routes. |
 | P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn`, and the `classifyTurn` P03.2 split out of `runTurn` — free functions over `ctx`, now called from `routes/onboarding.ts`'s extraction route and `eve-gateway.ts`'s `checkModel`), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
-| P08-B | `agent/schedules/`, `scheduler/` (catch-up + fallback trigger), the schedules section of `ui/settings.html`, and `server/routes/runs.ts`'s `status()` for `schedules` and `start()` (catch-up). Calls into `run-harness.ts`'s `withRun` to actually run something. |
+| P08-B | `scheduler/` (`config.ts` the two fixed schedules and `SCHEDULES_PROMPT_DIR`, `time.ts` pure cadence math, `store.ts` per-schedule pause/attempt state and the slot-claim, `dispatch.ts` the daily-prepare/weekly-review bodies and the catch-up/fallback dispatcher, `status.ts` the `GET /status` and Settings shapes, `index.ts` the `start()` wiring, `prompts/` — the schedules' prompt files, `daily-prepare.md` documents the schedule and `weekly-review.md` is its turn's own prompt; they live here, not under `runner/agent/schedules/`, because in mode A the runner's own scheduler owns firing, and eve would otherwise discover and compile them as its own cron schedules — a second, uncontrolled trigger the design rules out), the schedules section of `ui/settings.html` + `ui/assets/settings-schedules.js`, and `server/routes/runs.ts`'s `status()` for `schedules`, `start()` (catch-up), and `GET`/`POST /api/runs/schedules[...]`. Calls into `run-harness.ts`'s `withRun`/`runTurn` and `routes/applications.ts`'s `startPreparation` to actually run something; never edits either. |
 | P10 | `upgrade/`, the upgrade section of `ui/settings.html`, and an optional `server/routes/upgrade.ts`. |
 
 **Commands.** `GET /commands` is already complete over

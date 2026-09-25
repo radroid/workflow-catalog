@@ -114,3 +114,63 @@
 #budget-limit-note {
   margin: 0;
 }
+
+/* Schedules section (P08-B). The heading takes focus after a pause/resume click, same rule as #budget-title. */
+#schedules-title:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+#schedules-title:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.schedules-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* One schedule's card: the same row shape as runs.css's .run-card, redefined here since this page never loads
+   runs.css (each page's assets stay independent — README "Extending the runner"). */
+.schedule-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+.schedule-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.3rem;
+}
+.schedule-kind {
+  font-weight: 600;
+}
+.schedule-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+  margin-top: 0.4rem;
+}
+.schedule-meta > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.run-note {
+  color: var(--muted-foreground);
+  margin: 0.4rem 0 0;
+}
+.schedule-pause {
+  margin-top: 0.6rem;
+}
+.schedule-pause .button {
+  margin-top: 0.5rem;
+}
