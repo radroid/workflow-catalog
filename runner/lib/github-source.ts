@@ -33,10 +33,19 @@ export type GithubFetchResult =
   | { readonly ok: true; readonly json: unknown }
   | { readonly ok: false; readonly reason: GithubFetchFailureReason; readonly message: string };
 
+/**
+ * None of these three fields are `readonly`: `defaultGithubSourceDeps` below
+ * is the one mutable-seam instance both the route and its tests import, the
+ * same pattern `routes/onboarding.ts`'s own `extractionTiming` already uses
+ * — a test replaces a field in place (`defaultGithubSourceDeps.secrets = new
+ * MemorySecretStore()`) and restores it afterwards, so the route's own
+ * `import { defaultGithubSourceDeps } from "../lib/github-source.ts"` call
+ * sees the fake without any other wiring.
+ */
 export interface GithubSourceDeps {
   /** `gh auth token`'s stdout, trimmed, or null when `gh` isn't signed in (or isn't installed). Never throws. */
   getGhCliToken(): Promise<string | null>;
-  readonly secrets: SecretStore;
+  secrets: SecretStore;
   /** One GET to `https://api.github.com<path>`, bearer-authenticated. Never throws. */
   fetchGithub(path: string, token: string): Promise<GithubFetchResult>;
 }

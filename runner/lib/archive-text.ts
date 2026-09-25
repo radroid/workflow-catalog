@@ -12,28 +12,33 @@ import { strFromU8, unzipSync, type UnzipFileInfo } from "fflate";
  * to decompress at all):
  *   - entry count: a central directory with more entries than `maxEntries`
  *     refuses the whole archive (bounds how much header-walking a hostile
- *     archive can force, independent of any one entry's size);
- *   - compression ratio: an entry whose declared uncompressed size is more
- *     than `maxCompressionRatio` times its compressed size refuses the whole
- *     archive (the standard zip-bomb signature: a tiny stream that claims a
- *     huge output; the 100:1 default follows the commonly cited zip-bomb
- *     detection threshold);
+ *     archive can force, independent of any one entry's size) — checked
+ *     first, and against every entry, so it also bounds a directory listing
+ *     or a pile of entries this module will never decompress;
+ *   - the extension gate: only `.csv`, `.txt`, `.md` and `.json` entries are
+ *     ever decompressed at all — every other entry (images, a nested
+ *     archive, LinkedIn's PDF export, `.DS_Store`) is skipped here, before
+ *     any of the checks below ever run on it, which also means a nested zip
+ *     is never itself unzipped;
+ *   - compression ratio: of the entries that passed the extension gate, one
+ *     whose declared uncompressed size is more than `maxCompressionRatio`
+ *     times its compressed size refuses the whole archive (the standard
+ *     zip-bomb signature: a tiny stream that claims a huge output; the
+ *     100:1 default follows the commonly cited zip-bomb detection
+ *     threshold);
  *   - per-entry size and running total: an entry, or the running total of
  *     included entries, over its cap refuses the whole archive.
- * Only `.csv`, `.txt`, `.md` and `.json` entries are ever decompressed at
- * all — every other entry (images, a nested archive, LinkedIn's PDF export,
- * `.DS_Store`) is skipped by the filter before fflate inflates a single
- * byte of it, which also means a nested zip is never itself unzipped.
  *
- * A header's declared sizes are the zip file's own claim, not a measurement:
- * a stream crafted to inflate far past what it declares would defeat a
- * header-only guard. Defence in depth: the *actual* decompressed byte count
- * of every included entry is re-checked against the same per-entry and
- * total caps after fflate returns, so a lying header still cannot smuggle
- * more text out of this module than the caps allow (fflate has already done
- * the one-time work of inflating that single entry in memory by then, but
- * the caps still hold for everything downstream — the composed text, and
- * what ever reaches a model).
+ * These are all checked against the zip header's *declared* sizes, before
+ * fflate inflates a single byte — a header's declared sizes are the zip
+ * file's own claim, not yet a measurement. That is still sound against a
+ * header that lies *small* (claims less than an entry really inflates to):
+ * verified against fflate directly (`archive-text.test.ts` documents the
+ * probe), `unzipSync` allocates each entry's output buffer at the header's
+ * own declared `originalSize` and never grows it, so decompression stops at
+ * that many bytes regardless of what the underlying deflate stream would
+ * otherwise still have to give — the declared size this module already
+ * checked before decompressing is also the true ceiling on what comes back.
  */
 
 export type ArchiveTextRejectionReason = "too_large" | "malformed" | "zip_bomb" | "empty";
@@ -96,10 +101,13 @@ export async function extractArchiveText(data: Uint8Array, options: ArchiveTextO
         seen += 1;
         if (seen > maxEntries) throw new ArchiveCapError(`That archive has more than ${maxEntries} entries.`);
         if (file.name.endsWith("/")) return false; // a directory entry, not a file
+        // The extension gate comes before every size/ratio check below: an entry this module will never
+        // decompress anyway (a nested archive, an image, LinkedIn's PDF export) poses no inflate-bomb risk
+        // at all, whatever its own declared ratio is, and must not make the whole upload refused.
+        if (!TEXT_EXTENSIONS.has(extensionOf(file.name))) return false; // not CSV, TXT, MD or JSON
         if (file.size > 0 && file.originalSize / file.size > maxRatio) {
           throw new ArchiveCapError("That archive decompresses far beyond its stored size (a zip-bomb guard).");
         }
-        if (!TEXT_EXTENSIONS.has(extensionOf(file.name))) return false; // not CSV, TXT, MD or JSON
         if (file.originalSize > maxEntryBytes) {
           throw new ArchiveCapError(`An entry in that archive is larger than ${Math.round(maxEntryBytes / (1024 * 1024))} MB uncompressed.`);
         }
@@ -113,19 +121,6 @@ export async function extractArchiveText(data: Uint8Array, options: ArchiveTextO
   } catch (error) {
     if (error instanceof ArchiveCapError) return { ok: false, reason: error.reason, message: error.message };
     return { ok: false, reason: "malformed", message: "That archive can't be read. It may be damaged, or not really a zip file." };
-  }
-
-  // Defence in depth (see the module doc): re-check what fflate actually produced, not just what the
-  // header declared, before any of it is composed into text a model could read.
-  let actualTotal = 0;
-  for (const bytes of Object.values(entries)) {
-    if (bytes.byteLength > maxEntryBytes) {
-      return { ok: false, reason: "zip_bomb", message: `An entry in that archive is larger than ${Math.round(maxEntryBytes / (1024 * 1024))} MB uncompressed.` };
-    }
-    actualTotal += bytes.byteLength;
-    if (actualTotal > maxTotalBytes) {
-      return { ok: false, reason: "zip_bomb", message: `That archive's text entries add up to more than ${Math.round(maxTotalBytes / (1024 * 1024))} MB uncompressed.` };
-    }
   }
 
   const names = Object.keys(entries).sort();
