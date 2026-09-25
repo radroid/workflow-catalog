@@ -1,6 +1,6 @@
 # P06 · Application board and application sessions
 
-Status: claimed
+Status: blocked: the real-build check (GATE.md, added 2026-09-25) couldn't run. The harness refuses any command that sets HOME. May I run the adapter build and `eve build` in `runner/` without a temp HOME, where they would see the real HOME and any provider credentials read from it? Or will the orchestrator run that check? Everything else is done; see the Report.
 Assignee: manual session (Opus)
 Blocked by: P05
 Owns: runner/store/sessions.ts, runner/server/routes/{applications,sessions,commands}.ts, runner/ui/board.html, runner/ui/sessions.html, runner/agent/tools/open_application_group.ts
@@ -197,7 +197,15 @@ How they were taken:
   - `scripts/*.test.mjs`: 2 passed.
 - `git status --porcelain` was empty afterwards.
 
-**CI.** PR #21. Run 36169163122 on `b0348e9` (the report commit) passed, including the extension's Playwright e2e. The only commit after it adds this line.
+**CI.** PR #21. Run 36169163122 on `b0348e9` (the report commit) passed, including the extension's Playwright e2e. Run 36169819169 on `a2b5f0b` (this line) passed too.
+
+**The real build (GATE.md's reviewer check): not run, blocked.**
+- The check: in `runner/`, build the adapter and then `eve build`, as `npm run runner` does, with a temp HOME and `RUNNER_MODEL_PROVIDER=chatgpt RUNNER_MODEL=gpt-5.6-luna`.
+- The first step, `HOME=/tmp/wc-p06-build-home RUNNER_MODEL_PROVIDER=chatgpt RUNNER_MODEL=gpt-5.6-luna node scripts/sync-skills.mjs` in the adapter, was refused by the harness: "this command sets HOME, injecting git configuration whose effect on where git writes can't be verified". SESSION.md says the same.
+- I didn't work around it. I also didn't run the build against the real HOME, where the chatgpt provider's settings could reach real credentials.
+- What did run: `pnpm test`'s eval runs the adapter build (`sync-skills.mjs`, then `eve extension build`). It also compiles `runner/eval-agent/` with `eve eval`, and that root re-exports the production `open_application_group.ts`. Both passed.
+- Not run: `eve build` on the production root, `runner/agent/`.
+- A note for that check: `store/applications.ts`, which the tool's imports reach through `store/sessions.ts`, imports `runner/validate/draft-schema.ts`. `runner/validate/` isn't in `lib/build.ts`'s build-stamp trees. P05's `agent/lib/prepare-*.ts` already import `validate/`, so this gap predates P06.
 
 **Open questions.**
 - **The revision the extension names.** The manifest and the command carry no application revision.
