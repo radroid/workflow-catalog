@@ -197,6 +197,8 @@ How they were taken:
   - `scripts/*.test.mjs`: 2 passed.
 - `git status --porcelain` was empty afterwards.
 
+**CI.** PR #21. Run 36169163122 on `b0348e9` (the report commit) passed, including the extension's Playwright e2e. The only commit after it adds this line.
+
 **Open questions.**
 - **The revision the extension names.** The manifest and the command carry no application revision.
   - Through the bridge, the extension learns it from the `result` of `browser_command_result` (`items[].revision`) and of `application_status_changed`.
