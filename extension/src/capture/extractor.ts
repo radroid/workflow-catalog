@@ -6,6 +6,23 @@
  */
 export const EXTRACTOR_VERSION = "extractor@0.1.0";
 
+/**
+ * P07 part C, gate 5 ("encounter iframe content: show preview/fallback,
+ * never silently save the wrong job"): `extractJobPosting` answers
+ * `{ ok: false, reason: POSTING_IN_FRAME }` when the page has no JobPosting
+ * of its own and most of it is an embedded frame, as an applicant-tracking
+ * system's embed is. The extractor runs in the top frame only (it has no
+ * access to other frames, and asks for none), so it would otherwise save
+ * the page around the frame -- a careers banner -- as if it were the job.
+ * The popup shows its fallback for this reason instead. The literal is
+ * repeated inside `extractJobPosting`, which must be self-contained;
+ * extractor.test.ts checks the two agree.
+ */
+export const POSTING_IN_FRAME = "posting_in_frame";
+
+/** A frame covering at least this share of the viewport is the page's main content. */
+export const MAIN_FRAME_SHARE = 0.4;
+
 export interface ExtractedStructuredHints {
   title?: string;
   company?: string;
@@ -204,7 +221,21 @@ export function extractJobPosting(maxTextChars?: number): ExtractionResult {
       return structured;
     }
 
+    // P07 part C, gate 5: most of the page is an embedded frame and the page itself names no JobPosting,
+    // so what this frame can read is the page around the posting, not the posting. (0.4: MAIN_FRAME_SHARE.)
+    function postingLooksFramed(): boolean {
+      const viewport = Math.max(1, window.innerWidth * window.innerHeight);
+      for (const frame of Array.from(document.querySelectorAll("iframe, frame"))) {
+        const rect = frame.getBoundingClientRect();
+        const style = getComputedStyle(frame);
+        if (style.visibility === "hidden" || style.display === "none") continue;
+        if (rect.width * rect.height >= 0.4 * viewport) return true;
+      }
+      return false;
+    }
+
     const jsonLdJobPosting = findJsonLdJobPosting();
+    if (!jsonLdJobPosting && postingLooksFramed()) return { ok: false, reason: "posting_in_frame" };
     const structured = jsonLdJobPosting ? structuredFromJsonLd(jsonLdJobPosting) : structuredFromDomHeuristics();
 
     const main = document.querySelector("main");

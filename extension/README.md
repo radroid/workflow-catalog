@@ -1,10 +1,11 @@
 # @workflow-catalog/extension
 
 Chrome MV3 extension for the job-assistant workflow. Packet **P07**. Parts A
-and B are done: manifest, options/pairing page, the capture extractor, file
-export, real pairing and `job_capture` against the runner bridge, and the
-offline outbox. Part C (sessions, tab group, side panel content, the
-remaining gates) is still ahead.
+and B: manifest, options/pairing page, the capture extractor, file export,
+real pairing and `job_capture` against the runner bridge, and the offline
+outbox. Part C: application sessions -- taking them in from the runner (or a
+file), opening each as a tab group on a click, the side panel with Applied
+and Defer, restore after a restart -- and the nine gates as tests.
 
 ## What's here
 
@@ -59,9 +60,15 @@ remaining gates) is still ahead.
     revoked, another install, another program on the port, too many
     tries), plus how many saved jobs are still waiting, and whether they
     wait on a pairing (any other reason is the one Status gives);
-  - the file bridge: **Export last capture** writes `job-capture.json`,
-    and importing an `application-session.json` validates it as a
-    `SessionManifest` and shows a read-only summary.
+  - the file bridge: **Export last capture** writes `job-capture.json`;
+    importing an `application-session.json` validates it as a
+    `SessionManifest`, shows its summary, and adds it to the side panel,
+    ready to open (nothing opens until **Start applying**; importing a
+    session already there changes nothing); **Export session updates**
+    writes `completion-events.json` (`{ events }`: every tab report and
+    choice this browser made on the runner's sessions, with their
+    eventIds) for the workspace's `inbox/`, when the runner couldn't be
+    reached.
 
   Device token state lives in `chrome.storage.session`, never
   `storage.local`.
@@ -79,10 +86,39 @@ remaining gates) is still ahead.
   is held, not retried, until a new pairing; each such pause records the
   pairing it was refused under, so one left from an older pairing never
   holds a capture back under the current one.
-- `src/sidepanel/` — placeholder; content lands in part C.
+- `src/session/` — application sessions (part C, mvp-spec F9):
+  - `receive.ts`: `GET /commands` (when the side panel opens, and on the
+    worker's 15-minute alarm) and file imports store each session as
+    **Ready to open in your browser**. A commandId is taken in once, a
+    session once by sessionId, and a poll opens nothing;
+  - `policy.ts`: what a command must be before anything opens: this
+    device's, not expired, the `job-assistant@0` workflow, at most 20
+    items, each task once; every stored URL https to a public host (no
+    loopback, private, link-local or metadata address, no local-only
+    name, no credentials), checked again right before its tab opens;
+  - `open.ts`: **Start applying** (a click, never an alarm) journals the
+    attempt in `storage.local`, creates each tab and records its ID in
+    `storage.session`, groups and names them, then reports every task
+    (`browser_command_result`). An opening that stopped partway (the
+    panel closed, a crash) is found by its Web Lock being free and shown
+    as interrupted: open only the missing tabs, or keep what opened.
+    **Reopen session** after a restart makes a new group, warns first
+    when a group with the same title is open, and never adopts a tab;
+  - `report.ts`: each event is written to the session before it is sent
+    and sent again, as the same event, until the runner answers. The
+    runner's answer gives each application's revision, which
+    Applied/Defer (`application_status_changed`) names; a stale refusal
+    is shown, never retried, and **Refresh** asks for the current one;
+  - `tabs.ts`: a recorded tab that closes is reported `closed`, and
+    nothing else. No page is ever read.
+- `src/sidepanel/` — the side panel: the runner connection and **Check
+  for sessions**, the current application (its address, where its
+  prepared documents are in the runner, the remaining steps, **Applied**
+  and **Defer**), and every session with what it needs next.
 - `src/worker/` — service worker; imports the zod-jitless bootstrap first
-  (see below), then registers the outbox's retry-alarm listener and arms it
-  at startup if anything is already queued.
+  (see below), then registers the outbox's retry alarm, the session poll
+  alarm (recreated at every start) and the tab listeners, and marks an
+  interrupted opening at startup.
 - `src/shared/zod-jitless.ts` — sets `z.config({ jitless: true })` as the
   literal first import of every entry point. MV3's default CSP forbids
   `unsafe-eval`; zod v4 otherwise probes for `new Function` support at
@@ -117,7 +153,7 @@ never hand-edited.
 
 | Script | What it does |
 | --- | --- |
-| `pnpm typecheck` | Two `tsc --noEmit` programs: `tsconfig.json` (src, scripts, e2e) and `tsconfig.real-bridge.json` (the three files that import the runner's bridge source, under the runner's own compiler options) |
+| `pnpm typecheck` | Two `tsc --noEmit` programs: `tsconfig.json` (src, scripts, e2e) and `tsconfig.real-bridge.json` (the files that import the runner's source, under the runner's own compiler options) |
 | `pnpm test` | Vitest unit tests (happy-dom) — extractor fixtures (JSON-LD, DOM-heuristic, hostile posting), byte-cap truncation, URL refusals, `contentHash` format, `JobCapture`/`SessionManifest` validation, token storage against a fake `chrome.storage`, the bridge client (also against the real bridge on an ephemeral port), the outbox and its races, the popup's and Settings' states, the screenshot guard, manifest exactness, a static no-`eval` source scan. Five tests read `dist/` and are skipped until it's built; `EXTENSION_DIST_REQUIRED=1` (CI) makes a missing `dist/` fail them instead |
 | `pnpm lint` | `eslint . --max-warnings 0` |
 | `pnpm build` | see above |
@@ -199,10 +235,11 @@ P07A_UPDATE_SCREENSHOTS=1 pnpm --filter @workflow-catalog/extension test:e2e
 ```
 
 **`bridge-e2e.spec.ts`: pairing and `job_capture` against the real
-bridge.** It starts the runner's real P02 bridge (fresh temp workspace,
-`e2e/real-bridge-harness.ts`) on `127.0.0.1:4310` — the one origin the
-manifest's host permission allows — so **nothing else may be listening on
-4310** while it runs. Through the real options page and popup it covers
+bridge.** It starts the runner's real bridge with every real route module
+(fresh temp workspace, `e2e/real-bridge-harness.ts`, `modules: "real"`, so
+a Save lands as a job revision through P04's handler) on `127.0.0.1:4310`
+— the one origin the manifest's host permission allows — so **nothing else
+may be listening on 4310** while it runs. Through the real options page and popup it covers
 pairing and Un-pair, a wrong code, a revoked and an expired pairing, a
 stopped runner and a stuck one (a listener that never answers), Save
 sent, queued while the runner is down and
@@ -217,6 +254,26 @@ wide) into `docs/screenshots/P07B-*.png` when opted in:
 ```sh
 P07B_UPDATE_SCREENSHOTS=1 pnpm --filter @workflow-catalog/extension test:e2e
 ```
+
+**`sessions-e2e.spec.ts`: sessions and the nine gates** (part C), against
+the same real bridge and P06's handlers, with the side panel driven as an
+extension page and the fictional employer pages answered in the browser:
+Start applying, the group, the reports, Applied and Defer; a command
+replayed after its lease lapsed; the panel closed in the gap between a
+tab and its recorded ID; a restart with restored tabs and Reopen; offline
+and the worker's alarm poll; two devices, a revoke, an expired token;
+hostile commands from a stand-in on 4310; a closed tab and a "thank you
+for applying" page. `playwright.config.ts` runs it and `bridge-e2e.spec.ts`
+one at a time (both bind 4310). What can't be automated is
+`MANUAL-GATES.md`. Its screenshots (`docs/screenshots/P07-C-*.png`, the
+side panel and the Pairing notice, 1280 and 390, light and dark):
+
+```sh
+P07C_UPDATE_SCREENSHOTS=1 pnpm --filter @workflow-catalog/extension test:e2e
+```
+
+`WC_E2E_SCRATCH_DIR` puts the harness's scratch workspaces in a folder of
+your choice (default: the OS temp folder).
 
 ## Manual smoke test (branded Chrome)
 
@@ -257,28 +314,26 @@ reach at all:
 7. In the options page's **File bridge** section, **Export last capture**
    downloads the last capture you saved as `job-capture.json`. Importing a
    file takes an `application-session.json` (a session manifest, going the
-   other way: runner to extension) → a read-only summary renders; any
-   other file, a `job-capture.json` included, is refused with a plain
-   message. The runner doesn't write session manifests until part C, so
-   use a hand-written fictional one for now:
-   `extension/fixtures/application-session.example.json`, which follows
-   `sessionManifestSchema` in `packages/contracts/src/session.ts` (a unit
-   test keeps it valid). To write your own, follow the same schema and use
-   fictional data only (`docs/spec/implementation/fixtures-policy.md`).
+   other way: runner to extension) → its summary renders and it's added
+   to the side panel, ready to open; any other file, a `job-capture.json`
+   included, is refused with a plain message. The runner's Sessions page
+   writes one to `outbox/`; a fictional one is
+   `extension/fixtures/application-session.example.json` (a unit test
+   keeps it valid against `sessionManifestSchema`).
+   The side panel's own checks are in `MANUAL-GATES.md`.
 8. Toggle the OS between light/dark appearance and reopen the popup and
    options page → both follow it immediately (no stale theme).
 
 ## Known limitations
 
-- **Pairing at the exact moment an old token is refused.** When the runner
-  refuses a token (expired or revoked), the extension forgets it — but only
-  if it's still the stored one. `chrome.storage` has no compare-and-set, so
-  a new pairing stored in the few milliseconds between that check and the
-  removal is forgotten with it. If you pair at the exact moment an old
-  token is refused, pair again.
-
-## What part C still owes
-
-Sessions, the tab group behavior, side panel content, and the remaining
-gates named in the P07 packet (`GET /commands` polling and its 15-minute
-alarm are part C's "Session" deliverable, not part B's).
+- **A choice on a session imported from a file stays in this browser.**
+  Its manifest names no application revision, and the runner took it for
+  no device, so the side panel records Applied or Defer locally and asks
+  you to mark it on the runner's Board too.
+- **A tab created in the moment before its ID is recorded** (the side
+  panel closed mid-opening) is left alone: the panel says one may be open,
+  and "Open the missing tabs" can open a second one. Close the duplicate
+  yourself (browser-boundary.md: never promise exactly-once opening).
+- The pairing changes (a 401's forget, a 403's flag, pairing and Un-pair)
+  run under one Web Lock, so a pairing stored while an old token is being
+  refused is no longer lost (part B's documented limitation).

@@ -51,6 +51,7 @@ import { fileURLToPath } from "node:url";
 import type { Locator, Page, Route } from "@playwright/test";
 import type { JobCapture } from "@workflow-catalog/contracts";
 import { DEVICE_TOKEN_TTL_MS } from "@workflow-catalog/runner/store/devices.ts";
+import { JobsStore } from "@workflow-catalog/runner/store/jobs.ts";
 import { listen } from "@workflow-catalog/runner/server/app.ts";
 import {
   assertNoAxeViolations,
@@ -129,7 +130,10 @@ test.afterAll(async () => {
 let bridge: BridgeHarness;
 
 test.beforeEach(async () => {
-  bridge = await startBridgeHarness();
+  // P07 part C (carried from the P04 round-1 review): the bridge `npm run
+  // runner` starts, with every real route module, so a Save reaches P04's
+  // job_capture handler instead of being journaled as no_handler.
+  bridge = await startBridgeHarness({ modules: "real" });
   // Every test starts from a genuinely clean slate, whatever a previous
   // one in this file left in chrome.storage.session (a token, a queued
   // outbox entry) -- this extension instance is shared across all tests
@@ -154,11 +158,24 @@ function optionsUrl(): string {
   return `chrome-extension://${harness.extId}/src/options/index.html`;
 }
 
-/** The side panel placeholder: an extension page that can reach
- * chrome.storage.session and does nothing on its own -- unlike the options
- * page, whose status check would act on a token a test is swapping. */
+/** The side panel: an extension page that can reach chrome.storage.session
+ * and, once its first check is done, sends nothing on its own -- unlike the
+ * options page, whose status check would act on a token a test is
+ * swapping. */
 function sidePanelUrl(): string {
   return `chrome-extension://${harness.extId}/src/sidepanel/index.html`;
+}
+
+/** P07 part C: the side panel checks the runner for sessions once when it
+ * opens. Opened unpaired (every test starts with storage cleared), that
+ * check sends nothing; waiting for it to finish first means a token a test
+ * stores next is never the one it uses. After that the panel only listens
+ * to storage (and to its own buttons). */
+async function openQuietStoragePage(): Promise<Page> {
+  const page = await harness.context.newPage();
+  await page.goto(sidePanelUrl());
+  await expect(page.locator('[data-section="connection"]')).toContainText("Pair this browser in Settings to receive sessions from the runner.");
+  return page;
 }
 
 /** The popup's status line: its text and its tone class. */
@@ -554,6 +571,16 @@ test("job_capture (gate 1): Save shows a single success state, against the real 
   // once, for real" half a UI-only check can't see.
   const journaled = await bridge.ctx.journal.list();
   expect(journaled).toHaveLength(1);
+
+  // P07 part C (carried from the P04 round-1 review): and it reached P04's
+  // real handler -- the capture is the job's first revision in the
+  // workspace, not an event with no handler.
+  const jobs = new JobsStore(bridge.ctx.workspace);
+  const jobId = await jobs.findJobIdByUrl(`${fixtureServer.origin}/posting-json-ld.html`);
+  expect(jobId, "the capture landed as a job").toBeDefined();
+  expect(await jobs.revisions(jobId!)).toEqual([1]);
+  const snapshot = await jobs.getSnapshot(jobId!, 1);
+  expect(snapshot?.text).toContain("Staff Software Engineer");
 
   await harness.bs.send("Target.closeTarget", { targetId: popup.targetId }).catch(() => undefined);
   await popup.detach();
@@ -1294,8 +1321,7 @@ test("P07B screenshots: popup and options page, something other than the runner 
     response.end("<!doctype html><title>Another program</title><p>A fictional local dev server.</p>");
   });
   try {
-    const storagePage = await harness.context.newPage();
-    await storagePage.goto(sidePanelUrl());
+    const storagePage = await openQuietStoragePage();
     await storeFictionalPairing(storagePage, "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", "fictional-token");
     await storagePage.close();
 
@@ -1348,8 +1374,7 @@ test("P07B screenshots: popup, queued -- this browser was paired again while it 
   // is queued for retry (neutral), not paused. The real bridge can't be
   // re-paired twice inside one request. Tokens are swapped from the side
   // panel page, which (unlike Settings) runs no status check of its own.
-  const storagePage = await harness.context.newPage();
-  await storagePage.goto(sidePanelUrl());
+  const storagePage = await openQuietStoragePage();
   await storeFictionalPairing(storagePage, "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", "fictional-token-1");
   const newerPairings = [
     { deviceId: "9c1d7a1f-3a2b-4d66-8e4f-1b2c3d4e5f60", token: "fictional-token-2" },

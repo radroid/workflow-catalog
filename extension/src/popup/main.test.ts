@@ -165,3 +165,44 @@ describe("popup main.ts run() (review issue 2: never save one job's text under a
     expect(app?.querySelector("button.primary")).toBeNull();
   });
 });
+
+describe("P07 part C", () => {
+  it("carried (round-5 nit 1): a capture the contracts refuse for something other than its address gets K4's second plain sentence", async () => {
+    // The only way to reach it: a digest that isn't one (the builder's own test forces it the same way).
+    vi.doMock("../shared/crypto", () => ({ sha256Hex: async () => "not a digest" }));
+    const url = "https://jobs.example/postings/a";
+    globalThis.chrome = {
+      tabs: { query: async () => [{ id: 1, url }] },
+      scripting: {
+        executeScript: async () => [
+          { result: { ok: true, text: "Posting A's real text, long enough to pass the minimum captured length floor here.", structured: {}, url } },
+        ],
+      },
+    } as unknown as typeof chrome;
+
+    const { run } = await import("./main");
+    await run();
+
+    const app = document.querySelector("#app");
+    expect(app?.querySelector('[role="alert"]')?.textContent).toBe("This page couldn't be captured.");
+    expect(app?.textContent).not.toMatch(/validation|expected|digest|hex|contentHash/i);
+    expect(app?.textContent).toContain("Paste the posting in the runner's Jobs page instead");
+    expect(app?.querySelector("button.primary")).toBeNull();
+    vi.doUnmock("../shared/crypto");
+  });
+
+  it("gate 5: a posting inside an embedded frame gets the fallback, and nothing to save", async () => {
+    globalThis.chrome = {
+      tabs: { query: async () => [{ id: 1, url: "https://careers.harbor.example/roles/sre" }] },
+      scripting: { executeScript: async () => [{ result: { ok: false, reason: "posting_in_frame" } }] },
+    } as unknown as typeof chrome;
+
+    const { run } = await import("./main");
+    await run();
+
+    const app = document.querySelector("#app");
+    expect(app?.querySelector('[role="alert"]')?.textContent).toBe("This posting is inside an embedded frame, which the extension can't read.");
+    expect(app?.textContent).toContain("Paste the posting in the runner's Jobs page instead");
+    expect(app?.querySelector("button.primary")).toBeNull();
+  });
+});

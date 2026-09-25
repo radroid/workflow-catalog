@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BRIDGE_ORIGIN, createBridgeClient, FOREIGN_SERVER_MESSAGE, type BridgeClient } from "./bridge-client";
+import { BRIDGE_ORIGIN, createBridgeClient, FOREIGN_SERVER_MESSAGE, MAX_RESPONSE_CHARS, type BridgeClient } from "./bridge-client";
 
 /** A fictional job_capture, contracts-shaped (see fixtures-policy.md). */
 const CAPTURE = {
@@ -350,6 +350,18 @@ describe("createBridgeClient: authenticated routes (postEvent, getCommands, getS
       return jsonResponse(200, { commands: [] });
     });
     await pairedClient().getCommands("2026-09-22T09:00:00.000Z");
+  });
+
+  it("P07 part C, gate 7: an answer larger than MAX_RESPONSE_CHARS is never parsed -- read as another program's, declared or not", async () => {
+    const padding = "x".repeat(MAX_RESPONSE_CHARS + 1);
+    stubFetch(() => new Response(JSON.stringify({ commands: [], padding }), { status: 200, headers: { "content-type": "application/json" } }));
+    expect(await pairedClient().getCommands()).toMatchObject({ ok: false, error: { code: "invalid_response" } });
+
+    stubFetch(() => new Response("{}", { status: 200, headers: { "content-type": "application/json", "content-length": String(MAX_RESPONSE_CHARS + 1) } }));
+    expect(await pairedClient().getCommands()).toMatchObject({ ok: false, error: { code: "invalid_response" } });
+
+    stubFetch(() => jsonResponse(200, { commands: [] }));
+    expect(await pairedClient().getCommands(), "an answer of a normal size still passes").toEqual({ ok: true, value: { commands: [] } });
   });
 });
 

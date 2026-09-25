@@ -146,6 +146,40 @@ describe("P07-B revision 2, B4: the 401/403 hooks only touch the token the bridg
   });
 });
 
+describe("P07 part C (carried): the forgetInvalidToken window is closed by the pairing lock", () => {
+  const OLD = { deviceId: "8b0c6f0e-2f1a-4c55-9d3e-0a1b2c3d4e5f", token: "old-token", pairedAt: "2026-09-22T09:00:00.000Z" };
+  const NEW = { deviceId: "9c1d7a1f-3a2b-4d66-8e4f-1b2c3d4e5f60", token: "new-token", pairedAt: "2026-09-22T09:05:00.000Z" };
+
+  /** Makes every storage.session read take a timer tick, so a second call started right after the first
+   * would land between the first's read and its removal -- revision 2's window. */
+  function slowReads(): void {
+    const get = fakeStorage.session.get.bind(fakeStorage.session);
+    fakeStorage.session.get = async (keys) => {
+      const value = await get(keys);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return value;
+    };
+  }
+
+  it("a pairing stored while a 401's forgetInvalidToken is still reading waits for it, and is never the token removed", async () => {
+    await recordPairing(OLD);
+    slowReads();
+    const forgetting = forgetInvalidToken("old-token");
+    const pairing = recordPairing(NEW);
+    await Promise.all([forgetting, pairing]);
+    expect(await getDeviceToken(), "revision 2 lost this pairing").toEqual(NEW);
+    expect(await getPairingExpired(), "and the new pairing cleared the old one's expiry").toBe(false);
+  });
+
+  it("an Un-pair and a 403's flag are serialised the same way", async () => {
+    await recordPairing(OLD);
+    slowReads();
+    await Promise.all([flagOriginMismatch("old-token"), forgetPairing()]);
+    expect(await getDeviceToken()).toBeNull();
+    expect(await getPairingOriginMismatch(), "the Un-pair ran after the flag, and cleared it").toBe(false);
+  });
+});
+
 describe("last job capture handoff storage", () => {
   it("round-trips through storage.session and never touches storage.local", async () => {
     expect(await getLastJobCapture()).toBeNull();

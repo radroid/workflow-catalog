@@ -172,14 +172,15 @@ test("the popup, opened without a genuine activeTab grant, shows the no-readable
   await popup.close();
 });
 
-test("the side panel placeholder renders (real fonts/theme applied, no CSP violations)", async ({ context, extensionId }) => {
+test("the side panel renders (real fonts/theme applied, no CSP violations)", async ({ context, extensionId }) => {
   const page = await context.newPage();
   const errors = watchForBrowserErrors(page);
   await recordCspViolations(page);
   await page.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
 
   await expect(page.getByText("Job Assistant")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Coming soon" })).toBeVisible();
+  // P07 part C: the placeholder's "Coming soon" became the Applications panel.
+  await expect(page.getByRole("heading", { name: "Applications" })).toBeVisible();
 
   await assertThemeAndFontsLoaded(page);
   await errors.assertNone();

@@ -1,6 +1,6 @@
 import "../shared/zod-jitless";
 import { buildJobCapture, MAX_INPAGE_TEXT_CHARS } from "../capture/build-job-capture";
-import { extractJobPosting, isExtractionResult } from "../capture/extractor";
+import { extractJobPosting, isExtractionResult, POSTING_IN_FRAME } from "../capture/extractor";
 import { renderFallback, renderLoading, renderPreview } from "./render";
 import { applyColorScheme } from "../shared/theme-init";
 import { explainUnsupportedUrl } from "../shared/url";
@@ -46,6 +46,11 @@ export async function run(): Promise<void> {
   }
 
   const rawResult: unknown = injectionResults[0]?.result;
+  // P07 part C, gate 5: the posting is in an embedded frame this can't read; never save the page around it.
+  if (isExtractionResult(rawResult) && !rawResult.ok && rawResult.reason === POSTING_IN_FRAME) {
+    renderFallback(app!, "This posting is inside an embedded frame, which the extension can't read.");
+    return;
+  }
   if (!isExtractionResult(rawResult) || !rawResult.ok) {
     renderFallback(app!, "Can't read this page — paste the posting in the runner's Jobs page.");
     return;

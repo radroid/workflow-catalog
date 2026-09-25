@@ -22,6 +22,7 @@
  * keeps that default, and nothing here needs content-script access anyway.
  */
 import type { JobCapture } from "@workflow-catalog/contracts";
+import { withLock } from "./locks";
 
 const DEVICE_TOKEN_KEY = "deviceToken";
 const LAST_JOB_CAPTURE_KEY = "lastJobCapture";
@@ -96,6 +97,10 @@ export async function getPairingOriginMismatch(): Promise<boolean> {
 const PAIRING_EXPIRED_KEY = "pairingExpired";
 const PAIRED_BEFORE_KEY = "pairedBeforeThisSession";
 
+/** P07 part C: serialises every change to the stored pairing across the
+ * popup, Settings, the side panel and the worker. */
+export const PAIRING_LOCK = "wc-pairing";
+
 /**
  * P07-B revision 2, B4: bridge-client.ts's default 401 hook. Forgets the
  * stored token only if it is still `token`, the one the bridge just
@@ -105,24 +110,33 @@ const PAIRED_BEFORE_KEY = "pairedBeforeThisSession";
  * pairing expired, so the options page keeps saying so (and keeps naming
  * `npm run pair`) instead of treating the browser as never paired.
  *
- * chrome.storage has no compare-and-set: a pairing that lands between this
- * read and the removal still loses. That window is one storage round trip,
- * not the length of a network request as before.
+ * chrome.storage has no compare-and-set, so revision 2 left a window of
+ * one storage round trip: a pairing that landed between this read and the
+ * removal was lost. P07 part C (carried): the read, the check and the
+ * removal now run under the pairing lock (`PAIRING_LOCK`, a Web Lock every
+ * extension context shares, shared/locks.ts), and so do `recordPairing`
+ * and `forgetPairing`, so a new pairing waits for this to finish and is
+ * never the token removed.
  */
 export async function forgetInvalidToken(token: string): Promise<void> {
-  const stored = await getDeviceToken();
-  if (stored?.token !== token) return;
-  await chrome.storage.session.remove(DEVICE_TOKEN_KEY);
-  await chrome.storage.session.set({ [PAIRING_EXPIRED_KEY]: true });
+  await withLock(PAIRING_LOCK, async () => {
+    const stored = await getDeviceToken();
+    if (stored?.token !== token) return;
+    await chrome.storage.session.remove(DEVICE_TOKEN_KEY);
+    await chrome.storage.session.set({ [PAIRING_EXPIRED_KEY]: true });
+  });
 }
 
 /** P07-B revision 2, B4: bridge-client.ts's default 403 hook -- the same
  * rule as `forgetInvalidToken`: a 403 about a token that has since been
- * replaced says nothing about the pairing this browser holds now. */
+ * replaced says nothing about the pairing this browser holds now. Under
+ * the same lock (P07 part C). */
 export async function flagOriginMismatch(token: string): Promise<void> {
-  const stored = await getDeviceToken();
-  if (stored?.token !== token) return;
-  await setPairingOriginMismatch(true);
+  await withLock(PAIRING_LOCK, async () => {
+    const stored = await getDeviceToken();
+    if (stored?.token !== token) return;
+    await setPairingOriginMismatch(true);
+  });
 }
 
 /** True once `forgetInvalidToken` has dropped a token the bridge refused,
@@ -145,13 +159,22 @@ export async function getPairedBefore(): Promise<boolean> {
  * request refused for the old one sees it's been replaced, see
  * bridge-client.ts), then clears what the old pairing's failures left. */
 export async function recordPairing(token: StoredDeviceToken): Promise<void> {
-  await setDeviceToken(token);
-  await chrome.storage.session.set({ [PAIRED_BEFORE_KEY]: true });
-  await chrome.storage.session.remove([PAIRING_ORIGIN_MISMATCH_KEY, PAIRING_EXPIRED_KEY]);
+  await withLock(PAIRING_LOCK, async () => {
+    await setDeviceToken(token);
+    await chrome.storage.session.set({ [PAIRED_BEFORE_KEY]: true });
+    await chrome.storage.session.remove([PAIRING_ORIGIN_MISMATCH_KEY, PAIRING_EXPIRED_KEY]);
+  });
 }
 
-/** Un-pair: forgets the token and anything its failures flagged. */
+/** Un-pair: forgets the token and anything its failures flagged. It
+ * remembers that this browser was paired (P07 part C: Settings compares
+ * that memory to the card on screen, and a card built right after an
+ * Un-pair names `npm run pair`, whether or not this browser session made
+ * the pairing itself). */
 export async function forgetPairing(): Promise<void> {
-  await clearDeviceToken();
-  await chrome.storage.session.remove([PAIRING_ORIGIN_MISMATCH_KEY, PAIRING_EXPIRED_KEY]);
+  await withLock(PAIRING_LOCK, async () => {
+    await clearDeviceToken();
+    await chrome.storage.session.set({ [PAIRED_BEFORE_KEY]: true });
+    await chrome.storage.session.remove([PAIRING_ORIGIN_MISMATCH_KEY, PAIRING_EXPIRED_KEY]);
+  });
 }

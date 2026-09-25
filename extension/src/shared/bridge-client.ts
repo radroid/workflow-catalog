@@ -54,6 +54,12 @@ export interface PostEventResult {
    * job_capture sent twice must show "saved" once, not an error the second
    * time. */
   readonly duplicate: boolean;
+  /** P07 part C: the handler's own answer (runner/server/events.ts
+   * `result`), present only when the handler returned one. For
+   * `browser_command_result` it names each application's stage and
+   * revision; for `application_status_changed`, the outcome and the new
+   * revision (P06). Unvalidated here: the caller that needs it parses it. */
+  readonly result?: unknown;
 }
 
 export interface BridgeClient {
@@ -144,6 +150,26 @@ function looksLikeWireErrorBody(value: unknown): value is WireErrorBody {
  * `origin_not_allowed`, 429 `too_many_attempts`, ...), so this never
  * invents its own wording for those.
  */
+/**
+ * P07 part C, gate 7 ("oversized messages: reject safely"): the most of an
+ * answer this reads. The runner's answers are a few kilobytes; a `GET
+ * /commands` with many full-size commands stays well under it. A larger
+ * answer is read as no answer at all (so as another program's), and never
+ * parsed: a declared length over it isn't read, and an undeclared one is
+ * measured before parsing.
+ */
+export const MAX_RESPONSE_CHARS = 1_048_576;
+
+async function boundedText(response: Response): Promise<string | undefined> {
+  const declared = Number(response.headers.get("content-length") ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_CHARS) {
+    await response.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
+  const text = await response.text();
+  return text.length > MAX_RESPONSE_CHARS ? undefined : text;
+}
+
 async function request(baseUrl: string, path: string, init: RequestInit): Promise<BridgeResult<unknown>> {
   let response: Response;
   try {
@@ -160,7 +186,8 @@ async function request(baseUrl: string, path: string, init: RequestInit): Promis
 
   let body: unknown;
   try {
-    body = await response.json();
+    const text = await boundedText(response);
+    body = text === undefined ? undefined : (JSON.parse(text) as unknown);
   } catch {
     body = undefined;
   }
@@ -298,11 +325,11 @@ export function createBridgeClient(options: CreateBridgeClientOptions = {}): Bri
       // real ever received. `eventId` echoing the one just sent, not just
       // `ok: true`, additionally rules out a genuine bridge response meant
       // for a different, unrelated request.
-      const value = result.value as { ok?: unknown; eventId?: unknown; duplicate?: unknown } | undefined;
+      const value = result.value as { ok?: unknown; eventId?: unknown; duplicate?: unknown; result?: unknown } | undefined;
       if (value?.ok !== true || value.eventId !== event.eventId) {
         return { ok: false, error: invalidResponse() };
       }
-      return { ok: true, value: { duplicate: value.duplicate === true } };
+      return { ok: true, value: { duplicate: value.duplicate === true, ...(value.result !== undefined ? { result: value.result } : {}) } };
     },
 
     async getCommands(since) {

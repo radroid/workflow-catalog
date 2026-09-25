@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
 import jobHostileFixture from "../../../packages/job-assistant/fixtures/job-hostile.json";
-import { extractJobPosting, isExtractionResult } from "./extractor";
+import { extractJobPosting, isExtractionResult, MAIN_FRAME_SHARE, POSTING_IN_FRAME } from "./extractor";
 
 const fixturesDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures");
 
@@ -178,6 +178,71 @@ describe("extractJobPosting", () => {
     } finally {
       document.querySelectorAll = original;
     }
+  });
+});
+
+describe("P07 part C, gate 5: a posting inside an embedded frame gets the fallback, never the page around it", () => {
+  /** happy-dom lays nothing out, so each test sizes the frames the way Chrome would (the e2e runs the real layout). */
+  function frameSize(width: number, height: number): () => void {
+    const original = HTMLIFrameElement.prototype.getBoundingClientRect;
+    HTMLIFrameElement.prototype.getBoundingClientRect = function () {
+      return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) } as DOMRect;
+    };
+    return () => {
+      HTMLIFrameElement.prototype.getBoundingClientRect = original;
+    };
+  }
+
+  it("a careers page whose posting is a frame covering most of the viewport answers posting_in_frame", () => {
+    loadFixture("posting-iframe.html");
+    const restore = frameSize(window.innerWidth, window.innerHeight * 0.85);
+    try {
+      expect(extractJobPosting(100_000)).toEqual({ ok: false, reason: POSTING_IN_FRAME });
+    } finally {
+      restore();
+    }
+  });
+
+  it("a small frame (an embedded map or video) doesn't stop a capture", () => {
+    loadFixture("posting-iframe.html");
+    const restore = frameSize(300, 250);
+    try {
+      const result = extractJobPosting(100_000);
+      expect(result.ok).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("a hidden frame doesn't count", () => {
+    loadFixture("posting-iframe.html");
+    document.querySelector("iframe")!.style.display = "none";
+    const restore = frameSize(window.innerWidth, window.innerHeight);
+    try {
+      expect(extractJobPosting(100_000).ok).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("a page that names its own JobPosting is captured, frame or not", () => {
+    loadFixture("posting-json-ld.html");
+    document.body.append(document.createElement("iframe"));
+    const restore = frameSize(window.innerWidth, window.innerHeight);
+    try {
+      const result = extractJobPosting(100_000);
+      expect(result.ok).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("the literals repeated inside the self-contained function agree with the exported ones", () => {
+    const source = extractJobPosting.toString();
+    expect(source).toContain(`"${POSTING_IN_FRAME}"`);
+    // The transform may print 0.4 as .4.
+    const share = String(MAIN_FRAME_SHARE).replace(/^0/, "0?").replace(".", "\\.");
+    expect(source).toMatch(new RegExp(`${share} \\* viewport`));
   });
 });
 

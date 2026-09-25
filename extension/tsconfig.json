@@ -30,5 +30,5 @@
   // this package's options instead of its own -- excluded from tsc rather
   // than loosening this package's options repo-wide. Playwright and Vitest
   // both run them fine regardless (transpile-only, no tsc involved).
-  "exclude": ["e2e/real-bridge-harness.ts", "src/shared/bridge-client.realbridge.test.ts", "e2e/bridge-e2e.spec.ts"]
+  "exclude": ["e2e/real-bridge-harness.ts", "src/shared/bridge-client.realbridge.test.ts", "e2e/bridge-e2e.spec.ts", "e2e/session-seed.ts", "e2e/sessions-e2e.spec.ts"]
 }
