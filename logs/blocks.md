@@ -1567,3 +1567,39 @@ P05 and P03.2 are meant to run in parallel, and two implementers never share a p
   - `runner.css` is P06.1's.
 - **P06.1** starts as soon as the subagent budget has room.
 - **A third implementer port, 4360, and a third UI-critic port, 4370,** join the port map.
+
+## 2026-09-25 — P05 peer review, round 3 [REQUEST_CHANGES]
+
+**Iter:** 007
+**Source:** peer-review (a fresh Opus reviewer and a fresh Opus UI critic; round 2's died with the session), PR #16 at 1a0f854
+**Severity:** medium. Revision 2 closed X1–X10, but it opened two validator regressions: open ends in words, and one-part abbreviations. Two older validator gaps, and two page bugs, also surfaced.
+
+**Verdict:** REVISE — 4 issues; UI REVISE — 2 issues.
+- **Reviewer:**
+  1. "now", "presently", "to date", "recently" and "last year" pass when a sentence gives no year (new).
+  2. "Mt.", "Ft.", "Lt." and "Mx." split honest sentences, which are then refused as uncited (new).
+  3. Titles still slip past after a dash, a parenthesis, "on the … team", "and", "then" or "role" (older).
+  4. "an order of magnitude" and "single-digit" aren't read (older).
+- **UI critic:**
+  1. Prepare again flips the cover-letter choice back to the last model attempt's.
+  2. The documents are dated in UTC, so an evening letter in Toronto is dated tomorrow.
+
+**What holds:**
+- Every round-2 probe is refused, and every honest control passes.
+- X5–X9 are fixed; the reviewer ran Ada, Zoe, Ada, Zoe, Ada.
+- Exactly the two listed assertion edits.
+- The mutations fail tests: 18 in the reviewer's own reruns.
+- The chain is green, merged and unmerged, and so is CI.
+- Scope is clean.
+- The UI sweep passes: axe 0 in 32 audits, and every outcome announced once.
+
+**Decision:**
+- Y1–Y8 in `logs/handoff/P05-round-3-review.md` go to the same escalation.
+- **Rulings:**
+  - **Y1:** present-time words are open ends everywhere, and relative dates are refused. This accepts that "now use" is refused, as "still used by" is.
+  - **Y2:** the abbreviation list grows, as a false-refusal fix. An unlisted one-part abbreviation gets a hint to write the word out.
+  - **Y6** (local dates) and **Y7** (a way forward after a refused re-export) are ruled in.
+- **Round 4 is narrow.** Only these count: an undone Y item, a regression against 1a0f854, or a weakened or unlisted test edit. New word-matching gaps of an older kind go to a follow-up packet, P05.1, so the critical path converges.
+- **Carried:**
+  - to P06: the combined line's mid-word cuts, and the repeated-refusal announcement on the Applications page;
+  - to P06.1: the same repeated-refusal pattern on the Jobs page.
