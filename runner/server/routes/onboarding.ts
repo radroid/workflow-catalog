@@ -3,7 +3,7 @@ import { SOURCE_CATEGORIES, sourceStatusSchema, uuidSchema, type SourceCategory 
 import { z } from "zod";
 import { extractClaimsOutputSchema, type ExtractClaimsInput } from "../../agent/lib/extract-claims-schema.ts";
 import { extractArchiveText, type ArchiveTextRejectionReason } from "../../lib/archive-text.ts";
-import { randomSecret } from "../../lib/crypto.ts";
+import { randomSecret, sha256Hex } from "../../lib/crypto.ts";
 import { documentKindFromFileName, extractDocumentText, type DocumentTextRejectionReason } from "../../lib/document-text.ts";
 import { buildGithubSourceText, defaultGithubSourceDeps, githubTokenStatus, GITHUB_TOKEN_SECRET_NAME, type GithubSourceRejectionReason } from "../../lib/github-source.ts";
 import { extractReadableText } from "../../lib/readable-text.ts";
@@ -78,6 +78,19 @@ async function boundedSourceBody(request: Request): Promise<BodyResult> {
   return { ok: false, response: errorResponse(413, "body_too_large", SOURCE_CONTENT_TOO_LARGE_MESSAGE) };
 }
 
+/**
+ * Gate fix round 1, B3: a pasted or `.txt`/`.md`-uploaded source is capped at 512 KiB by
+ * `boundedSourceBody` above, checked on the request body itself before anything is saved. Nothing
+ * checked the *extracted* text from a PDF, DOCX, ZIP or URL import the same way -- so a small file on
+ * disk could still save arbitrarily more once decompressed or rendered (the reviewer's probe: a 3.19 MB
+ * ZIP of plain text, itself inside every archive cap, saved 5.7 MB of "extracted text"). Every new
+ * source mode checks this before its own `saveUpload`, so no source can be bigger than one a person
+ * could have pasted by hand, regardless of which mode produced it.
+ */
+function extractedTextTooLarge(text: string): boolean {
+  return Buffer.byteLength(text, "utf8") > MAX_SOURCE_CONTENT_BYTES;
+}
+
 // --- P03.1: PDF/DOCX/ZIP uploads, URL import, GitHub -----------------------
 
 /** The packet's file-size cap for a document or archive upload, checked on the decoded bytes. */
@@ -105,6 +118,7 @@ const DOCUMENT_REJECTION_STATUS: Readonly<Record<DocumentTextRejectionReason, nu
   malformed: 422,
   empty: 422,
   timeout: 504,
+  zip_bomb: 422,
 };
 
 /** HTTP status for a refused archive (ZIP) extraction. */
@@ -177,20 +191,32 @@ function rawBinaryFileName(original: string, extension: string): string {
 }
 
 /**
- * A stable upload name for an imported URL's text: the host and path, so
- * re-importing the same page replaces the same file (as every other upload
- * here does) while two different pages on the same host don't collide.
- * `ProfileStore.saveUpload`'s own `uploadFileName` does the sanitising.
+ * A stable upload name for an imported URL's text: readable host+path, plus a short hash of the
+ * whole URL, so re-importing the exact same URL replaces the same file, while two different URLs
+ * never collide.
+ *
+ * Gate fix round 1, B2 (data loss): the old version built `url-<host><path>.txt` and left
+ * `ProfileStore.saveUpload`'s own `uploadFileName` to sanitise it -- but that function keeps only
+ * the *last* path segment (as it must, for an ordinary uploaded file's own name), so
+ * `https://ada-quill.example/cv/resume` and a person's own `resume.txt` upload both landed at
+ * `resume.txt`, silently overwriting whichever was saved first; and two different site roots
+ * (an empty path) both landed at `upload.txt`, the shared fallback for an empty stem. No path
+ * separator reaches `uploadFileName` now (`/` and `\` are replaced with `-` first, below), and the
+ * hash keeps every distinct URL's file distinct even after `uploadFileName`'s own whitelist
+ * collapses everything else that isn't a letter, digit, `-` or `_` into a single `-`.
  */
 function urlUploadName(url: string): string {
-  let stem = "page";
+  let readable = "page";
   try {
     const parsed = new URL(url);
-    stem = `${parsed.hostname}${parsed.pathname}`;
+    const urlPath = parsed.pathname === "/" ? "" : parsed.pathname;
+    // Capped well below uploadFileName's own 80-character limit, so a long path can never truncate
+    // the hash suffix below off the end (which would put two different long-path URLs back in collision).
+    readable = `${parsed.hostname}${urlPath}`.replace(/[\\/]/g, "-").slice(0, 40);
   } catch {
     // Keep the fallback stem: a URL that fails to re-parse here still needs a name.
   }
-  return `url-${stem}.txt`;
+  return `url-${readable}-${sha256Hex(url).slice(0, 10)}.txt`;
 }
 
 /** The sum of everything saved for one category: an extraction prompt must never grow without bound. */
@@ -570,6 +596,7 @@ export function createOnboardingRouteModule(fetchUrl: typeof safeFetch = safeFet
           if (!extraction.ok) return errorResponse(ARCHIVE_REJECTION_STATUS[extraction.reason], `archive_${extraction.reason}`, extraction.message);
           text = extraction.text;
         }
+        if (extractedTextTooLarge(text)) return errorResponse(413, "extracted_text_too_large", SOURCE_CONTENT_TOO_LARGE_MESSAGE);
 
         const extension = documentKind ?? "zip";
         const s = store();
@@ -603,6 +630,7 @@ export function createOnboardingRouteModule(fetchUrl: typeof safeFetch = safeFet
         if (!fetched.ok) return errorResponse(URL_IMPORT_STATUS[fetched.reason], `url_${fetched.reason}`, fetched.message);
         const text = extractReadableText(fetched.text, fetched.contentType).trim();
         if (!text) return errorResponse(422, "url_empty", "That page has no readable text.");
+        if (extractedTextTooLarge(text)) return errorResponse(413, "extracted_text_too_large", SOURCE_CONTENT_TOO_LARGE_MESSAGE);
 
         const s = store();
         const before = await s.listUploads(category);

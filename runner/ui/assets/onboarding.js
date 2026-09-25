@@ -487,14 +487,26 @@ function afterColon(message) {
  * immediate answer. The refusal is now announced immediately, from whatever
  * `view` is already on screen (a refused write changes nothing server-side,
  * so the markdownError check below reads the same either way, stale or
- * not). There is no reload after it: the old reload's only purpose was
- * fresher `view` data for whatever the person does *next*, and every action
- * on this page already starts with its own `load()` before it renders
- * anything (`setSourceStatus`, `saveAndExtract`, `decide`, `addStatement`,
- * ...), so the next real action reloads regardless. Refusing to leave any
- * async work running past this function's return also means nothing here
- * can land after the page (or, in a test, the harness) has moved on.
+ * not).
+ *
+ * Gate fix round 1, B1 (regression): "no reload after it" went too far.
+ * career-profile.md can be hand-edited to something unreadable *while the
+ * page is already open* (`ui-pages.test.ts`'s `damageMarkdown`), so `view`
+ * can be stale in a way that matters: the write that just discovered the
+ * break refuses with "…See the note at the top." (MARKDOWN_UNREADABLE_REFUSAL,
+ * server/routes/onboarding.ts), but that note's visibility comes only from
+ * `view.markdownError`, which a fresh `GET /api/onboarding` sets — the
+ * refusal's own response never carries it (that route's own comment: "the
+ * file's problem is on the page already; a refused write only says so").
+ * Without a reload, the message points at a note that never appears. The
+ * fix reloads, but only when the message itself promises that note, and
+ * only *after* announcing (never before, so the announcement never again
+ * waits on the write's own lock): a plain busy refusal doesn't mention the
+ * note, so `onboarding-carried-items.test.ts`'s "no follow-up GET" case is
+ * unaffected -- the lock scenario there never matches SEES_MARKDOWN_NOTE.
  */
+const SEES_MARKDOWN_NOTE = /see the note/i;
+
 function refused(error, id, field) {
   const message = messageOf(error);
   // Q7 (revision 1, reviewer 6 and critic 2): unlike a client-side refusal (refuseAt's other call sites,
@@ -504,10 +516,21 @@ function refused(error, id, field) {
   // use (S8: in lower case, see afterColon), keeps the line's own shape (what happened, then why) for a
   // server refusal too: the upload's 413, or a statement's Enter refused by the server (the profile lock's
   // 503), while the field never loses focus for a screen reader to re-read the field error from.
-  if (field && !view?.markdownError) return void refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${afterColon(message)}`);
-  lastAction(message, "refused");
-  // Focus stays where the person acted (the button, or the field they pressed Enter in); only a lost focus goes to the button.
-  render(document.activeElement && document.activeElement !== document.body ? undefined : id);
+  if (field && !view?.markdownError) refuseAt(field.id, message, field.outcome, `${field.outcome.replace(/\.$/, "")}: ${afterColon(message)}`);
+  else {
+    lastAction(message, "refused");
+    // Focus stays where the person acted (the button, or the field they pressed Enter in); only a lost focus goes to the button.
+    render(document.activeElement && document.activeElement !== document.body ? undefined : id);
+  }
+  // B1: reload (in the background, not awaited by run()'s caller) only to reveal a note this refusal
+  // just promised, and only when `view` doesn't already carry it -- when the page loaded already
+  // damaged, the initial load() already set view.markdownError, so the note is already showing and a
+  // second reload here would be pure overhead: e.g. it would needlessly re-touch the workspace after
+  // a test's own cleanup has already run (a real, observed flake: the reload's own read still goes
+  // through profile-writes.ts's cross-process lock file, which can race a test harness's rmdir of its
+  // temp workspace once nothing in the test is left to await this background work). render() with no
+  // focusPlan keeps focus exactly where refuseAt/lastAction left it.
+  if (SEES_MARKDOWN_NOTE.test(message) && !view?.markdownError) void load().then(() => render()).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------

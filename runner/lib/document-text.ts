@@ -29,7 +29,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 export type DocumentKind = "pdf" | "docx";
 
-export type DocumentTextRejectionReason = "too_large" | "encrypted" | "malformed" | "empty" | "timeout";
+export type DocumentTextRejectionReason = "too_large" | "encrypted" | "malformed" | "empty" | "timeout" | "zip_bomb";
 
 export type DocumentTextResult =
   | { readonly ok: true; readonly text: string }
@@ -123,34 +123,90 @@ function decodeXmlEntities(text: string): string {
     .replace(/&amp;/g, "&");
 }
 
-const RUN_TEXT = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g;
+/**
+ * Gate fix round 1, B4 (a CPU freeze): this used to be `<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>`. Its attribute
+ * group, `[^>]*`, can match across an unbounded run of characters looking for the *nearest* `>` -- on a
+ * well-formed document that's the tag's own `>`, a handful of characters away, but on a run of unclosed
+ * `<w:t ` fragments with no `>` anywhere nearby, that group scans ahead to the *only* `>` left in the
+ * whole remaining string, fails the rest of the pattern (no `</w:t>` follows), and (being global)
+ * retries at the very next character -- an O(n) scan repeated at each of O(n) start positions, O(n²)
+ * overall (the reviewer's probe: 200 KB of `<w:t ` × N blocked the bridge process for 11.6 s). Excluding
+ * `<` from that group too (`[^<>]*`) is enough: real XML attribute values never contain a literal `<`
+ * either, so this changes nothing for a genuine document, but it means the group can never scan past
+ * the very next `<w:t `, so a failed match at one position is O(1), not O(n).
+ */
+const RUN_TEXT = /<w:t(?:\s[^<>]*)?>([^<]*)<\/w:t>/g;
 
-/** The words of a DOCX body, one paragraph per line: `word/document.xml`'s `w:t` runs, split on `</w:p>`. */
-function bodyTextFromDocumentXml(xml: string): string {
-  return xml
-    .split(/<\/w:p>/)
-    .map((paragraph) =>
-      [...paragraph.matchAll(RUN_TEXT)]
-        .map((match) => decodeXmlEntities(match[1]!))
-        .join(""),
-    )
-    .filter((line) => line.length > 0)
-    .join("\n");
+/**
+ * The words of a DOCX body, one paragraph per line: `word/document.xml`'s `w:t` runs, split on
+ * `</w:p>`. Returns null once `deadline` (epoch ms) passes -- a backstop against a paragraph shape
+ * this file didn't anticipate (B4): even a linear-time regex over a large-enough or repeatedly
+ * pathological document could still run past what a person would wait for, and JS has no way to
+ * preempt a synchronous regex mid-match, so the check runs only *between* paragraphs. Real documents
+ * (including every fixture here) finish in single-digit milliseconds, well inside any budget.
+ */
+function bodyTextFromDocumentXml(xml: string, deadline: number): string | null {
+  const lines: string[] = [];
+  for (const paragraph of xml.split(/<\/w:p>/)) {
+    if (Date.now() > deadline) return null;
+    const line = [...paragraph.matchAll(RUN_TEXT)].map((match) => decodeXmlEntities(match[1]!)).join("");
+    if (line.length > 0) lines.push(line);
+  }
+  return lines.join("\n");
 }
 
-function docxText(data: Uint8Array): DocumentTextResult {
+/**
+ * Gate fix round 1, B3 (a DOCX zip bomb): a DOCX is a zip like any other, so it needs the same guard
+ * `archive-text.ts` already applies to CSV/TXT/MD/JSON entries -- entry count, per-entry uncompressed
+ * size and compression ratio, all read from the zip's own declared header metadata *before* fflate
+ * inflates anything. Without it, a few-hundred-KB DOCX could inflate to hundreds of megabytes (the
+ * reviewer's probe: a 205 KB DOCX saved 200 MB of "extracted text"), or past Node's own maximum string
+ * length (a 614 KB DOCX inflating to 600 MB threw uncaught, an internal 500 -- breaking this module's
+ * own "never throws" contract). The numbers match archive-text.ts's own defaults exactly, so the same
+ * document doesn't get a more permissive guard just because it arrived as a DOCX instead of a ZIP.
+ */
+const DEFAULT_MAX_DOCX_ENTRIES = 500;
+const DEFAULT_MAX_DOCX_RATIO = 100;
+const DEFAULT_MAX_DOCX_XML_BYTES = 2 * 1024 * 1024;
+
+class DocxCapError extends Error {
+  readonly reason: "zip_bomb";
+  constructor(message: string) {
+    super(message);
+    this.reason = "zip_bomb";
+  }
+}
+
+function docxText(data: Uint8Array, timeoutMs: number): DocumentTextResult {
   if (looksLikeEncryptedOoxml(data)) {
     return { ok: false, reason: "encrypted", message: "That DOCX is password-protected. Remove the password and upload it again." };
   }
+  let seen = 0;
   let entries: Record<string, Uint8Array>;
   try {
-    entries = unzipSync(data, { filter: (file) => file.name === "word/document.xml" });
-  } catch {
+    entries = unzipSync(data, {
+      filter(file) {
+        seen += 1;
+        if (seen > DEFAULT_MAX_DOCX_ENTRIES) throw new DocxCapError(`That DOCX has more than ${DEFAULT_MAX_DOCX_ENTRIES} entries.`);
+        if (file.name !== "word/document.xml") return false;
+        if (file.size > 0 && file.originalSize / file.size > DEFAULT_MAX_DOCX_RATIO) {
+          throw new DocxCapError("That DOCX decompresses far beyond its stored size (a zip-bomb guard).");
+        }
+        if (file.originalSize > DEFAULT_MAX_DOCX_XML_BYTES) {
+          throw new DocxCapError(`That DOCX's document text is larger than ${Math.round(DEFAULT_MAX_DOCX_XML_BYTES / (1024 * 1024))} MB uncompressed.`);
+        }
+        return true;
+      },
+    });
+  } catch (error) {
+    if (error instanceof DocxCapError) return { ok: false, reason: error.reason, message: error.message };
     return { ok: false, reason: "malformed", message: "That DOCX can't be read. It may be damaged, or not really a DOCX." };
   }
   const part = entries["word/document.xml"];
   if (!part) return { ok: false, reason: "malformed", message: "That DOCX can't be read. It may be damaged, or not really a DOCX." };
-  const trimmed = bodyTextFromDocumentXml(strFromU8(part)).trim();
+  const body = bodyTextFromDocumentXml(strFromU8(part), Date.now() + timeoutMs);
+  if (body === null) return { ok: false, reason: "timeout", message: `That DOCX took longer than ${Math.round(timeoutMs / 1000)} s to read. Try a smaller file.` };
+  const trimmed = body.trim();
   if (!trimmed) return { ok: false, reason: "empty", message: "That DOCX has no extractable text." };
   return { ok: true, text: trimmed };
 }
@@ -161,6 +217,7 @@ export async function extractDocumentText(kind: DocumentKind, data: Uint8Array, 
   if (data.byteLength > maxBytes) {
     return { ok: false, reason: "too_large", message: `That file is larger than ${Math.round(maxBytes / (1024 * 1024))} MB.` };
   }
-  if (kind === "pdf") return pdfText(data, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  return docxText(data);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (kind === "pdf") return pdfText(data, timeoutMs);
+  return docxText(data, timeoutMs);
 }

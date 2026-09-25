@@ -182,6 +182,25 @@ describe("POST /sources/:category/file", () => {
     expect(await readdir(path.join(bridge.workspace.root, "sources"))).toEqual([]);
   }, 20_000);
 
+  // Gate fix round 1, B3: nothing checked the *extracted* text's own size, so a small file on disk
+  // could still save arbitrarily more once decompressed than a person could ever paste by hand (the
+  // reviewer's probe: a 3.19 MB ZIP, itself inside every archive cap, saved 5.7 MB of "extracted
+  // text"). This ZIP entry is comfortably inside archive-text.ts's own 2 MB per-entry / 8 MB total
+  // caps (so extraction itself succeeds), but well over the separate, route-level 512 KiB per-source
+  // cap that a pasted or .txt/.md-uploaded source already gets.
+  it("413s an archive whose extracted text is over the 512 KiB per-source cap, even though it's inside every archive-text.ts cap", async () => {
+    const bridge = await realBridge();
+    // Stored, not deflated (level: 0): a repeated byte would otherwise compress to a ratio past
+    // archive-text.ts's own separate zip-bomb guard, which would refuse this before ever reaching
+    // the route-level check this test means to exercise.
+    const archive = zipSync({ "notes.txt": strToU8("A".repeat(600 * 1024)) }, { level: 0 });
+    const response = await post(bridge, "/sources/resume/file", { fileName: "notes.zip", contentBase64: Buffer.from(archive).toString("base64") });
+    expect(response.status).toBe(413);
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    expect(body.error).toEqual({ code: "extracted_text_too_large", message: "That's over 512 KB. Paste less text, or upload a smaller file." });
+    expect(await readdir(path.join(bridge.workspace.root, "sources"))).toEqual([]);
+  });
+
   it("422s a malformed PDF with a plain message, saving nothing", async () => {
     const bridge = await realBridge();
     const response = await post(bridge, "/sources/resume/file", { fileName: "broken.pdf", contentBase64: await fixtureBase64("malformed.pdf") });
@@ -252,6 +271,50 @@ describe("POST /sources/:category/url", () => {
     const body = (await second.json()) as { message: string; uploads: string[] };
     expect(body.message).toBe("Replaced the earlier import of https://ada-quill.example/about for Portfolio / personal site.");
     expect(body.uploads).toHaveLength(1);
+  });
+
+  // Gate fix round 1, B2 (data loss): urlUploadName() used to collapse to only the URL's last path
+  // segment (ProfileStore.saveUpload's own uploadFileName keeps only that), so a URL import could
+  // silently overwrite the person's own upload of the same name, or another URL's import -- and
+  // "Replaced the earlier import" was said even when nothing with that URL was ever imported before.
+  it("B2: an own resume.txt upload survives importing a URL whose last path segment is also 'resume'", async () => {
+    const bridge = await realBridge(fakeFetch({ ok: true, status: 200, contentType: "text/plain", text: "The fetched page's own text.", finalUrl: "https://ada-quill.example/cv/resume" }));
+    const own = await post(bridge, "/sources/resume/uploads", { fileName: "resume.txt", text: "Ada Quill's OWN resume text, typed by the person." });
+    expect(own.status).toBe(200);
+    const imported = await post(bridge, "/sources/resume/url", { url: "https://ada-quill.example/cv/resume" });
+    const body = (await imported.json()) as { message: string; fileName: string; uploads: string[] };
+    // Never "Replaced": there was no earlier import of this URL, only an unrelated upload.
+    expect(body.message).toBe("Imported https://ada-quill.example/cv/resume for Resume.");
+    expect(body.fileName).not.toBe("resume.txt");
+    expect(body.uploads).toContain("resume.txt");
+    expect(body.uploads).toContain(body.fileName);
+    const ownText = await readFile(path.join(bridge.workspace.root, "sources", "resume", "resume.txt"), "utf8");
+    expect(ownText).toBe("Ada Quill's OWN resume text, typed by the person.");
+    const importedText = await readFile(path.join(bridge.workspace.root, "sources", "resume", body.fileName), "utf8");
+    expect(importedText).toContain("The fetched page's own text.");
+  });
+
+  it("B2: two site roots on different hosts each keep their own import, neither called 'Replaced'", async () => {
+    const byUrl: Record<string, string> = {
+      "https://ada-quill.example/": "Ada Quill's own site, at its root.",
+      "https://other-site.example/": "A different site entirely, also at its root.",
+    };
+    const bridge = await realBridge(async (url) => ({ ok: true, status: 200, contentType: "text/plain", text: byUrl[url]!, finalUrl: url }) as SafeFetchResult);
+    const first = await post(bridge, "/sources/portfolioSite/url", { url: "https://ada-quill.example/" });
+    const firstBody = (await first.json()) as { message: string; fileName: string };
+    expect(firstBody.message).toBe("Imported https://ada-quill.example/ for Portfolio / personal site.");
+
+    const second = await post(bridge, "/sources/portfolioSite/url", { url: "https://other-site.example/" });
+    const secondBody = (await second.json()) as { message: string; fileName: string; uploads: string[] };
+    // Never "Replaced": a different host's root was never imported before.
+    expect(secondBody.message).toBe("Imported https://other-site.example/ for Portfolio / personal site.");
+    expect(secondBody.fileName).not.toBe(firstBody.fileName);
+    expect(secondBody.uploads).toHaveLength(2);
+
+    const firstText = await readFile(path.join(bridge.workspace.root, "sources", "portfolioSite", firstBody.fileName), "utf8");
+    expect(firstText).toContain("Ada Quill's own site, at its root.");
+    const secondText = await readFile(path.join(bridge.workspace.root, "sources", "portfolioSite", secondBody.fileName), "utf8");
+    expect(secondText).toContain("A different site entirely, also at its root.");
   });
 
   it("maps a blocked address (safeFetch's SSRF rule) to a 403 with safeFetch's own message, saving nothing", async () => {

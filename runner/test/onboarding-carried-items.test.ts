@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROUTES_DIR } from "../lib/paths.ts";
 import { UI_COOKIE } from "../server/local-ui.ts";
 import { loadRouteModules } from "../server/route-modules.ts";
+import { MARKDOWN_UNREADABLE_REFUSAL } from "../server/routes/onboarding.ts";
+import { ProfileStore } from "../store/profile.ts";
 import { PROFILE_BUSY_MESSAGE, PROFILE_LOCK_SEGMENTS } from "../store/profile-writes.ts";
 import { BRIDGE, UI_TOKEN, makeBridge, type TestBridge } from "./helpers.ts";
 
@@ -132,6 +134,38 @@ describe("P03.1 carried item 1: a busy refusal is announced without a trailing r
     await until(() => line() === PROFILE_BUSY_MESSAGE, "the busy refusal", 15_000);
     // Exactly the one POST that got refused -- no GET /api/onboarding after it, which is what a reload would add.
     expect(requests).toEqual(["POST /api/onboarding/sources/resume"]);
+  });
+});
+
+/** Removes a boundary's marker from career-profile.md, as a person's editor might (ui-pages.test.ts's own damageMarkdown, duplicated: that file's Owns is restricted to its happy-dom import line only). */
+async function damageMarkdown(bridge: TestBridge): Promise<void> {
+  const store = new ProfileStore(bridge.ctx.workspace, bridge.ctx.clock);
+  const boundary = (await store.load()).profile.boundaries[0]!; // load() writes a new profile and its file first
+  const md = path.join(bridge.workspace.root, "career-profile.md");
+  const text = await readFile(md, "utf8");
+  expect(text).toContain(` \`[${boundary.id}]\``);
+  await writeFile(md, text.replace(` \`[${boundary.id}]\``, ""));
+}
+
+describe("Gate fix round 1, B1: a refusal that names the note at the top makes that note appear", () => {
+  it("onboarding: career-profile.md is damaged after the page is already open; the next refused write reloads and reveals #markdown-problem", async () => {
+    const bridge = await realBridge();
+    const requests: string[] = [];
+    const document = await mountPage("onboarding", bridgeFetch(bridge, requests));
+    await until(() => document.querySelectorAll("#readiness-lines li").length === 4, "onboarding to load");
+    // The page's own initial load ran first, clean, so #markdown-problem starts hidden: the corruption
+    // below happens only *after* that load, the reviewer's exact reproduction (a hand edit while the
+    // page is already open) -- not the already-covered case where the page loads already damaged.
+    expect(document.getElementById("markdown-problem")!.hidden).toBe(true);
+
+    await damageMarkdown(bridge);
+    const line = () => document.getElementById("last-action")!.querySelector(".text")!.textContent ?? "";
+    document.getElementById("source-status-workSamples-unavailable")!.click();
+    await until(() => line() === MARKDOWN_UNREADABLE_REFUSAL, "the refusal");
+    // The refusal's own line says "See the note at the top.": without B1's fix, the note stays hidden
+    // forever (the refusal's response never carries markdownError; only a fresh GET does).
+    await until(() => document.getElementById("markdown-problem")!.hidden === false, "the note to appear");
+    expect(document.getElementById("markdown-problem-text")!.textContent).toMatch(/^Line \d+: /);
   });
 });
 
