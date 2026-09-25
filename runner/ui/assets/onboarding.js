@@ -62,6 +62,10 @@ const loadingText = new Set();
 const openPanels = new Set();
 const fieldErrors = new Map(); // control id -> message
 const busy = new Set(); // ids of buttons whose request is in flight
+// P03.1: GET /api/onboarding/github/status's last answer ({ available, source } | null); absent until
+// fetched, the same lazy, once-per-panel-open pattern as savedText/loadSavedText below.
+let githubStatus = null;
+let githubStatusLoading = false;
 
 // ---------------------------------------------------------------------------
 // Words
@@ -700,6 +704,24 @@ function statusBadge(status) {
 function openPanel(category) {
   openPanels.add(category);
   loadSavedText(category);
+  if (category === "repositories") loadGithubStatus();
+}
+
+/** P03.1: fetches whether a GitHub token is available (and from where), once, the first time the repositories panel opens. */
+function loadGithubStatus() {
+  if (githubStatus !== null || githubStatusLoading) return;
+  githubStatusLoading = true;
+  getJson("/api/onboarding/github/status")
+    .then((data) => {
+      githubStatus = data;
+    })
+    .catch(() => {
+      githubStatus = { available: false, source: null };
+    })
+    .finally(() => {
+      githubStatusLoading = false;
+      render();
+    });
 }
 
 /** Fetches the text box's saved text, raw, the first time its panel opens (D13). */
@@ -802,7 +824,8 @@ function providedDetails(category, label) {
   }
   const toggle = el("button", {
     className: "button secondary",
-    text: open ? "Hide the text box" : "Add or edit text",
+    // P03.1: this panel now offers every mode (paste, file, URL, GitHub), not just the text box.
+    text: open ? "Hide" : "Add a source",
     attrs: { type: "button", id: toggleId, "aria-expanded": String(open), "aria-controls": panelId },
   });
   toggle.onclick = () => {
@@ -817,6 +840,9 @@ function providedDetails(category, label) {
 function sourcePanel(category, label, panelId, open) {
   const textId = `source-text-${category}`;
   const fileId = `source-file-${category}`;
+  const binaryFileId = `source-binary-file-${category}`;
+  const urlId = `source-url-${category}`;
+  const urlButtonId = `source-url-import-${category}`;
   const hintId = `source-text-hint-${category}`;
   const extractId = `source-extract-${category}`;
   const loading = !savedText.has(category);
@@ -836,6 +862,18 @@ function sourcePanel(category, label, panelId, open) {
     const input = event.currentTarget;
     run(fileId, () => upload(category, input), { id: fileId, outcome: "Not uploaded." });
   };
+  // P03.1: a second, separate file input for the binary modes -- kept apart from the .txt/.md one above so
+  // each keeps its own accept list and its own plain refusal for the wrong kind of file.
+  const binaryFile = el("input", { attrs: { type: "file", id: binaryFileId, accept: ".pdf,.docx,.zip" } });
+  if (fieldErrors.has(binaryFileId)) {
+    binaryFile.setAttribute("aria-invalid", "true");
+    binaryFile.setAttribute("aria-describedby", fieldErrorId(binaryFileId));
+  }
+  binaryFile.onchange = (event) => {
+    const input = event.currentTarget;
+    run(binaryFileId, () => uploadBinary(category, input), { id: binaryFileId, outcome: "Not uploaded." });
+  };
+  const urlInput = textControl("input", urlId, "", { placeholder: "https://…" });
   add(
     panel,
     el("label", { text: `Text for ${label}`, attrs: { for: textId } }),
@@ -843,6 +881,22 @@ function sourcePanel(category, label, panelId, open) {
     box,
     fieldError(textId),
     el("div", { className: "upload-row" }, el("label", { text: "Or upload a .txt or .md file", attrs: { for: fileId } }), file, fieldError(fileId)),
+    el(
+      "div",
+      { className: "upload-row" },
+      el("label", { text: "Or upload a .pdf, .docx or .zip file", attrs: { for: binaryFileId } }),
+      binaryFile,
+      fieldError(binaryFileId),
+    ),
+    el(
+      "div",
+      { className: "upload-row" },
+      el("label", { text: "Or import a public page by its address", attrs: { for: urlId } }),
+      urlInput,
+      actionButton(urlButtonId, "Import", { secondary: true }, () => importUrl(category, label, urlId, urlButtonId)),
+      fieldError(urlId),
+    ),
+    category === "repositories" ? githubSection(label) : null,
     el("div", { className: "form-row" }, actionButton(extractId, "Save & extract claims", {}, () => saveAndExtract(category, label, extractId))),
   );
   return panel;
@@ -867,6 +921,106 @@ async function upload(category, input) {
   await load();
   lastAction(outcome.message, "done");
   render(fileId);
+}
+
+/**
+ * P03.1: a PDF, DOCX or ZIP is read as bytes in the browser, base64-encoded, and sent to
+ * `/sources/:category/file`, which extracts its text locally (`lib/document-text.ts` / `lib/archive-text.ts`
+ * -- `unpdf` and `fflate` are runner dependencies, never bundled here) and confines the raw file the same
+ * way P03's .txt/.md uploads are confined.
+ */
+async function uploadBinary(category, input) {
+  const fileId = input.id;
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = "";
+  if (!/\.(pdf|docx|zip)$/i.test(file.name)) {
+    return refuseAt(
+      fileId,
+      `“${file.name}” is not a .pdf, .docx or .zip file. Upload a .txt or .md file above instead, or paste the text.`,
+      "Not uploaded.",
+      "Not uploaded: only .pdf, .docx or .zip files can be uploaded here.",
+    );
+  }
+  const contentBase64 = await fileToBase64(file);
+  const outcome = await postJson(`/api/onboarding/sources/${category}/file`, { fileName: file.name, contentBase64 });
+  await load();
+  lastAction(outcome.message, "done");
+  render(fileId);
+}
+
+/** Base64-encodes a File's bytes in chunks, so a file up to the 10 MB cap never blows String.fromCharCode's argument-count limit. */
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  return window.btoa(binary);
+}
+
+/** P03.1: a public page's readable text, imported and saved the same way an upload is. */
+async function importUrl(category, label, urlId, buttonId) {
+  const value = (drafts.get(urlId) ?? "").trim();
+  if (!value) return refuseAt(urlId, `Type the address to import for ${label}.`, "Not imported.");
+  const outcome = await postJson(`/api/onboarding/sources/${category}/url`, { url: value });
+  drafts.delete(urlId);
+  await load();
+  lastAction(outcome.message, "done");
+  render(buttonId);
+}
+
+/** P03.1: the repositories category's GitHub import -- a token from `gh auth token` or the keychain, and the import button, or a one-time paste-a-token form when neither exists yet. */
+function githubSection(label) {
+  const tokenId = "github-token-input";
+  const saveTokenId = "github-token-save";
+  const importId = "github-import";
+  const wrap = el("div", { className: "source-details github-section" });
+  if (githubStatus === null) {
+    wrap.append(el("p", { className: "muted small", text: "Checking for a GitHub token…", attrs: { "aria-busy": "true" } }));
+    return wrap;
+  }
+  if (githubStatus.available) {
+    add(
+      wrap,
+      el(
+        "p",
+        { className: "muted small" },
+        el("span", { text: githubStatus.source === "gh-cli" ? "Signed in with the gh CLI." : "A GitHub token is saved in your OS keychain." }),
+      ),
+      el("div", { className: "form-row" }, actionButton(importId, "Import from GitHub", { secondary: true }, () => importGithub(importId))),
+    );
+  } else {
+    add(
+      wrap,
+      el("p", {
+        className: "muted small",
+        text: "No GitHub token yet. Sign in with the gh CLI (gh auth login), or paste a fine-grained personal access token below (read-only; kept in your OS keychain, never in this workspace).",
+      }),
+      el("label", { text: `GitHub token for ${label}`, attrs: { for: tokenId } }),
+      textControl("input", tokenId, ""),
+      fieldError(tokenId),
+      el("div", { className: "form-row" }, actionButton(saveTokenId, "Save token", { secondary: true }, () => saveGithubToken(tokenId, saveTokenId))),
+    );
+  }
+  return wrap;
+}
+
+async function importGithub(importId) {
+  const outcome = await postJson("/api/onboarding/sources/repositories/github", {});
+  await load();
+  lastAction(outcome.message, "done");
+  render(importId);
+}
+
+async function saveGithubToken(tokenId, saveTokenId) {
+  const token = (drafts.get(tokenId) ?? "").trim();
+  if (!token) return refuseAt(tokenId, "Paste the token first.", "Not saved.");
+  await postJson("/api/onboarding/github/token", { token });
+  drafts.delete(tokenId);
+  githubStatus = null; // re-check availability (and its source) now that a token may exist
+  loadGithubStatus();
+  lastAction("GitHub token saved. It's kept in your OS keychain, never in this workspace.", "done");
+  render(saveTokenId);
 }
 
 /** J3: what Save & extract says when career-profile.md can't be read; the text box's own file doesn't depend on it. */
