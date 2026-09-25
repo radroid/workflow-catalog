@@ -82,7 +82,12 @@ interface Token {
   readonly text: string;
   /** Whether it is one part of a hyphenated compound: "double" in "double-entry", "zero" in "zero-downtime". */
   readonly compound: boolean;
+  /** Whether punctuation right after it ends a phrase: a comma, a full stop, a semicolon, a colon, a bracket (revision 4, Z4). */
+  readonly closes: boolean;
 }
+
+/** What may close a phrase right after a token: a semicolon, a colon, a question or exclamation mark, a closing bracket or quote. */
+const PHRASE_CLOSERS = /^[;:!?\p{Pe}\p{Pf}"]/u;
 
 function cleanPart(part: string): string {
   return part.replace(/^[$€£+'.,]+/, "").replace(/[.,']+$/, "");
@@ -95,24 +100,64 @@ function cleanPart(part: string): string {
  * multiplication sign reads as `x` ("2×", "×2").
  */
 function tokens(text: string): Token[] {
-  const raw =
-    normalizeForChecks(text)
-      .replace(/[’‘]/g, "'")
-      .replace(/[‐‑‒–—―−]/g, "-")
-      .replace(/×/g, "x")
-      .match(/[\p{L}\p{N}$€£%.,+'-]+/gu) ?? [];
+  const normalized = normalizeForChecks(text)
+    .replace(/[’‘]/g, "'")
+    .replace(/[‐‑‒–—―−]/g, "-")
+    .replace(/×/g, "x");
   const out: Token[] = [];
-  for (const token of raw) {
+  for (const match of normalized.matchAll(/[\p{L}\p{N}$€£%.,+'-]+/gu)) {
+    const token = match[0];
+    const closedAfter = PHRASE_CLOSERS.test(normalized[match.index + token.length] ?? "");
     const hyphenParts = token.split("-");
     const compound = hyphenParts.filter((part) => cleanPart(part) !== "").length > 1;
-    for (const hyphenPart of hyphenParts) {
-      for (const part of hyphenPart.split(/,(?!\d{3}(?!\d))/)) {
+    hyphenParts.forEach((hyphenPart, h) => {
+      const parts = hyphenPart.split(/,(?!\d{3}(?!\d))/);
+      parts.forEach((part, c) => {
         const cleaned = cleanPart(part);
-        if (cleaned) out.push({ text: cleaned, compound });
-      }
-    }
+        const last = h === hyphenParts.length - 1 && c === parts.length - 1;
+        // A comma after it (the split one), a full stop or comma it ended in, or a closer right after the token.
+        const closes = c < parts.length - 1 || /[.,]'*$/.test(part) || (last && closedAfter);
+        if (cleaned) out.push({ text: cleaned, compound, closes });
+      });
+    });
   }
   return out;
+}
+
+/** Words right before "scores" that make it a noun, not a count (revision 4, Z4): a determiner or a possessive, "the scores of". */
+const SCORE_DETERMINERS = new Set(["the", "a", "an", "their", "its", "our", "his", "her", "my", "your", "whose", "these", "those", "this"]);
+
+/** Words right before "scores" that name what is scored (Z4): "credit scores of", "test scores of", "risk scores of", "high scores of". */
+const SCORE_MODIFIERS = new Set([
+  "credit", "test", "risk", "fraud", "quality", "health", "exam", "survey", "satisfaction", "performance", "review", "match", "confidence",
+  "relevance", "sentiment", "trust", "reputation", "security", "accessibility", "lighthouse", "customer", "user", "merchant", "student",
+  "engagement", "readiness", "benchmark", "audit", "rating", "composite", "high", "higher", "highest", "low", "lower", "lowest", "top",
+  "average", "median", "mean", "final", "overall", "total", "perfect", "raw",
+]);
+
+/** Words after which a count can start though a determiner comes before them: "the team and scores of engineers" (Z4). */
+const COUNT_LEADS = new Set([
+  "and", "or", "but", "nor", "with", "by", "for", "to", "from", "among", "across", "of", "in", "on", "at", "over", "into", "including",
+  "like", "than", "about", "around", "nearly", "almost", "via", "between", "plus", "as", "while", "where", "when", "which", "who", "that",
+]);
+
+/**
+ * Whether "scores" at `index` (before "of") is a noun rather than the count "scores of" (revision 4, Z4). It counts
+ * where a count can start: at the start of a sentence or a phrase ("Scores of engineers …", "…, scores of teams"), and
+ * after a verb, a preposition or a conjunction ("mentored scores of", "by scores of", "and scores of"). It is a noun
+ * after a word that makes it one: a determiner or a possessive ("the scores of", "Harbor's scores of"), what is scored
+ * ("credit scores of", "test scores of", "NPS scores of"), or a word a determiner comes right before ("the merchant
+ * scores of", "its onboarding scores of"), unless that word is a preposition or a conjunction ("this and scores of").
+ */
+function scoresIsNoun(found: readonly Token[], index: number): boolean {
+  const before = found[index - 1];
+  if (before === undefined || before.closes) return false;
+  const word = before.text.toLowerCase();
+  if (SCORE_DETERMINERS.has(word) || SCORE_MODIFIERS.has(word)) return true;
+  if (/'s$/i.test(before.text) || /^\p{Lu}{2,}$/u.test(before.text)) return true; // "Harbor's scores", "NPS scores"
+  const earlier = found[index - 2];
+  if (earlier === undefined || earlier.closes || !SCORE_DETERMINERS.has(earlier.text.toLowerCase())) return false;
+  return !COUNT_LEADS.has(word);
 }
 
 /** A scale, percent or multiplier word right after a number: "3 million", "40 percent", "40 per cent", "3 times". */
@@ -206,7 +251,7 @@ export function numbersIn(text: string): NumberFact[] {
       facts.push({ key: "a couple", raw: `a couple${next === "of" ? " of" : ""}` });
       continue;
     }
-    if (lower === "scores" && next === "of") {
+    if (lower === "scores" && next === "of" && !scoresIsNoun(found, index)) {
       facts.push({ key: "scores of", raw: `${token} of` });
       index += 1;
       continue;
@@ -293,6 +338,12 @@ export interface DateFacts {
   /** Set when `openEnd` is a start with no end anywhere: "from 2019", "starting in 2019" (revision 2, X4). */
   readonly openStart?: true;
   /**
+   * Set when only revision 3's words and phrases leave it open ("now", "today", "remains", "to date", "these days",
+   * "continues to", …): a sentence that says one says something is still going on, but a claim is never open by
+   * them (revision 4, Z4). "Built the Harbor ledger service, now retired." ends.
+   */
+  readonly presentOnly?: true;
+  /**
    * Dates counted from today, as written ("recently", "last year", "this month", "two years ago"), when there are any
    * (revision 3, Y1). A claim can't state such a date for a document read later, so a sentence may use one only
    * where a claim it cites uses the same words.
@@ -361,19 +412,21 @@ function wordBefore(lower: readonly string[], at: number): number {
  * (never "up to date"), "as of now", "at present", "these days", "continue(s) to" and "and beyond"; and X4's "to
  * this day" and "and counting".
  */
-function openPhraseAt(lower: readonly string[], index: number): string | undefined {
+function openPhraseAt(lower: readonly string[], index: number): { readonly phrase: string; readonly present: boolean } | undefined {
   const word = lower[index]!;
   const one = wordBefore(lower, index);
   const previous = lower[one] ?? "";
   const earlier = lower[wordBefore(lower, one)] ?? "";
-  if (word === "date" && previous === "to" && earlier !== "up") return "to date";
-  if (word === "now" && previous === "of" && earlier === "as") return "as of now";
-  if (word === "present" && previous === "at") return "at present";
-  if (word === "days" && previous === "these") return "these days";
-  if (word === "to" && (previous === "continue" || previous === "continues")) return `${previous} to`;
-  if (word === "beyond" && previous === "and") return "and beyond";
-  if (word === "day" && previous === "this" && THIS_DAY_JOINERS.has(earlier)) return `${earlier} this day`;
-  if (word === "counting" && previous === "and") return "and counting";
+  const present = (phrase: string) => ({ phrase, present: true });
+  if (word === "date" && previous === "to" && earlier !== "up") return present("to date");
+  if (word === "now" && previous === "of" && earlier === "as") return present("as of now");
+  if (word === "present" && previous === "at") return present("at present");
+  if (word === "days" && previous === "these") return present("these days");
+  if (word === "to" && (previous === "continue" || previous === "continues")) return present(`${previous} to`);
+  if (word === "beyond" && previous === "and") return present("and beyond");
+  // X4's, which leave a claim open too.
+  if (word === "day" && previous === "this" && THIS_DAY_JOINERS.has(earlier)) return { phrase: `${earlier} this day`, present: false };
+  if (word === "counting" && previous === "and") return { phrase: "and counting", present: false };
   return undefined;
 }
 
@@ -420,6 +473,8 @@ export function datesIn(text: string): DateFacts {
   const endYears: string[] = [];
   const relative: string[] = [];
   let openEnd: string | undefined;
+  /** Whether a marker read before revision 3 leaves it open, wherever it is: only such a marker opens a claim (Z4). */
+  let marked = false;
   /** The first start marker with its year, as written: "from 2019", "starting in March 2019". */
   let startMark: string | undefined;
   /** Whether a year sits just before `at` (past a month or a day): the start of a range. */
@@ -439,15 +494,25 @@ export function datesIn(text: string): DateFacts {
       const previous = words[index - 1] ?? "";
       if (isYear(next) || (isDay(next) && isYear(afterNext)) || isDay(previous)) months.push(month);
     }
-    if (openEnd === undefined && OPEN_WORDS.has(lower[index]!)) openEnd = lower[index];
-    if (openEnd === undefined && OPEN_RANGE_ENDS.has(lower[index]!)) {
+    if (OPEN_WORDS.has(lower[index]!)) {
+      marked = true;
+      openEnd ??= lower[index];
+    }
+    if (OPEN_RANGE_ENDS.has(lower[index]!)) {
       // "2019 to date", "2019–now", "until today"; never "up to date".
       const joiner = lower[index - 1] ?? "";
       const anchored = joiner === "-" || joiner === "to" ? yearBefore(index - 1) : END_WORDS.has(joiner) && joiner !== "left";
-      if (anchored) openEnd = joiner === "-" ? `–${lower[index]}` : `${joiner} ${lower[index]}`;
+      if (anchored) {
+        marked = true;
+        openEnd ??= joiner === "-" ? `–${lower[index]}` : `${joiner} ${lower[index]}`;
+      }
     }
     // "to this day" and "and counting" (X4); "to date", "as of now", "these days", "continues to", "and beyond" (Y1).
-    if (openEnd === undefined) openEnd = openPhraseAt(lower, index);
+    const phrase = openPhraseAt(lower, index);
+    if (phrase !== undefined) {
+      if (!phrase.present) marked = true;
+      openEnd ??= phrase.phrase;
+    }
     if (openEnd === undefined && PRESENT_WORDS.has(lower[index]!)) openEnd = lower[index];
     const counted = relativeDateAt(lower, index);
     if (counted !== undefined && !relative.includes(counted)) relative.push(counted);
@@ -471,10 +536,15 @@ export function datesIn(text: string): DateFacts {
     }
     endYears.push(word);
   }
-  if (openEnd === undefined && DANGLING_RANGE.test(normalized)) openEnd = "–";
+  if (DANGLING_RANGE.test(normalized)) {
+    marked = true;
+    openEnd ??= "–";
+  }
   // A start marker with no end anywhere leaves what started open: "from 2019", "starting in 2019" (X4).
+  if (startMark !== undefined && endYears.length === 0) marked = true;
   const openStart = openEnd === undefined && startMark !== undefined && endYears.length === 0;
   if (openStart) openEnd = startMark;
+  const presentOnly = openEnd !== undefined && !marked;
 
   // "Graduated from Fernwood University in 2019." states no start: "from" marks one only right before its year.
   const startOnly = years.length > 0 && endYears.length === 0 && (startMark !== undefined || lower.some((word) => START_WORDS.has(word)));
@@ -484,14 +554,18 @@ export function datesIn(text: string): DateFacts {
     endYears,
     ...(openEnd !== undefined ? { openEnd } : {}),
     ...(openStart ? { openStart: true as const } : {}),
+    ...(presentOnly ? { presentOnly: true as const } : {}),
     ...(relative.length > 0 ? { relative } : {}),
     startOnly,
   };
 }
 
-/** Whether a claim leaves its dates open: it says so ("present", "since", "2019–"), or states a start and no end. */
+/**
+ * Whether a claim leaves its dates open: it says so ("present", "since", "2019–"), or states a start and no end. Revision
+ * 3's words alone never make a claim open (revision 4, Z4): "Built the Harbor ledger service, now retired." ends.
+ */
 export function isOpenEnded(dates: DateFacts): boolean {
-  return dates.openEnd !== undefined || dates.startOnly;
+  return (dates.openEnd !== undefined && dates.presentOnly !== true) || dates.startOnly;
 }
 
 // --- Titles ----------------------------------------------------------------
@@ -542,16 +616,37 @@ const NOT_TITLE_OPENERS = new Set([
   "a", "an", "the", "as", "at", "in", "on", "of", "for", "with", "by", "from", "to", "into", "over", "under", "after", "before", "during",
   "since", "until", "till", "while", "when", "where", "whereas", "though", "although", "because", "if", "once", "then", "later", "now",
   "today", "currently", "formerly", "previously", "also", "and", "or", "but", "so", "i", "we", "my", "our", "his", "her", "their", "its",
-  "this", "that", "these", "those", "there", "here", "became", "become", "becoming", "named", "appointed", "promoted", "elected",
+  "this", "that", "these", "those", "there", "here", "became", "become", "becoming", "named", "appointed", "promoted", "elected", "was",
 ]);
 
 /**
  * Words after which a role phrase is a title: "as a platform engineer", "became head of platform", "promoted to
- * director". A title's words never reach back past one of these (X1): "and became engineering manager" states
- * "engineering manager".
+ * director", and (revision 4, Z3) "was engineering manager", "I was the engineering manager". A title's words never
+ * reach back past one of these (X1): "and became engineering manager" states "engineering manager". After "was", only
+ * a word that names a role makes one (`namesRole`): "was developer-friendly" states no title.
  */
-const TITLE_CONTEXTS = new Set(["as", "became", "become", "becoming", "named", "appointed", "promoted", "elected"]);
+const TITLE_CONTEXTS = new Set(["as", "became", "become", "becoming", "named", "appointed", "promoted", "elected", "was"]);
 const ARTICLES = new Set(["a", "an", "the"]);
+
+/**
+ * Marks for a round bracket's opening and closing while a sentence is cut into words (revision 4, Z2): two
+ * private-use characters, which no text the rules read contains (any already there are read as spaces).
+ */
+const BRACKET_OPEN = "\uE000";
+const BRACKET_CLOSE = "\uE001";
+
+/** A bracket's words, by index in the sentence's words: the first and the last. */
+interface Bracket {
+  readonly first: number;
+  readonly last: number;
+}
+
+/** A title found in a sentence: its comparable form, and the words it was read from, by index. */
+interface FoundTitle {
+  key: string;
+  readonly from: number;
+  to: number;
+}
 
 /** Role words that name what they head right after them, in a word or two, when they open a sentence: "VP engineering at …" (X1). */
 const DEPARTMENT_HEADS = new Set(["vp", "svp", "evp", "avp", "director", "head"]);
@@ -582,12 +677,86 @@ function titleKey(words: readonly string[]): string {
     .trim();
 }
 
-/** Whether the words before `at` (past one article) make what follows a title: "as a …", "became …", "promoted to …". */
-function inTitleContext(lower: readonly string[], at: number): boolean {
+/** The words before `at` (past one article) that make what follows a title, if any: "as a …", "became …", "was the …", "promoted to …". */
+function titleContextAt(lower: readonly string[], at: number): string | undefined {
   let before = at - 1;
   if (ARTICLES.has(lower[before] ?? "")) before -= 1;
   const word = lower[before] ?? "";
-  return TITLE_CONTEXTS.has(word) || (word === "to" && lower[before - 1] === "promoted");
+  if (TITLE_CONTEXTS.has(word)) return word;
+  return word === "to" && lower[before - 1] === "promoted" ? "promoted to" : undefined;
+}
+
+/** Whether the words before `at` (past one article) make what follows a title: "as a …", "became …", "promoted to …". */
+function inTitleContext(lower: readonly string[], at: number): boolean {
+  return titleContextAt(lower, at) !== undefined;
+}
+
+/**
+ * Whether a role word names a role, as a title after "was" must (revision 4, Z3): a role word whole ("manager",
+ * "co-founder"), a compound that ends in one with no joining word inside ("platform-engineer", "founder/CEO"), or one
+ * "in" something ("engineer-in-residence", "editor-in-chief"). A compound made into an adjective names none:
+ * "developer-friendly", "engineer-led", "head-to-head".
+ */
+function namesRole(word: string): boolean {
+  const parts = bareWord(word).toLowerCase().split(/[-/]/);
+  if (ROLE_NOUNS.has(parts.join(""))) return true; // "manager", "co-founder"
+  if (parts.length === 1) return false;
+  if (ROLE_NOUNS.has(parts[0]!) && parts[1] === "in") return true; // "engineer-in-residence"
+  return ROLE_NOUNS.has(parts.at(-1)!) && !parts.some((part) => PHRASE_BREAKS.has(part)); // "platform-engineer", never "head-to-head"
+}
+
+/**
+ * A sentence's words as the title rules read them, and where its round brackets are, by word. An opening bracket or
+ * a dash ends what comes before it as a comma does (Y3): "Security engineer (Fernwood Labs)", "Engineering manager —
+ * Fernwood Labs". A dash inside a word or a range ("co-founder", "2019–2021") stays. A closing bracket ends nothing.
+ */
+function titleWords(sentence: string): { readonly words: readonly string[]; readonly brackets: readonly Bracket[] } {
+  const pieces = normalizeForChecks(sentence)
+    .replace(/[\uE000\uE001]/g, " ")
+    .replace(/\s*\(\s*/g, `, ${BRACKET_OPEN}`)
+    .replace(/\)/g, `${BRACKET_CLOSE} `)
+    .replace(/\s*—\s*/g, ", ")
+    .replace(/\s+[–-]\s+/g, ", ")
+    .replace(/^[\s,]+/, "")
+    .replace(/[“”"[\]]/g, " ")
+    .split(/\s+/);
+  const words: string[] = [];
+  const brackets: Bracket[] = [];
+  let open: number | undefined;
+  const close = () => {
+    if (open !== undefined && words.length > open) brackets.push({ first: open, last: words.length - 1 });
+    open = undefined;
+  };
+  for (const piece of pieces) {
+    const word = piece.replace(/[\uE000\uE001]/g, "");
+    if (piece.includes(BRACKET_OPEN) && open === undefined) open = words.length; // a bracket inside a bracket is the outer one's
+    if (word !== "") words.push(word);
+    if (piece.includes(BRACKET_CLOSE)) close();
+  }
+  close(); // a bracket left open runs to the sentence's end
+  return { words, brackets };
+}
+
+/**
+ * The words of a bracket that belong to the title right before it (revision 4, Z2): each of its comma-separated parts
+ * that is a few title words with a seniority word among them ("Staff", "Senior", "Staff level", "Sr.", "a Staff
+ * role"), or reads alone as one title, whole ("Tech Lead", "Head of Platform", "CTO"). A company, a place or a team is
+ * none ("Fernwood Labs", "Payments", "remote"), nor is a phrase that only mentions a role ("reporting to the CTO").
+ */
+function titleLikeWords(words: readonly string[]): string[] {
+  const parts: string[][] = [[]];
+  for (const word of words) {
+    parts.at(-1)!.push(word);
+    if (bareWord(word) !== word) parts.push([]);
+  }
+  return parts.filter((part) => part.length > 0 && isTitlePart(part)).flat();
+}
+
+function isTitlePart(part: readonly string[]): boolean {
+  const lower = part.map((word) => bareWord(word).toLowerCase());
+  const seniority = lower.some((word) => word.split(/[-/]/).some((piece) => SENIORITY.has(piece)));
+  if (seniority && part.length <= 4 && lower.every((word) => ARTICLES.has(word) || !PHRASE_BREAKS.has(word))) return true;
+  return sentenceTitles(part.map(bareWord).join(" ")).includes(titleKey(part));
 }
 
 /**
@@ -613,14 +782,21 @@ function inTitleContext(lower: readonly string[], at: number): boolean {
  * - A role phrase with a seniority word before its role word ("senior
  *   platform engineer", "a Senior platform engineer"), with "of X" after it,
  *   an article allowed ("director of the platform group", "engineer of the
- *   year"), or after "as", "became", "named", "appointed" or "promoted to"
- *   ("worked as a platform engineer"). The words before the role word never
- *   reach back past such a word: "and became engineering manager" states
- *   "engineering manager".
+ *   year"), or after "as", "became", "named", "appointed", "promoted to" or
+ *   (revision 4, Z3) "was" ("worked as a platform engineer", "I was the
+ *   engineering manager"; after "was", only a word that names a role). The
+ *   words before the role word never reach back past such a word: "and
+ *   became engineering manager" states "engineering manager".
  * - A role phrase right after "and", "then" or "later", before what ends an
  *   opening title ("Platform Engineer and team lead at …", "…, later platform
  *   architect."), or right before "role", "position" or "title" ("took on the
  *   engineering manager role"; Y3).
+ * - A bracket right after a title that holds a seniority word or a role
+ *   phrase is part of that title (revision 4, Z2): "Platform Engineer
+ *   (Staff)" states "platform engineer staff", "Staff engineer (Senior)"
+ *   states "staff engineer senior". Any other bracket (a company, a place, a
+ *   team) stays a separator: "Staff Engineer (Payments)" states "staff
+ *   engineer".
  *
  * The validator compares titles whole: a sentence's title must equal one its
  * cited claims state, so "Platform Engineer" doesn't pass on a claim that
@@ -633,16 +809,7 @@ export function titlesIn(text: string): string[] {
 }
 
 function sentenceTitles(sentence: string): string[] {
-  const words = normalizeForChecks(sentence)
-    // An opening bracket or a dash ends what comes before it as a comma does (Y3): "Security engineer (Fernwood
-    // Labs)", "Engineering manager — Fernwood Labs". A dash inside a word or a range ("co-founder", "2019–2021") stays.
-    .replace(/\s*\(\s*/g, ", ")
-    .replace(/\s*—\s*/g, ", ")
-    .replace(/\s+[–-]\s+/g, ", ")
-    .replace(/^[\s,]+/, "")
-    .replace(/[“”"()[\]]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+  const { words, brackets } = titleWords(sentence);
   const lower = words.map((word) => bareWord(word).toLowerCase());
   const punctuated = words.map((word) => bareWord(word) !== word);
   // The first word is capitalized because it opens the sentence; a word that can't be part of a title isn't one (Y3).
@@ -653,7 +820,8 @@ function sentenceTitles(sentence: string): string[] {
     if (punctuated[at]) return /[,;:]$/.test(words[at]!);
     return AFTER_OPENING_TITLE.has(lower[at + 1] ?? "");
   };
-  const titles: string[] = [];
+  const found: FoundTitle[] = [];
+  const push = (from: number, to: number) => found.push({ key: titleKey(words.slice(from, to + 1)), from, to });
 
   // Capitalized phrases. One capitalized role word opening the sentence is left to the opening rule below.
   let index = 0;
@@ -693,7 +861,7 @@ function sentenceTitles(sentence: string): string[] {
       phrase.push(bareWord(words[cursor]!));
       cursor += 1;
     }
-    if (phrase.some(isRoleNoun) && !(index === 0 && phrase.length === 1)) titles.push(titleKey(phrase));
+    if (phrase.some(isRoleNoun) && !(index === 0 && phrase.length === 1)) push(index, cursor - 1); // the phrase's own words
     index = Math.max(cursor, index + 1);
   }
 
@@ -742,11 +910,13 @@ function sentenceTitles(sentence: string): string[] {
         if (punctuated[at]) break;
       }
       if (headed > 0) {
-        titles.push(titleKey(words.slice(0, headed + 1)));
+        push(0, headed);
         continue;
       }
     }
-    const context = inTitleContext(lower, left);
+    const contextWord = titleContextAt(lower, left);
+    // After "was", only a word that names a role is a title (revision 4, Z3): "was engineering manager", never "was developer-friendly".
+    const context = contextWord !== undefined && (contextWord !== "was" || namesRole(words[role]!));
     // A phrase that opens the sentence and ends in its role word, before what ends a title (Y3: whatever of those follows).
     const opening = left === 0 && end === role && titleFollows(role);
     // Right after "and", "then" or "later", before what ends a title (Y3): "and team lead at …", ", then engineering manager, at …".
@@ -754,9 +924,25 @@ function sentenceTitles(sentence: string): string[] {
     // Named as one (Y3): "the engineering manager role", "the team lead position".
     const named = !punctuated[end] && TITLE_NOUNS.has(lower[end + 1] ?? "");
     if (start === role && end === role && !context && !opening && !linked && !named) continue;
-    titles.push(titleKey(words.slice(opening || linked || named || (context && start === role) ? left : start, end + 1)));
+    push(opening || linked || named || (context && start === role) ? left : start, end);
   }
-  return titles;
+
+  // A bracket right after a title that holds a seniority word or a role phrase is part of it (revision 4, Z2):
+  // "Platform Engineer (Staff)" states "platform engineer staff", and a title read inside the bracket is that one's.
+  // Any other bracket stays a separator: "Security engineer (Fernwood Labs)", "Staff Engineer (Payments)".
+  let titles = found;
+  for (const bracket of brackets) {
+    const before = titles.filter((title) => title.to === bracket.first - 1);
+    if (before.length === 0) continue;
+    const joined = titleLikeWords(words.slice(bracket.first, bracket.last + 1));
+    if (joined.length === 0) continue;
+    for (const title of before) {
+      title.key = titleKey([...words.slice(title.from, title.to + 1), ...joined]);
+      title.to = bracket.last;
+    }
+    titles = titles.filter((title) => before.includes(title) || title.from < bracket.first || title.to > bracket.last);
+  }
+  return titles.map((title) => title.key);
 }
 
 // --- Credentials -------------------------------------------------------------

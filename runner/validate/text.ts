@@ -23,12 +23,21 @@ const MARKER_AT_START = new RegExp(`^${MARKER_SOURCE}`);
 const LABEL = /C\d{1,4}/g;
 const STRAY_BRACKET = /\[[^\]]*\]/g;
 
-/** Words that end in a period without ending a sentence. Compared lowercased, without the final period. */
+/** Words that end in a period without ending a sentence, in any case. Compared lowercased, without the final period. */
 const ABBREVIATIONS = new Set([
   "dr", "mr", "mrs", "ms", "prof", "st", "jr", "sr", "vs", "etc", "inc", "ltd", "co", "corp", "no", "approx", "dept", "est", "fig", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
   // Revision 2, X2.
   "incl", "esp", "excl", "yrs", "avg", "intl", "univ", "govt", "mgmt", "assoc", "al", "cf",
-  // Revision 3, Y2: short ones a claim may state ("Mt. Hood", "Ft. Worth", "a Lt.", "Mx. Quill"), and titles and addresses.
+]);
+
+/**
+ * Words that end in a period without ending a sentence only when capitalized (revision 3, Y2; the case: revision 4,
+ * Z4): short ones a claim may state ("Mt. Hood", "Ft. Worth", "a Lt.", "Mx. Quill"), and titles and addresses ("Gen.",
+ * "Rep.", "Rd."). In lower case each is an ordinary word ending its sentence: "a sales rep.", "the next gen.", "6 ft.".
+ * A capitalized one that really ends a sentence keeps the next one with it ("on Quill Rd. Shipped …"), the trade the
+ * list makes for "Inc." too. Compared lowercased, without the final period.
+ */
+const CAPITALIZED_ABBREVIATIONS = new Set([
   "mt", "ft", "pt", "lt", "mx", "rd",
   "sgt", "capt", "cpl", "pvt", "col", "gen", "maj", "adm", "cmdr", "rev", "hon", "gov", "sen", "rep", "supt", "ave", "blvd",
 ]);
@@ -125,15 +134,16 @@ export function stripCitations(text: string): string {
 
 /**
  * Whether `word`, ending in a period, is an abbreviation or an initial rather than the end of a sentence: a
- * listed abbreviation (`Inc.`, `incl.`), an initial (`J. Doe`), or a dotted abbreviation of two parts or more
- * (`B.Eng.`, `e.g.`). A dotted word of one part is an ordinary word ending its sentence unless it is listed or an
- * initial: "… for it. Shipped …" and "… in the UK. Won …" are two sentences, so the first can't ride along
- * uncited with the second. Nor is "it.Won.", two words run together.
+ * listed abbreviation (`Inc.`, `incl.`, and capitalized, `Lt.`), an initial (`J. Doe`), or a dotted abbreviation of
+ * two parts or more (`B.Eng.`, `e.g.`). A dotted word of one part is an ordinary word ending its sentence unless it
+ * is listed or an initial: "… for it. Shipped …" and "… in the UK. Won …" are two sentences, so the first can't
+ * ride along uncited with the second. Nor is "it.Won.", two words run together.
  */
 export function isAbbreviation(word: string): boolean {
   const bare = word.replace(/^[\p{Ps}\p{Pi}"']+/u, "");
   const lower = bare.replace(/\.$/, "").toLowerCase();
   if (ABBREVIATIONS.has(lower)) return true;
+  if (CAPITALIZED_ABBREVIATIONS.has(lower) && /^\p{Lu}/u.test(bare)) return true; // "Lt.", never "a sales rep." (Z4)
   if (/^[A-Z]$/.test(bare.replace(/\.$/, ""))) return true; // an initial, as in "J. Doe"
   const parts = bare.split(".").length - 1;
   return parts >= 2 && DOTTED.test(bare) && !TWO_WORDS_RUN_TOGETHER.test(bare);
@@ -181,8 +191,18 @@ function endsSentence(text: string, start: number, match: RegExpExecArray, next:
   if (following === " ") {
     // Whatever the next sentence starts with (a capital of any script, a digit, a quote, a lower-case word),
     // a sentence ends here, unless the period ends an abbreviation or an initial ("B.S. in", "J. Doe").
-    const lastWord = text.slice(start, match.index + terminal.length).split(" ").at(-1) ?? "";
-    return !(period && isAbbreviation(lastWord));
+    // The word is read up to the closing brackets or quotes after its period (revision 4, Z2): "(Sr.)" ends in the
+    // abbreviation "Sr.". Closed like that, an abbreviation ends the sentence when a capital or a citation marker
+    // comes next: "(Sr.) at Fernwood Labs" goes on, "(Inc.) Shipped …" is two sentences.
+    const closers = /[\p{Pe}\p{Pf}"']+$/u.exec(terminal)?.[0] ?? "";
+    const lastWord = text.slice(start, match.index + terminal.length - closers.length).split(" ").at(-1) ?? "";
+    if (!(period && isAbbreviation(lastWord))) return true;
+    if (closers === "") return false;
+    const after = nextVisible(text, next + 1);
+    if (MARKER_AT_START.test(text.slice(after))) return true;
+    let letterAt = after;
+    while (letterAt < text.length && OPENERS.test(text[letterAt]!)) letterAt = nextVisible(text, letterAt + 1);
+    return letterAt < text.length && isCapital(String.fromCodePoint(text.codePointAt(letterAt)!));
   }
 
   // Nothing between the end and what follows: "… teams.Won …".
@@ -236,7 +256,10 @@ function splitLine(line: string): string[] {
  *   (`B.S.`, `B.Eng.`, `Ph.D.`, `Inc.`, `incl.`, `J. Doe`), sits inside a
  *   number (`3.5`) or a name (`Node.js`, `ASP.NET`). A dotted word of one
  *   part ends one unless it is listed (`Mt.`, `Ft.`, `Lt.`, `Mx.`: revision
- *   3, Y2): "… for it. Shipped …" is two sentences (revision 2, X2).
+ *   3, Y2; those only capitalized: revision 4, Z4): "… for it. Shipped …"
+ *   and "… a sales rep. Shipped …" are two sentences (revision 2, X2). An
+ *   abbreviation inside a closing bracket or quote ends one only before a
+ *   capital or a citation marker: "(Sr.) at …" goes on (revision 4, Z2).
  * - Invisible format characters are looked through, never at.
  *
  * Citation markers that open a sentence (`… Labs. [C1] Maintains …`) belong
