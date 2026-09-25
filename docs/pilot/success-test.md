@@ -41,16 +41,26 @@ lesser path, since it's also the one path actually tested so far:
   timing isn't guaranteed). **Fallback:** Developer Mode → **Load unpacked**
   (step 5), which is also the only path used in CI and by every other
   packet's manual smoke test.
+- **`overnight/integration` → `main` (PR #2).** Not merged yet, and
+  `origin/main` is 116+ commits behind — it has no `runner/`, `extension/`
+  or `docs/pilot/` at all. **Fallback:** step 1 clones
+  `overnight/integration` explicitly instead of the default branch. Once
+  PR #2 merges, drop `--branch overnight/integration` and clone normally.
 
 ## Checklist
 
-1. **Clone and install.**
+1. **Clone and install.** Until PR #2 (`overnight/integration` → `main`)
+   merges, `main` has no `runner/`, so clone the integration branch
+   explicitly:
    ```sh
-   git clone https://github.com/radroid/workflow-catalog.git
+   git clone --branch overnight/integration https://github.com/radroid/workflow-catalog.git
    cd workflow-catalog
    corepack enable
    pnpm install --frozen-lockfile
    ```
+   Once PR #2 has merged, drop `--branch overnight/integration` — a plain
+   `git clone https://github.com/radroid/workflow-catalog.git` gets `main`,
+   which then has everything.
    *Expect:* installs the pinned versions from the committed lockfile with no
    error. *Time:* ~3–5 min, mostly network.
 
@@ -73,11 +83,13 @@ lesser path, since it's also the one path actually tested so far:
    npm run doctor
    ```
    *Expect:* seven items (`node`, `runner`, `provider`, `workspace`,
-   `extension`, `privacy`, `eve`), each `ok`/`warn`/`fail`. `extension` warns
-   until step 6 pairs a browser; `provider` warns until it's verified live.
-   Run `npm run doctor -- --live` (or `npm run doctor --live`) to verify the
-   model with one short call and clear that warning. *Time:* ~10 s, a few
-   more seconds with `--live`.
+   `extension`, `privacy`, `eve`), each `ok`/`warn`/`fail`. **`extension`
+   shows `fail` ("No browser extension is paired.") until step 6 pairs a
+   browser, and the command exits 1** — expected at this step, not a
+   problem; every other required item should already be `ok`. `provider`
+   warns until it's verified live. Run `npm run doctor -- --live` (or
+   `npm run doctor --live`) to verify the model with one short call and
+   clear that warning. *Time:* ~10 s, a few more seconds with `--live`.
 
 4. **Start the runner.**
    ```sh
@@ -114,20 +126,26 @@ lesser path, since it's also the one path actually tested so far:
    whichever mode fits: paste text, upload a `.txt`/`.md`/`.pdf`/`.docx`
    file, import an exported `.zip` archive (LinkedIn and similar), fetch a
    public URL (portfolio or personal site), or connect GitHub (`gh auth
-   token`, or a pasted fine-grained PAT kept in the OS keychain). A source
-   you can't or won't provide is marked unavailable or not applicable —
-   that still counts as accounted for. *Expect:* the Sources section shows
-   every category accounted for, and each candidate claim in the Claims
-   section is confirmed, disputed with a reason, or excluded — none left as
-   `candidate`. *Time:* ~10–15 min, depending on how much material you
-   bring.
+   token`, or a pasted fine-grained PAT kept in the OS keychain) — **the
+   PDF/DOCX/zip/URL/GitHub modes land per P03.1**; until that packet merges,
+   the page offers paste plus `.txt`/`.md` upload only. A source you can't
+   or won't provide is marked unavailable or not applicable — that still
+   counts as accounted for. Then, in the Claims section, decide each
+   candidate claim: **Confirm** or **Exclude**. Confirming sometimes opens a
+   follow-up question instead (badge "question open") when the runner wants
+   more evidence — answer it with **Yes, I have evidence** (optionally
+   adding your own statement) or **No, exclude it**. *Expect:* the Sources
+   section shows every category accounted for, and every claim ends up
+   **confirmed or excluded** — none left `candidate`, and none left with a
+   question open (approval refuses while any is). *Time:* ~10–15 min,
+   depending on how much material you bring.
 
 8. **Approve the career profile.** Still on the Onboarding page, once every
-   source is accounted for and every claim is resolved, the **Approve career
-   profile** button (in the Readiness card) stops being `aria-disabled`.
-   Click it. *Expect:* the profile records an approval (`version`, `at`);
-   `career-profile.md` is now readable at `http://127.0.0.1:4310/ui/profile`.
-   *Time:* ~1 min.
+   source is accounted for and every claim is confirmed or excluded, the
+   **Approve career profile** button (in the Readiness card) stops being
+   `aria-disabled`. Click it. *Expect:* the profile records an approval
+   (`version`, `at`); `career-profile.md` is now readable at
+   `http://127.0.0.1:4310/ui/profile`. *Time:* ~1 min.
 
 9. **Capture three real jobs.** Repeat three times, for three different real
    postings: open the posting in a tab, click the extension's toolbar icon
@@ -140,7 +158,7 @@ lesser path, since it's also the one path actually tested so far:
    directly on the Jobs page. *Time:* ~2 min per job, including extraction.
 
 10. **Prepare an application for each captured job.** Open
-    `http://127.0.0.1:4310/ui/application.html`. First, under **Your name on
+    `http://127.0.0.1:4310/ui/application`. First, under **Your name on
     the documents**, save the name and contact line your documents will
     carry (never sent to the model). Then, for each of the three jobs, pick
     it under **Prepare a saved job** and click **Prepare**. *Expect:* a
@@ -152,7 +170,7 @@ lesser path, since it's also the one path actually tested so far:
     exclude the evidence) and Prepare again. *Time:* ~2–5 min per
     application, mostly the model call.
 
-11. **The board.** Open `http://127.0.0.1:4310/ui/board.html`. *Expect:* the
+11. **The board.** Open `http://127.0.0.1:4310/ui/board`. *Expect:* the
     three applications show under their stage, with a prepared, Ready
     application selectable under **Start applying**. Select the ones you
     want to open together and click **Start a session**. *Time:* ~1 min.
@@ -168,13 +186,13 @@ lesser path, since it's also the one path actually tested so far:
     **Defer** buttons. Click **Applied** once you'd actually apply.
     *Expect:* the board's stage moves only from this explicit action (never
     from just closing the tab, which records only that the tab closed);
-    `http://127.0.0.1:4310/ui/sessions.html` shows the session's manifest
+    `http://127.0.0.1:4310/ui/sessions` shows the session's manifest
     and each command's state. If no browser is paired, the same session
     manifest lands in `outbox/application-session.json` for the extension's
     file-bridge **import** instead. *Time:* ~5 min for a group of three.
 
 13. **A schedule and its catch-up.** Open
-    `http://127.0.0.1:4310/ui/settings.html`'s **Schedules** section.
+    `http://127.0.0.1:4310/ui/settings`'s **Schedules** section.
     *Expect:* two cards, "Prepare newly saved jobs" (daily, 09:00 UTC) and
     "Review open applications" (weekly, Monday 09:00 UTC), each showing its
     next run and either "Last successful run …" or "No successful run yet".
@@ -186,7 +204,7 @@ lesser path, since it's also the one path actually tested so far:
     Saved yet at that point. To see a catch-up run with something in it:
     leave a job in the Saved stage (skip preparing it in step 10), stop the
     runner, and restart it after the schedule's fixed UTC time has passed —
-    check `http://127.0.0.1:4310/ui/runs.html`, where the triggered run
+    check `http://127.0.0.1:4310/ui/runs`, where the triggered run
     carries a "catch-up" badge, and the Schedules card's "Last successful
     run" advances. *Time:* ~2 min to read the cards; the once-a-day/week
     timing means forcing a *second* catch-up on demand isn't practical
