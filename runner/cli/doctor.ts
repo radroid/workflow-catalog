@@ -1,6 +1,6 @@
 import { systemClock } from "../lib/clock.ts";
 import { formatDoctorReport, runDoctor } from "../lib/doctor.ts";
-import { liveModelCheck } from "../lib/live-check.ts";
+import { formatCheckFailure, liveModelCheck } from "../lib/live-check.ts";
 import { API_KEY_ENV, API_KEY_SECRET_NAME, createOsSecretStore, RUNNER_SECRET_SERVICE } from "../lib/secret-store.ts";
 import { loadSettings } from "../lib/settings.ts";
 import { writeModelCheck } from "../store/model-check.ts";
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
       } catch {
         // No workspace yet: the workspace item reports that.
       }
-      if (flags.json !== true) console.log(result.ok ? "The model answered.\n" : `The model check failed: ${result.detail ?? "no detail"}\n`);
+      if (flags.json !== true) console.log(result.ok ? "The model answered.\n" : `${formatCheckFailure(result.detail)}\n`);
     }
   }
 

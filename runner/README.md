@@ -143,10 +143,13 @@ npm run setup -- --provider openai --model <slug> --api-key-env MY_KEY_VAR --yes
   has written one, `runner`, `pair`, `ui`, `doctor` and `setup -- --forget`
   fall back to the environment, as for a first run or a test — the same
   runtime fallback every other key gets. Plain `setup` is the one exception
-  to that fallback too (revision 1): it never takes the workspace from the
-  environment, even on a first run — its own default is always
-  `~/JobAssistant`, and `--yes` without `--workspace` always fails, asking
-  for one explicitly. The environment is a runtime fallback for commands that read
+  to that fallback too: it never takes the workspace from the environment,
+  even on a first run. On a first run, with no workspace recorded yet, its
+  own default is `~/JobAssistant`, and `--yes` without `--workspace` fails,
+  asking for one explicitly. On a re-run, the default (and `--yes`'s answer)
+  is whatever workspace `.env.local` already records — never
+  `~/JobAssistant` again, and `--yes` without `--workspace` succeeds,
+  keeping it. The environment is a runtime fallback for commands that read
   an existing install, never a choice setup makes for the person.
   `setup -- --forget` only ever offers to remove a workspace `.env.local`
   itself recorded; one only the environment names is left alone, noted, not
@@ -169,7 +172,7 @@ or "Check the model" on the status page, gets an answer. `workspace` is a
 warn when the environment's `RUNNER_WORKSPACE` really names a different
 folder from `.env.local`'s — compared by real folder, not by string, so a
 trailing slash, a symlink or `..` segments naming the same folder never
-warn (P02.2 revision 1). The detail names both paths and says which one the
+warn (P02.2). The detail names both paths and says which one the
 runner uses; the fix line reads `npm run setup -- --workspace <path>`. The
 JSON form is
 `{ ok, checkedAt, items: [{ id, label, status, detail, required, fix? }] }`.

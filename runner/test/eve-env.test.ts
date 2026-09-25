@@ -49,4 +49,20 @@ describe("buildEveEnv", () => {
     const env = buildEveEnv({ processEnv: {}, settingsValues: {}, codexDir: "/opt/fake-tools/bin" });
     expect(env.PATH?.split(path.delimiter)[0]).toBe("/opt/fake-tools/bin");
   });
+
+  it("R2-N5: takes the rest of PATH from its own processEnv option, never the real process.env.PATH", () => {
+    // A regression guard for the P02.2 round-2 finding: evePathEnv's `inherited`
+    // parameter used to default straight to the global process.env.PATH
+    // because buildEveEnv never passed options.processEnv.PATH through. A
+    // deliberately fictional, single-entry PATH here proves the real
+    // process's PATH (which this test process definitely has, and which is
+    // never this exact fictional value) is not what ends up in the result.
+    const env = buildEveEnv({ processEnv: { PATH: "/only/injected/bin" }, settingsValues: {} });
+    expect(env.PATH).toBe([path.dirname(process.execPath), "/only/injected/bin"].join(path.delimiter));
+  });
+
+  it("R2-N5: an injected PATH combines with codexDir the same way the real process.env.PATH would", () => {
+    const env = buildEveEnv({ processEnv: { PATH: "/only/injected/bin" }, settingsValues: {}, codexDir: "/opt/fake-tools/bin" });
+    expect(env.PATH).toBe(["/opt/fake-tools/bin", path.dirname(process.execPath), "/only/injected/bin"].join(path.delimiter));
+  });
 });

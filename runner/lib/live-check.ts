@@ -29,6 +29,23 @@ function shorten(text: string, max = 300): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+/**
+ * Carried into part B (P10 packet, "the doctor --live failure line", from
+ * P03.2's round-3 reviews): a one-line failure reads as one fixed prefix
+ * plus a lower-case plain clause everywhere the runner shows one — this is
+ * what `server/eve-gateway.ts`'s own detail strings ("the model answered,
+ * but not with the expected reply.", "the model asked a question instead of
+ * replying.", ...) already do for the Status page's "Check the model"
+ * button. `cli/doctor.ts -- --live` used a capitalized "The model
+ * answered, ..." and its own "The model check failed: " prefix, which read
+ * as two sentences glued together and disagreed with the Status page for
+ * what is otherwise the same failure. `formatCheckFailure` is the one
+ * prefix both now share.
+ */
+export function formatCheckFailure(detail: string | undefined): string {
+  return `The check failed: ${detail ?? "no detail"}`;
+}
+
 export async function liveModelCheck(model: ModelSettings, options: LiveCheckOptions = {}): Promise<LiveCheckResult> {
   if (model.provider !== "chatgpt" && options.apiKey) process.env[API_KEY_ENV[model.provider]] = options.apiKey;
   if (model.provider === "chatgpt") process.env.PATH = evePathEnv(options.codexDir);
@@ -48,7 +65,7 @@ export async function liveModelCheck(model: ModelSettings, options: LiveCheckOpt
       abortSignal: AbortSignal.timeout(timeoutMs),
     });
     const text = (await result.text).trim().toLowerCase();
-    return text.includes("ok") ? { ok: true } : { ok: false, detail: "The model answered, but not with the expected reply." };
+    return text.includes("ok") ? { ok: true } : { ok: false, detail: "the model answered, but not with the expected reply." };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, detail: shorten(message.includes("aborted") ? `No answer within ${timeoutMs / 1000} s.` : message) };

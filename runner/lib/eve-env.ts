@@ -19,7 +19,7 @@ export interface BuildEveEnvOptions {
  * stray one from the shell that started `npm run runner`.
  */
 export function buildEveEnv(options: BuildEveEnvOptions): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...options.processEnv, ...options.settingsValues, ...PRIVACY_ENV, PATH: evePathEnv(options.codexDir) };
+  const env: NodeJS.ProcessEnv = { ...options.processEnv, ...options.settingsValues, ...PRIVACY_ENV, PATH: evePathEnv(options.codexDir, options.processEnv.PATH) };
   delete env.PORT;
   delete env.HOST;
   return env;
