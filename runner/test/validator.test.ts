@@ -1256,12 +1256,14 @@ describe("revision 4, Z4: corrections to revision 3's rulings", () => {
     const range = confirmedClaim("C11", "title", "Platform Engineer at Harbor, 2021–now.");
     const thisDay = confirmedClaim("C12", "fact", "Run the Harbor ledger service to this day, as I have today.");
     const dangling = confirmedClaim("C13", "title", "Now on the Harbor platform team as Staff Engineer (2021–).");
-    const claims = [since, starting, range, thisDay, dangling];
+    const currently = confirmedClaim("C14", "fact", "Today I run the Harbor deploy fleet, as I currently do.");
+    const claims = [since, starting, range, thisDay, dangling, currently];
     expect(rulesWith(claims, "Still lead the Harbor platform team, a role held since 2021 [C9].")).toEqual([]);
     expect(rulesWith(claims, "Still lead the Harbor on-call rotation, starting in 2022 [C10].")).toEqual([]);
     expect(rulesWith(claims, "Platform Engineer at Harbor since 2021 [C11].")).toEqual([]);
     expect(rulesWith(claims, "Still run the Harbor ledger service [C12].")).toEqual([]);
     expect(rulesWith(claims, "Staff Engineer at Harbor since 2021 [C13].")).toEqual([]);
+    expect(rulesWith(claims, "Still run the Harbor deploy fleet [C14].")).toEqual([]);
     // The fixture's own: C7 states a start and no end.
     expect(rules(resume("Senior Platform Engineer at Northwind Labs, which I remain today [C8][C7]."))).toEqual([]);
   });
