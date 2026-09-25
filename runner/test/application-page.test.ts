@@ -7,7 +7,7 @@ import { UI_COOKIE } from "../server/local-ui.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import applicationsModule, { waitForPreparationQueue } from "../server/routes/applications.ts";
 import { ApplicationsStore } from "../store/applications.ts";
-import { pauseBudget } from "../store/budget.ts";
+import { pauseBudget, setBudgetLimits } from "../store/budget.ts";
 import { JobsStore } from "../store/jobs.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { citedLabels } from "../validate/text.ts";
@@ -969,6 +969,87 @@ describe("Applications page: characters the PDF can't draw (revision 1, V16)", (
     // A plain note, never amber.
     expect(all(page, ".decision")).toHaveLength(0);
     expect(all(page, ".badge.warn")).toHaveLength(0);
+  });
+});
+
+describe("Applications page: warnings and limits (revision 2, X9)", () => {
+  const nameNote = "The PDF can't draw “李”, so it prints � in its place. The Markdown and Word files keep it.";
+  const contactNote = "The PDF can't draw “東” and “京”, so it prints � in their place. The Markdown and Word files keep them.";
+
+  it("a save says what the PDF can't draw in its one line, and each field's note names its own characters", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD), { details: false });
+    const page = await openPage(bridge);
+    page.type("details-name", "Ada Quill 李");
+    page.type("details-contact", "ada.quill@example.com · 東京");
+    page.byId("details-submit").focus();
+    page.submit("details-form");
+    await until(() => page.outcomes().length === 1, "the save");
+    expect(page.outcomes()).toEqual(["Saved: your documents will carry this name; the PDF can't draw “李”, “東” and 1 more."]);
+    expect(page.byId("last-action").className).toContain("done");
+    expect(page.byId("details-name-note").textContent).toBe(nameNote);
+    expect(page.byId("details-contact-note").textContent).toBe(contactNote);
+    expect(page.byId("details-contact-note").hidden).toBe(false);
+    expect(page.byId("details-contact").getAttribute("aria-describedby")).toBe("details-contact-note");
+    expect(page.byId("details-name").getAttribute("aria-describedby")).toBe("details-name-error details-name-note");
+
+    // Only the contact line: the name's note goes, the contact's stays.
+    page.type("details-name", "Ada Quill");
+    page.byId("details-submit").focus();
+    page.submit("details-form");
+    await until(() => page.outcomes().length === 2, "the second save");
+    expect(page.outcomes()[1]).toBe("Saved: your documents will carry this name; the PDF can't draw “東” and “京”.");
+    expect(page.byId("details-name-note").hidden).toBe(true);
+    expect(page.byId("details-contact-note").textContent).toBe(contactNote);
+    await page.quiet();
+    expect(page.byId("details-name-note").hidden).toBe(true);
+    expect(page.byId("details-contact-note").hidden).toBe(false);
+  });
+
+  it("a save that leaves documents to prepare again says both, and each PDF link is described by its note", async () => {
+    const bridge = await bridgeWith(honest(PLATFORM_LEAD));
+    const { jobId } = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    await prepareElsewhere(bridge, jobId);
+    const page = await openPage(bridge);
+    page.document.querySelector(".app-open")!.click();
+    await until(() => page.document.querySelector(".version") !== null, "version 1");
+    await saveName(page, "Ada Quill 李");
+    expect(page.outcomes().at(-1)).toBe("Saved. Prepare again to put it on your documents; the PDF can't draw “李”.");
+
+    press(page, "detail-prepare");
+    await until(() => all(page, ".version").length === 2, "version 2");
+    await until(() => page.document.querySelector(".export-note") !== null, "the PDF note");
+    const taskId = taskIdOf(page);
+    const links = all(page, `#version-${taskId}-2 .exports a`);
+    const described = links.filter((link) => link.getAttribute("aria-describedby") !== null);
+    expect(described.map((link) => link.textContent)).toEqual(["Resume, version 2 · PDF"]);
+    const note = page.byId(described[0]!.getAttribute("aria-describedby")!);
+    expect(note.className).toContain("export-note");
+    expect(note.textContent).toBe(nameNote);
+    // Version 1's PDF drew every character: nothing describes its link.
+    expect(all(page, `#version-${taskId}-1 .exports a`).filter((link) => link.getAttribute("aria-describedby") !== null)).toHaveLength(0);
+  });
+
+  it("at today's run limit, Prepare refuses at once, naming the limit, and the runner line stays as it is", async () => {
+    const { bridge, model } = await bridgeAndModel(honest(PLATFORM_LEAD));
+    await setBudgetLimits(bridge.workspace, { dailyRunLimit: 1, itemCap: 5 });
+    const lead = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const other = await seedJob(bridge.workspace, bridge.clock, { ...platformLeadJob(), url: "https://jobs.example/postings/fernwood-staff-platform-lead", structured: { ...platformLeadJob().structured, title: "Staff Platform Lead" } });
+    await prepareElsewhere(bridge, lead.jobId);
+    const page = await openPage(bridge);
+    expect(page.byId("ready-runs").textContent).toBe("Today's run limit is reached: 1 of 1 runs. Raise it in Settings, or prepare tomorrow.");
+
+    pressPrepare(page, other.jobId);
+    await until(() => page.outcomes().length > 0, "the refusal");
+    expect(page.outcomes()).toEqual(["Not prepared: today's limit of 1 run is reached; raise it in Settings."]);
+    expect(page.lines.some((line) => line.startsWith("Preparing"))).toBe(false);
+    expect(page.byId("last-action").className).toContain("refused");
+    expect(all(page, "#last-action a").map((link) => link.getAttribute("href"))).toEqual(["/ui/settings"]);
+    expect(page.document.activeElement?.id).toBe("prepare-submit");
+    expect(page.byId("prepare-submit").getAttribute("aria-disabled")).toBe("false");
+    await page.quiet();
+    expect(page.byId("ready-runner").textContent).toBe("The runner's agent is running.");
+    expect(all(page, ".app-row")).toHaveLength(1);
+    expect(model.prompts).toHaveLength(1);
   });
 });
 

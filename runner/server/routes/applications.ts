@@ -53,7 +53,7 @@ import { runTurn, withRun, type TurnResult } from "../run-harness.ts";
  *    profile not ready ("Preparation is locked: … The workflow will not
  *    guess."), an application record that can't be read and may be this
  *    job's (preparing would start a second one), or the runner unable to run
- *    a turn (eve, a model, the budget).
+ *    a turn (eve, a model, the budget, or today's run limit, named: X9).
  * 2. The idempotency key: the job and its revision, the profile's approved
  *    version, the options that change the output (the cover letter), a
  *    digest of every input the model reads (the confirmed claims, the
@@ -283,6 +283,18 @@ async function runnerRefusal(ctx: RunnerContext): Promise<PrepareStart | undefin
   return undefined;
 }
 
+/**
+ * Today's run limit, when it is reached (revision 2, X9): refused before anything starts, naming the limit, where
+ * the run harness would otherwise refuse the queued run a moment after "Preparing…". Kept apart from
+ * `runnerRefusal`, which is also the page's runner line: the page names the limit on a line of its own. A re-export
+ * uses no run, so it is decided before this.
+ */
+async function dailyLimitRefusal(ctx: RunnerContext): Promise<PrepareStart | undefined> {
+  const budget = await getBudgetState(ctx.workspace, ctx.clock);
+  if (budget.runsUsedToday < budget.dailyRunLimit) return undefined;
+  return refused(409, "daily_limit", `Today's run limit is reached: ${budget.runsUsedToday} of ${budget.dailyRunLimit} runs, so nothing was prepared. Raise it in Settings, or prepare it tomorrow.`);
+}
+
 /** A previous attempt's answers carry over to the next attempt for the same inputs (whatever the header). */
 function carriedAnswers(previous: PreparationRecord | "unreadable" | undefined, key: string): PreparationRecord["answers"] {
   if (!previous || previous === "unreadable" || contentKey(previous.idempotencyKey) !== contentKey(key)) return [];
@@ -367,7 +379,7 @@ export async function startPreparation(ctx: RunnerContext, request: PrepareReque
     }
   }
 
-  const runnerProblem = await runnerRefusal(ctx);
+  const runnerProblem = (await runnerRefusal(ctx)) ?? (await dailyLimitRefusal(ctx));
   if (runnerProblem) return runnerProblem;
 
   const { application } = await applications.ensureForJob(request.jobId);

@@ -391,17 +391,38 @@ function renderReady(view) {
 
 let detailsTouched = false;
 
-/** The plain warning under the name field when the PDF can't draw part of the saved name or contact line (V16). */
-function renderNameNote(details) {
-  const node = $("details-name-note");
-  const missing = details?.pdfMissing ?? [];
+function renderFieldNote(id, missing) {
+  const node = $(id);
   const text = missing.length > 0 ? pdfWarning(missing) : "";
   if (node.textContent !== text) node.textContent = text;
   node.hidden = missing.length === 0;
 }
 
+/**
+ * The plain warnings under the name and the contact line when the PDF can't draw part of what is saved there
+ * (V16): each field names its own characters (revision 2, X9). The runner lists them for the whole header; a
+ * character that is in neither saved value, as typed, stays under the name.
+ */
+function renderDetailNotes(details) {
+  const missing = details?.pdfMissing ?? [];
+  const within = (value) => {
+    const text = String(value ?? "").normalize("NFC");
+    return missing.filter((character) => text.includes(character));
+  };
+  const contact = within(details?.contact);
+  const name = within(details?.name);
+  renderFieldNote("details-name-note", [...name, ...missing.filter((character) => !name.includes(character) && !contact.includes(character))]);
+  renderFieldNote("details-contact-note", contact);
+}
+
+/** "“李”", "“李” and “Ω”", "“李”, “Ω” and 3 more": the characters, briefly, for the save's one line (X9). */
+function fewCharacters(missing) {
+  const shown = missing.slice(0, 2).map(quote);
+  return missing.length <= 2 ? shown.join(" and ") : `${shown.join(", ")} and ${missing.length - 2} more`;
+}
+
 function fillDetails(view) {
-  renderNameNote(view.details);
+  renderDetailNotes(view.details);
   if (detailsTouched || !view.details) return;
   const name = $("details-name");
   const contact = $("details-contact");
@@ -682,20 +703,27 @@ function renderVersion(detail, version, latest) {
     notes.push(el("p", { className: "version-note small", text: `Version ${version.replacedBy} replaces it.` }));
   }
   // Each link names its version (V18) and downloads under the person's name, the document and the job (V14);
-  // a PDF that can't draw every character says so beside it, and which formats keep them (V16).
+  // a PDF that can't draw every character says so beside it, and which formats keep them (V16), and the link
+  // points to that note, so it is read with the link (X9).
   const files = el(
     "ul",
     { className: "exports" },
-    ...version.files.map((file) =>
-      el(
+    ...version.files.map((file) => {
+      const noted = file.missing?.length > 0;
+      const noteId = `export-note-${detail.taskId}-${version.version}-${file.kind}-${file.format}`;
+      return el(
         "li",
         {},
-        el("a", { attrs: { href: file.href, download: file.download ?? file.name } }, `${KIND_WORDS[file.kind] ?? "Document"}, version ${version.version} · ${FORMAT_WORDS[file.format] ?? file.format}`),
+        el(
+          "a",
+          { attrs: { href: file.href, download: file.download ?? file.name, ...(noted ? { "aria-describedby": noteId } : {}) } },
+          `${KIND_WORDS[file.kind] ?? "Document"}, version ${version.version} · ${FORMAT_WORDS[file.format] ?? file.format}`,
+        ),
         " ",
         el("code", { text: file.name }),
-        file.missing?.length > 0 ? el("p", { className: "export-note small", text: pdfWarning(file.missing) }) : null,
-      ),
-    ),
+        noted ? el("p", { className: "export-note small", attrs: { id: noteId }, text: pdfWarning(file.missing) }) : null,
+      );
+    }),
   );
   const details = el(
     "details",
@@ -1018,6 +1046,12 @@ const PREPARE_REFUSALS = {
   unreachable: CANT_REACH,
 };
 
+/** Today's run limit, named (revision 2, X9), from the list's numbers: the refresh after the refusal keeps them current. */
+function dailyLimitRefusal() {
+  const limit = listView?.budget?.dailyRunLimit;
+  return limit ? `Not prepared: today's limit of ${plural(limit, "run")} is reached; raise it in [Settings](/ui/settings).` : "Not prepared: today's run limit is reached; raise it in [Settings](/ui/settings).";
+}
+
 /** Moves focus to the name field and brings it clear of the line: where the person acts next. */
 function focusNameField() {
   const field = $("details-name");
@@ -1042,7 +1076,8 @@ async function prepareJob(jobId, coverLetter, button) {
     button.setAttribute("aria-disabled", "false");
     detailKey = ""; // the next refresh renders the open application's button from its data again
     answered(listView?.jobs.find((job) => job.jobId === jobId)?.taskId);
-    lastAction(PREPARE_REFUSALS[error?.code] ?? "Not prepared: the runner hit a problem; try again.", "refused");
+    const refusal = error?.code === "daily_limit" ? dailyLimitRefusal() : PREPARE_REFUSALS[error?.code];
+    lastAction(refusal ?? "Not prepared: the runner hit a problem; try again.", "refused");
     // The name is what's missing: the name field is where to go next (revision 1, V18).
     if (error?.code === "details_missing") focusNameField();
     await refresh().catch(() => undefined);
@@ -1162,9 +1197,12 @@ $("details-form").addEventListener("submit", async (event) => {
   }
   detailsTouched = false;
   setNameError("");
-  renderNameNote(result.details);
+  renderDetailNotes(result.details);
   // What's true: documents already prepared keep the header they were made with until they're prepared again (V8).
-  lastAction(result.outdated > 0 ? "Saved. Prepare again to put it on your documents." : "Saved: your documents will carry this name.", "done");
+  // What the PDF can't draw is part of the outcome, so the same line says so (X9); the notes under the fields say the rest.
+  const saved = result.outdated > 0 ? "Saved. Prepare again to put it on your documents" : "Saved: your documents will carry this name";
+  const missing = result.details?.pdfMissing ?? [];
+  lastAction(missing.length > 0 ? [`${saved}; the PDF can't draw `, data(fewCharacters(missing)), "."] : `${saved}.`, "done");
   await refresh().catch(() => undefined);
 });
 

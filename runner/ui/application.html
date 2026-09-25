@@ -38,7 +38,8 @@
           </div>
           <div class="field">
             <label for="details-contact">Contact line <span class="muted">(optional)</span></label>
-            <input id="details-contact" name="contact" type="text" autocomplete="off" maxlength="160" placeholder="Email · city" />
+            <input id="details-contact" name="contact" type="text" autocomplete="off" maxlength="160" placeholder="Email · city" aria-describedby="details-contact-note" />
+            <p id="details-contact-note" class="field-note small" hidden></p>
           </div>
           <button class="button secondary" type="submit" id="details-submit" aria-disabled="false">Save</button>
         </form>

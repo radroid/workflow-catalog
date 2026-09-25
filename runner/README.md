@@ -368,8 +368,10 @@ After the turn the route re-reads the profile, validates the draft again
 Markdown, DOCX (`docx`, its author the person's name) and PDF (`pdfkit`,
 set in Noto Sans embedded from `@expo-google-fonts/noto-sans`: Latin with
 its extensions, Greek, Cyrillic and Vietnamese print as typed; anything the
-font can't draw prints as � and the page says so at the name field and
-beside that PDF, and that the Markdown and Word files keep it), with the
+font can't draw prints as � and the page says so under the field it was
+typed in (name or contact line), in the save's line, and beside that PDF,
+whose link points to the note, and that the Markdown and Word files keep
+it), with the
 citation markers stripped at this step and no earlier, plus
 `diff-v<n>.md`, which puts every sentence beside the claims it cites and
 names the presentation change. The model is told only that a label or
@@ -390,10 +392,14 @@ second application. Each version records its profile version, job revision
 and idempotency key (the job, its revision, the profile version, whether a
 cover letter was asked for, a digest of everything the model read, and a
 digest of the name and contact line the documents carry), so preparing
-again with the same inputs writes nothing, and a changed profile gives a
+again with the same inputs writes nothing (when the newest documents carry
+that key; switching a name back re-exports), and a changed profile gives a
 new version that names the one it replaces. A changed name or contact line
-alone re-exports the latest validated draft under it, as a new version
-naming the old one, with no model turn and no run. At start, a version
+alone re-exports the validated draft under it, checked again first, as a
+new version naming the one it replaces, with no model turn and no run; its
+cover letter keeps the date it was first written, and its note says whose
+sentences it carries and what changed since the version it replaces. At
+today's run limit, Prepare refuses at once and names the limit. At start, a version
 whose files and record were all written before the runner stopped is
 attached, and any other preparation left running is marked interrupted.
 Documents download as attachments with a sandboxing CSP, under a
@@ -402,7 +408,7 @@ RFC 6266's `filename*` when it isn't ASCII), and only files the
 application's record lists; the workspace keeps its own file names. The
 page follows the Jobs page's rules: one live region, each outcome announced
 once, including a preparation that was already running when the page
-loaded; a refresh (every 2 s while a preparation runs, 5 s otherwise, only
+loaded, and outcomes that settle in one refresh share one line; a refresh (every 2 s while a preparation runs, 5 s otherwise, only
 while visible) that keeps focus and open sections, and that says once,
 while a watched preparation can't be refreshed, "Can't reach the runner. Is
 it still running?"; a busy button `aria-disabled`; no field name, status

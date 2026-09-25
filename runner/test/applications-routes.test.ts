@@ -7,7 +7,7 @@ import { UI_COOKIE } from "../server/local-ui.ts";
 import applicationsModule, { EXCLUDED_PROBLEM_MESSAGE, INTERRUPTED_MESSAGE, keptProblems, waitForPreparationQueue } from "../server/routes/applications.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import { ApplicationsStore } from "../store/applications.ts";
-import { getBudgetState, pauseBudget } from "../store/budget.ts";
+import { getBudgetState, pauseBudget, setBudgetLimits } from "../store/budget.ts";
 import { JobsStore } from "../store/jobs.ts";
 import { ProfileStore } from "../store/profile.ts";
 import { listRuns } from "../store/runs.ts";
@@ -1472,6 +1472,40 @@ describe("characters the PDF can't draw (revision 1, V16)", () => {
       `attachment; filename="___ _____ _ - Resume - Fernwood Platform Lead.pdf"; filename*=UTF-8''${encodeURIComponent("Ада Квилл 李 - Resume - Fernwood Platform Lead.pdf")}`,
     );
     expect(version!.files.find((file) => file.name === "resume-v1.pdf")?.download).toBe("Ада Квилл 李 - Resume - Fernwood Platform Lead.pdf");
+  });
+});
+
+describe("warnings and limits (revision 2, X9)", () => {
+  it("at today's run limit, preparing is refused up front and names the limit; the runner line is unchanged, and a re-export still goes out", async () => {
+    const { bridge, model } = await setup(honest(PLATFORM_LEAD_COVERAGE));
+    await setBudgetLimits(bridge.workspace, { dailyRunLimit: 1, itemCap: 5 });
+    const lead = await seedJob(bridge.workspace, bridge.clock, platformLeadJob());
+    const other = await seedJob(bridge.workspace, bridge.clock, { ...platformLeadJob(), url: "https://jobs.example/postings/fernwood-staff-platform-lead", structured: { ...platformLeadJob().structured, title: "Staff Platform Lead" } });
+    const taskId = (await prepare(bridge, lead.jobId)).body.application.taskId; // today's one run
+
+    const refusedStart = await post<ErrorBody>(bridge, "/prepare", { jobId: other.jobId, coverLetter: false });
+    expect(refusedStart.status).toBe(409);
+    expect(refusedStart.body.error).toEqual({ code: "daily_limit", message: "Today's run limit is reached: 1 of 1 runs, so nothing was prepared. Raise it in Settings, or prepare it tomorrow." });
+    // Nothing started: no application for the job, no run record, no model turn.
+    await waitForPreparationQueue(bridge.workspace.root);
+    expect(model.prompts).toHaveLength(1);
+    expect((await listRuns(bridge.workspace, bridge.clock)).records).toHaveLength(1);
+    const list = (await get<ListView>(bridge, "")).body;
+    expect(list.applications.map((entry) => entry.taskId)).toEqual([taskId]);
+    expect(list.jobs.find((job) => job.jobId === other.jobId)?.taskId).toBeNull();
+    expect(list.runner).toEqual({ ready: true, code: null, message: null });
+    expect(list.budget).toEqual({ dailyRunLimit: 1, runsUsedToday: 1 });
+
+    // A re-export uses no run: a changed name still goes out, at the limit.
+    await post(bridge, "/details", { name: "Zoe Quill", contact: "zoe.quill@example.com · Remote" });
+    expect((await prepare(bridge, lead.jobId)).body).toMatchObject({ outcome: "reexported", version: 2 });
+    expect((await listRuns(bridge.workspace, bridge.clock)).records).toHaveLength(1);
+  });
+
+  it("lists what the PDF can't draw in the contact line with the name's", async () => {
+    const { bridge } = await setup(honest(PLATFORM_LEAD_COVERAGE), { details: false });
+    const saved = await post<{ details: { pdfMissing: string[] } }>(bridge, "/details", { name: "Ada Quill 李", contact: "ada.quill@example.com · 東京" });
+    expect(saved.body.details.pdfMissing).toEqual(["李", "東", "京"]);
   });
 });
 
