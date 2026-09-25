@@ -124,15 +124,17 @@ function tokens(text: string): Token[] {
   return out;
 }
 
-/** Words right before "scores" that make it a noun, not a count (revision 4, Z4): a determiner or a possessive, "the scores of". */
+/**
+ * Determiners and possessive pronouns. Right before "scores" they leave it a count (revision 5, Z7: "the scores of
+ * engineers", "their scores of"); two words before it, they make the word between a noun (Z4: "its fraud scores of").
+ */
 const SCORE_DETERMINERS = new Set(["the", "a", "an", "their", "its", "our", "his", "her", "my", "your", "whose", "these", "those", "this"]);
 
-/** Words right before "scores" that name what is scored (Z4): "credit scores of", "test scores of", "risk scores of", "high scores of". */
-const SCORE_MODIFIERS = new Set([
+/** Nouns right before "scores" that name what is scored (Z4; nouns only, Z7): "credit scores of", "test scores of", "risk scores of". */
+const SCORE_NOUNS = new Set([
   "credit", "test", "risk", "fraud", "quality", "health", "exam", "survey", "satisfaction", "performance", "review", "match", "confidence",
   "relevance", "sentiment", "trust", "reputation", "security", "accessibility", "lighthouse", "customer", "user", "merchant", "student",
-  "engagement", "readiness", "benchmark", "audit", "rating", "composite", "high", "higher", "highest", "low", "lower", "lowest", "top",
-  "average", "median", "mean", "final", "overall", "total", "perfect", "raw",
+  "engagement", "readiness", "benchmark", "audit", "rating",
 ]);
 
 /** Words after which a count can start though a determiner comes before them: "the team and scores of engineers" (Z4). */
@@ -141,23 +143,32 @@ const COUNT_LEADS = new Set([
   "like", "than", "about", "around", "nearly", "almost", "via", "between", "plus", "as", "while", "where", "when", "which", "who", "that",
 ]);
 
+/** Words of quantity after which "scores of" is a count though a determiner comes before them: "the many scores of engineers" (Z7). */
+const COUNT_QUANTIFIERS = new Set(["many", "several", "countless", "numerous", "innumerable", "untold", "myriad"]);
+
+/** Words ending in "'s" that are no possessive: "It's scores of engineers" is "It is" (Z7). */
+const S_CONTRACTIONS = new Set(["it's", "that's", "there's", "here's", "what's", "who's", "he's", "she's", "where's", "how's", "let's"]);
+
 /**
- * Whether "scores" at `index` (before "of") is a noun rather than the count "scores of" (revision 4, Z4). It counts
- * where a count can start: at the start of a sentence or a phrase ("Scores of engineers …", "…, scores of teams"), and
- * after a verb, a preposition or a conjunction ("mentored scores of", "by scores of", "and scores of"). It is a noun
- * after a word that makes it one: a determiner or a possessive ("the scores of", "Harbor's scores of"), what is scored
- * ("credit scores of", "test scores of", "NPS scores of"), or a word a determiner comes right before ("the merchant
- * scores of", "its onboarding scores of"), unless that word is a preposition or a conjunction ("this and scores of").
+ * Whether "scores" at `index` (before "of") is a noun rather than the count "scores of" (revision 4, Z4; revision 5,
+ * Z7). It counts where a count can start: at the start of a sentence or a phrase ("Scores of engineers …", "…, scores
+ * of teams"), after a verb, a preposition or a conjunction ("mentored scores of", "by scores of", "and scores of"), and
+ * after a determiner or a possessive pronoun ("the scores of", "their scores of", "these scores of"). Only a noun
+ * before it makes it one: what is scored ("credit scores of", "test scores of", "NPS scores of"), a possessive
+ * ("Harbor's scores of"), or a word a determiner comes right before ("the merchant scores of", "its onboarding scores
+ * of"), unless that word is a preposition, a conjunction or a word of quantity ("this and scores of", "the many
+ * scores of").
  */
 function scoresIsNoun(found: readonly Token[], index: number): boolean {
   const before = found[index - 1];
   if (before === undefined || before.closes) return false;
   const word = before.text.toLowerCase();
-  if (SCORE_DETERMINERS.has(word) || SCORE_MODIFIERS.has(word)) return true;
-  if (/'s$/i.test(before.text) || /^\p{Lu}{2,}$/u.test(before.text)) return true; // "Harbor's scores", "NPS scores"
+  if (SCORE_DETERMINERS.has(word)) return false; // Z7: "the scores of engineers" is a count
+  if (SCORE_NOUNS.has(word) || /^\p{Lu}{2,}$/u.test(before.text)) return true; // "credit scores", "NPS scores"
+  if (/'s$/i.test(before.text) && !S_CONTRACTIONS.has(word)) return true; // "Harbor's scores"
   const earlier = found[index - 2];
   if (earlier === undefined || earlier.closes || !SCORE_DETERMINERS.has(earlier.text.toLowerCase())) return false;
-  return !COUNT_LEADS.has(word);
+  return !COUNT_LEADS.has(word) && !COUNT_QUANTIFIERS.has(word);
 }
 
 /** A scale, percent or multiplier word right after a number: "3 million", "40 percent", "40 per cent", "3 times". */
@@ -617,23 +628,38 @@ const NOT_TITLE_OPENERS = new Set([
   "since", "until", "till", "while", "when", "where", "whereas", "though", "although", "because", "if", "once", "then", "later", "now",
   "today", "currently", "formerly", "previously", "also", "and", "or", "but", "so", "i", "we", "my", "our", "his", "her", "their", "its",
   "this", "that", "these", "those", "there", "here", "became", "become", "becoming", "named", "appointed", "promoted", "elected", "was",
+  "am", "i'm", "i’m",
 ]);
 
 /**
+ * "was", and (revision 5, Z8) "am" and "I'm": a role phrase after one is a title under the same rules (Z3), whether it
+ * is capitalized or not (Z5).
+ */
+const BE_WORDS = new Set(["was", "am", "i'm", "i’m"]);
+
+/** The contraction "I'm", which carries its own subject: "I'm engineering manager" is "I am engineering manager" (Z8). */
+const SELF_BE = new Set(["i'm", "i’m"]);
+
+/**
  * Words after which a role phrase is a title: "as a platform engineer", "became head of platform", "promoted to
- * director", and (revision 4, Z3) "was engineering manager", "I was the engineering manager". A title's words never
- * reach back past one of these (X1): "and became engineering manager" states "engineering manager". After "was", only
- * a word that names a role makes one (`namesRole`: "was developer-friendly" states no title), adverbs between are no
- * part of it ("I was also engineering manager"), and after a subject other than "I" (or "My title", "My role") the
+ * director", and (revision 4, Z3) "was engineering manager", "I was the engineering manager", and (revision 5, Z8)
+ * "I am engineering manager". A title's words never reach back past one of these (X1): "and became engineering
+ * manager" states "engineering manager". After "was" or "am" (`BE_WORDS`), only a word that names a role makes one
+ * (`namesRole`: "was developer-friendly" states no title), adverbs between are no part of it ("I was also engineering
+ * manager", "I am currently engineering manager"), and after a subject other than "I" (or "My title", "My role") the
  * phrase must end there ("Ada was engineering manager at …"), so "The biggest win was developer tooling" states none.
  */
-const TITLE_CONTEXTS = new Set(["as", "became", "become", "becoming", "named", "appointed", "promoted", "elected", "was"]);
+const TITLE_CONTEXTS = new Set(["as", "became", "become", "becoming", "named", "appointed", "promoted", "elected", ...BE_WORDS]);
 const ARTICLES = new Set(["a", "an", "the"]);
 
-/** Adverbs that may stand between "was" and its title without being part of it: "I was also engineering manager" (Z3). */
+/**
+ * Adverbs that may stand between "was" or "am" and its title without being part of it: "I was also engineering
+ * manager" (Z3), "I am currently engineering manager" (Z8).
+ */
 const WAS_ADVERBS = new Set([
   "also", "still", "once", "again", "already", "then", "later", "briefly", "previously", "formerly", "eventually", "officially", "initially",
   "originally", "subsequently", "finally", "temporarily", "effectively", "ultimately", "simultaneously", "concurrently", "jointly", "nominally",
+  "currently", "presently", "now",
 ]);
 
 /** Words before "was" that make what follows it a title however it goes on: "I was engineering manager overseeing …", "My title was …" (Z3). */
@@ -693,7 +719,7 @@ function titleKey(words: readonly string[]): string {
 
 /**
  * The words before `at` (past one article) that make what follows a title, if any, and where: "as a …", "became …",
- * "promoted to …", and "was the …", past adverbs too ("was also the …"; Z3).
+ * "promoted to …", and "was the …" or "am the …", past adverbs too ("was also the …"; Z3, Z8).
  */
 function titleContextAt(lower: readonly string[], at: number): { readonly word: string; readonly at: number } | undefined {
   let before = at - 1;
@@ -703,12 +729,7 @@ function titleContextAt(lower: readonly string[], at: number): { readonly word: 
   if (word === "to" && lower[before - 1] === "promoted") return { word: "promoted to", at: before - 1 };
   let back = before;
   while (back >= 0 && WAS_ADVERBS.has(lower[back]!)) back -= 1;
-  return back < before && lower[back] === "was" ? { word: "was", at: back } : undefined;
-}
-
-/** Whether the words before `at` (past one article) make what follows a title: "as a …", "became …", "promoted to …". */
-function inTitleContext(lower: readonly string[], at: number): boolean {
-  return titleContextAt(lower, at) !== undefined;
+  return back < before && BE_WORDS.has(lower[back] ?? "") ? { word: lower[back]!, at: back } : undefined;
 }
 
 /**
@@ -758,18 +779,21 @@ function titleWords(sentence: string): { readonly words: readonly string[]; read
 }
 
 /**
- * The words of a bracket that belong to the title right before it (revision 4, Z2): each of its comma-separated parts
- * that is a few title words with a seniority word among them ("Staff", "Senior", "Staff level", "Sr.", "a Staff
- * role"), or reads alone as one title, whole ("Tech Lead", "Head of Platform", "CTO"). A company, a place or a team is
- * none ("Fernwood Labs", "Payments", "remote"), nor is a phrase that only mentions a role ("reporting to the CTO").
+ * The parts of a bracket that belong to the title right before it (revision 4, Z2), by index in the sentence's words:
+ * each of its comma-separated parts that is a few title words with a seniority word among them ("Staff", "Senior",
+ * "Staff level", "Sr.", "a Staff role"), or reads alone as one title, whole ("Tech Lead", "Head of Platform", "CTO").
+ * A company, a place or a team is none ("Fernwood Labs", "Payments", "remote"), nor is a phrase that only mentions a
+ * role ("reporting to the CTO", "then CTO", "promoted to Director in 2021").
  */
-function titleLikeWords(words: readonly string[]): string[] {
-  const parts: string[][] = [[]];
-  for (const word of words) {
-    parts.at(-1)!.push(word);
-    if (bareWord(word) !== word) parts.push([]);
+function titleLikeParts(words: readonly string[], bracket: Bracket): Bracket[] {
+  const parts: Bracket[] = [];
+  let first = bracket.first;
+  for (let at = bracket.first; at <= bracket.last; at += 1) {
+    if (bareWord(words[at]!) === words[at] && at < bracket.last) continue;
+    if (isTitlePart(words.slice(first, at + 1))) parts.push({ first, last: at });
+    first = at + 1;
   }
-  return parts.filter((part) => part.length > 0 && isTitlePart(part)).flat();
+  return parts;
 }
 
 function isTitlePart(part: readonly string[]): boolean {
@@ -803,12 +827,15 @@ function isTitlePart(part: readonly string[]): boolean {
  *   platform engineer", "a Senior platform engineer"), with "of X" after it,
  *   an article allowed ("director of the platform group", "engineer of the
  *   year"), or after "as", "became", "named", "appointed", "promoted to" or
- *   (revision 4, Z3) "was" ("worked as a platform engineer", "I was the
- *   engineering manager", "I was also engineering manager"; after "was",
+ *   (revision 4, Z3) "was", or (revision 5, Z8) "am" and "I'm" ("worked as
+ *   a platform engineer", "I was the engineering manager", "I was also
+ *   engineering manager", "I am engineering manager"; after "was" or "am",
  *   only a word that names a role, and after a subject other than "I" only
  *   where the phrase ends: "The biggest win was developer tooling" states
- *   none). The words before the role word never reach back past such a
- *   word: "and became engineering manager" states "engineering manager".
+ *   none, and so does "The ledger redesign was a Northwind Labs executive
+ *   priority", Z5). The words before the role word never reach back past
+ *   such a word: "and became engineering manager" states "engineering
+ *   manager".
  * - A role phrase right after "and", "then" or "later", before what ends an
  *   opening title ("Platform Engineer and team lead at …", "…, later platform
  *   architect."), or right before "role", "position" or "title" ("took on the
@@ -816,9 +843,11 @@ function isTitlePart(part: readonly string[]): boolean {
  * - A bracket right after a title that holds a seniority word or a role
  *   phrase is part of that title (revision 4, Z2): "Platform Engineer
  *   (Staff)" states "platform engineer staff", "Staff engineer (Senior)"
- *   states "staff engineer senior". Any other bracket (a company, a place, a
- *   team) stays a separator: "Staff Engineer (Payments)" states "staff
- *   engineer".
+ *   states "staff engineer senior". A title in the bracket's other parts is
+ *   read and compared too (revision 5, Z6): "Platform Engineer (Senior, then
+ *   CTO)" states "platform engineer senior" and "cto". Any other bracket (a
+ *   company, a place, a team) stays a separator: "Staff Engineer (Payments)"
+ *   states "staff engineer".
  *
  * The validator compares titles whole: a sentence's title must equal one its
  * cited claims state, so "Platform Engineer" doesn't pass on a claim that
@@ -835,7 +864,10 @@ function sentenceTitles(sentence: string): string[] {
   const lower = words.map((word) => bareWord(word).toLowerCase());
   const punctuated = words.map((word) => bareWord(word) !== word);
   // The first word is capitalized because it opens the sentence; a word that can't be part of a title isn't one (Y3).
-  const capitalized = words.map((word, at) => isCapitalized(bareWord(word)) && !(at === 0 && NOT_TITLE_OPENERS.has(lower[0]!)));
+  // "I'm" is never part of a title, wherever it stands (Z8).
+  const capitalized = words.map(
+    (word, at) => isCapitalized(bareWord(word)) && !(at === 0 && NOT_TITLE_OPENERS.has(lower[0]!)) && !SELF_BE.has(lower[at]!),
+  );
   /** Whether what follows the word at `at` ends a title there (Y3): a title's follower word, a comma, colon or semicolon, or the sentence's end. */
   const titleFollows = (at: number) => {
     if (at === words.length - 1) return true;
@@ -844,6 +876,28 @@ function sentenceTitles(sentence: string): string[] {
   };
   const found: FoundTitle[] = [];
   const push = (from: number, to: number) => found.push({ key: titleKey(words.slice(from, to + 1)), from, to });
+  /**
+   * Whether "was" or "am" at `was` makes the role phrase ending at `end` a title (Z3, Z8): after "I" (or "My title",
+   * "My role"), in "I'm", or opening the sentence, whatever follows; after another subject, only where the phrase ends
+   * ("Ada was engineering manager at …"). A role word that runs on into another word names a thing: "The biggest win
+   * was developer tooling", "The ledger redesign was a Northwind Labs executive priority" (Z5).
+   */
+  const wasIntroduces = (was: number, end: number) => {
+    if (was === 0 || SELF_BE.has(lower[was]!) || (WAS_SUBJECTS.has(lower[was - 1]!) && !punctuated[was - 1])) return true;
+    if (end === words.length - 1 || punctuated[end]) return true;
+    const next = lower[end + 1]!;
+    return PHRASE_BREAKS.has(next) || AFTER_WAS_TITLE.has(next) || /^\d/.test(next);
+  };
+  /**
+   * Whether the words before `from` make the phrase from there to the role word at `role`, ending at `end`, a title:
+   * "as a …", "became …", "promoted to …"; after "was" or "am", only a word that names a role, where "was" introduces
+   * one (revision 4, Z3; revision 5, Z5 and Z8). The capitalized phrases and the lower-case ones are read alike.
+   */
+  const contextIntroduces = (from: number, role: number, end: number) => {
+    const context = titleContextAt(lower, from);
+    if (context === undefined) return false;
+    return !BE_WORDS.has(context.word) || (namesRole(words[role]!) && wasIntroduces(context.at, end));
+  };
 
   // Capitalized phrases. One capitalized role word opening the sentence is left to the opening rule below.
   let index = 0;
@@ -877,9 +931,11 @@ function sentenceTitles(sentence: string): string[] {
       break;
     }
     // A lower-case role word right after a phrase that raises a title, or stands where a title does, is part of it:
-    // "Senior Platform engineer", "as a Platform engineer". ("Certified Kubernetes administrator" names a certificate.)
-    const titleLike = phrase.some((word) => SENIORITY.has(word.toLowerCase())) || inTitleContext(lower, index);
-    if (!stopped && titleLike && cursor < words.length && !capitalized[cursor] && isRoleNoun(words[cursor]!)) {
+    // "Senior Platform engineer", "as a Platform engineer", "I was a Payments engineer". ("Certified Kubernetes
+    // administrator" names a certificate.) After "was" or "am", as in the lower-case phrases (Z5): "The ledger redesign
+    // was a Northwind Labs executive priority" states none.
+    const roleAfter = !stopped && cursor < words.length && !capitalized[cursor] && isRoleNoun(words[cursor]!);
+    if (roleAfter && (phrase.some((word) => SENIORITY.has(word.toLowerCase())) || contextIntroduces(index, cursor, cursor))) {
       phrase.push(bareWord(words[cursor]!));
       cursor += 1;
     }
@@ -889,11 +945,11 @@ function sentenceTitles(sentence: string): string[] {
 
   // Role phrases in lower case, and the sentence's first word whatever its case.
   const plain = (at: number) => at >= 0 && at < words.length && !PHRASE_BREAKS.has(lower[at]!) && (at === 0 || !capitalized[at]);
-  /** Whether the word at `at` is an adverb right after "was", past other such adverbs: "I was also …", "I was briefly …" (Z3). */
+  /** Whether the word at `at` is an adverb right after "was" or "am", past other such adverbs: "I was also …", "I am currently …" (Z3, Z8). */
   const adverbAfterWas = (at: number) => {
     let back = at;
     while (back >= 0 && WAS_ADVERBS.has(lower[back]!) && !punctuated[back]) back -= 1;
-    return back < at && lower[back] === "was" && !punctuated[back];
+    return back < at && BE_WORDS.has(lower[back] ?? "") && !punctuated[back];
   };
   /** A word the phrase before a role word can take: plain, or a capitalized seniority word ("a Senior platform engineer"); never past punctuation or a context word. */
   const extendsLeft = (at: number) =>
@@ -904,17 +960,6 @@ function sentenceTitles(sentence: string): string[] {
     !LINKING_CONTEXTS.has(lower[at]!) &&
     !adverbAfterWas(at) &&
     (at === 0 ? !NOT_TITLE_OPENERS.has(lower[0]!) : !capitalized[at] || SENIORITY.has(lower[at]!));
-  /**
-   * Whether "was" at `was` makes the role phrase ending at `end` a title (Z3): after "I" (or "My title", "My role") or
-   * opening the sentence, whatever follows; after another subject, only where the phrase ends ("Ada was engineering
-   * manager at …"). A role word that runs on into another word names a thing: "The biggest win was developer tooling".
-   */
-  const wasIntroduces = (was: number, end: number) => {
-    if (was === 0 || (WAS_SUBJECTS.has(lower[was - 1]!) && !punctuated[was - 1])) return true;
-    if (end === words.length - 1 || punctuated[end]) return true;
-    const next = lower[end + 1]!;
-    return PHRASE_BREAKS.has(next) || AFTER_WAS_TITLE.has(next) || /^\d/.test(next);
-  };
   for (let role = 0; role < words.length; role += 1) {
     if ((role > 0 && capitalized[role]) || !isRoleNoun(words[role]!)) continue;
     // Modifiers before the role word: up to three words.
@@ -954,10 +999,10 @@ function sentenceTitles(sentence: string): string[] {
         continue;
       }
     }
-    const contextAt = titleContextAt(lower, left);
-    // After "was", only a word that names a role is a title, where "was" introduces one (revision 4, Z3): "I was
-    // engineering manager", never "was developer-friendly" or "The biggest win was developer tooling".
-    const context = contextAt !== undefined && (contextAt.word !== "was" || (namesRole(words[role]!) && wasIntroduces(contextAt.at, end)));
+    // After "was" or "am", only a word that names a role is a title, where "was" introduces one (revision 4, Z3;
+    // Z8): "I was engineering manager", "I am engineering manager", never "was developer-friendly" or "The biggest win
+    // was developer tooling".
+    const context = contextIntroduces(left, role, end);
     // A phrase that opens the sentence and ends in its role word, before what ends a title (Y3: whatever of those follows).
     const opening = left === 0 && end === role && titleFollows(role);
     // Right after "and", "then" or "later", before what ends a title (Y3): "and team lead at …", ", then engineering manager, at …".
@@ -969,19 +1014,23 @@ function sentenceTitles(sentence: string): string[] {
   }
 
   // A bracket right after a title that holds a seniority word or a role phrase is part of it (revision 4, Z2):
-  // "Platform Engineer (Staff)" states "platform engineer staff", and a title read inside the bracket is that one's.
-  // Any other bracket stays a separator: "Security engineer (Fernwood Labs)", "Staff Engineer (Payments)".
+  // "Platform Engineer (Staff)" states "platform engineer staff", and a title read inside a part that joins it is
+  // that one's. A title in any other part of the bracket is read and compared (revision 5, Z6): "(Senior, then CTO)"
+  // states "cto" too. Any other bracket stays a separator: "Security engineer (Fernwood Labs)", "Staff Engineer
+  // (Payments)".
   let titles = found;
   for (const bracket of brackets) {
     const before = titles.filter((title) => title.to === bracket.first - 1);
     if (before.length === 0) continue;
-    const joined = titleLikeWords(words.slice(bracket.first, bracket.last + 1));
-    if (joined.length === 0) continue;
+    const parts = titleLikeParts(words, bracket);
+    if (parts.length === 0) continue;
+    const joined = parts.flatMap((part) => words.slice(part.first, part.last + 1));
     for (const title of before) {
       title.key = titleKey([...words.slice(title.from, title.to + 1), ...joined]);
       title.to = bracket.last;
     }
-    titles = titles.filter((title) => before.includes(title) || title.from < bracket.first || title.to > bracket.last);
+    const inJoinedPart = (title: FoundTitle) => parts.some((part) => title.from >= part.first && title.to <= part.last);
+    titles = titles.filter((title) => before.includes(title) || !inJoinedPart(title));
   }
   return titles.map((title) => title.key);
 }

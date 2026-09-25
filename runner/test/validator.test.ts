@@ -1293,3 +1293,156 @@ describe("revision 4, Z4: corrections to revision 3's rulings", () => {
     expect(datesIn("Built it in 2019 and counting").presentOnly).toBeUndefined();
   });
 });
+
+/**
+ * Revision 5 (Z5–Z8): the round-5 reviewer's three regressions against 00ff33e, each as whole drafts, and "I am"
+ * read as "I was" is. Extra claims are test-local and fictional, labelled after the fixture's eight.
+ */
+describe("revision 5, Z5: a capitalized phrase after “was” is read as a lower-case one", () => {
+  const paymentsEngineer = confirmedClaim("C10", "title", "Payments engineer at Harbor, 2021–2023.");
+
+  it.each([
+    ["“was a” name and “executive”", "The ledger redesign was a Northwind Labs executive priority [C1]."],
+    ["the same, then more of the sentence", "The ledger redesign was a Northwind Labs executive priority, and I led it [C1]."],
+    ["“was the” name and “partner”", "The on-call rotation tooling was the Fernwood Labs partner favourite, used by three engineering teams [C3]."],
+    ["“was a” name and “developer”", "Ledgerkit was a Harbor developer favourite for ledger reconciliation [C5]."],
+    ["“was the” name and “developer preview”", "The biggest win was the Ledgerkit developer preview for ledger reconciliation [C5]."],
+    ["“was the” name and “lead project”", "The ledger redesign was the Northwind Labs lead project for billing [C1]."],
+    ["“which was a” name and “director”", "Redesigned the ledger service, which was a Northwind Labs director priority [C1]."],
+  ])("passes %s: a role word describing a thing after another subject states no title", (_name, statement) => {
+    expect(rules(resume(statement))).toEqual([]);
+  });
+
+  it("still reads a capitalized phrase and a role word after “I was” as a title, and after another subject where it ends", () => {
+    expect(rulesWith([FERNWOOD_LABS, paymentsEngineer], "I was a Payments engineer at Harbor from 2021 to 2023 [C10].")).toEqual([]);
+    expect(rulesWith([FERNWOOD_LABS, paymentsEngineer], "I was a Payments engineer at Fernwood Labs from 2019 to 2021 [C9].")).toEqual(["title"]);
+    expect(rulesWith([FERNWOOD_LABS, paymentsEngineer], "Ada was a Payments engineer at Fernwood Labs from 2019 to 2021 [C9].")).toEqual(["title"]);
+    expect(rulesWith([FERNWOOD_LABS, paymentsEngineer], "I was a Platform engineer at Fernwood Labs from 2019 to 2021 [C9].")).toEqual([]);
+  });
+
+  it("reads each the way the rule compares it", () => {
+    expect(titlesIn("The ledger redesign was a Northwind Labs executive priority.")).toEqual([]);
+    expect(titlesIn("The biggest win was the Ledgerkit developer preview for ledger reconciliation.")).toEqual([]);
+    expect(titlesIn("I was a Payments engineer at Harbor.")).toEqual(["payments engineer"]);
+    expect(titlesIn("Ada was a Payments engineer at Harbor.")).toEqual(["payments engineer"]);
+    expect(titlesIn("Worked as a Payments engineer at Harbor.")).toEqual(["payments engineer"]);
+  });
+});
+
+describe("revision 5, Z6: a title in a bracket's other parts is read", () => {
+  const senior = confirmedClaim("C13", "title", "Platform Engineer (Senior) at Fernwood Labs, 2019–2021.");
+
+  it.each([
+    ["“(Senior, then CTO)”", "Platform Engineer (Senior, then CTO) at Fernwood Labs, 2019–2021 [C13].", "cto"],
+    ["“(Senior; later Head of Platform)”", "Platform Engineer (Senior; later Head of Platform) at Fernwood Labs, 2019–2021 [C13].", "head of platform"],
+    ["“(Senior, promoted to Director in 2021)”", "Platform Engineer (Senior, promoted to Director in 2021) at Fernwood Labs, 2019–2021 [C13].", "director"],
+  ])("refuses %s against a claim with “(Senior)”, and names the other title", (_name, statement, other) => {
+    const result = validateDraft({ draft: resume(statement), claims: [...LABELLED, senior], postingText: POSTING, coverLetterRequested: false });
+    expect(result.refusals.map((refusal) => refusal.rule)).toEqual(["title"]);
+    expect(result.refusals[0]!.message).toBe(`The title “${other}” must match a title in the claims this sentence cites (C13) word for word.`);
+  });
+
+  it("passes the claim's own bracket, and a claim that states the other title too", () => {
+    expect(rulesWith([senior], "Platform Engineer (Senior) at Fernwood Labs, 2019–2021 [C13].")).toEqual([]);
+    const thenCto = confirmedClaim("C14", "title", "Platform Engineer (Senior, then CTO) at Fernwood Labs, 2019–2021.");
+    expect(rulesWith([thenCto], "Platform Engineer (Senior, then CTO) at Fernwood Labs, 2019–2021 [C14].")).toEqual([]);
+    expect(rulesWith([thenCto], "Platform Engineer (Senior, then Director) at Fernwood Labs, 2019–2021 [C14].")).toEqual(["title"]);
+  });
+
+  it("reads each the way the rule compares it: only a joined part's own title goes with it", () => {
+    expect(titlesIn("Platform Engineer (Senior, then CTO) at Fernwood Labs.")).toEqual(["platform engineer senior", "cto"]);
+    expect(titlesIn("Platform Engineer (Senior; later Head of Platform) at Fernwood Labs.")).toEqual(["platform engineer senior", "head of platform"]);
+    expect(titlesIn("Platform Engineer (Senior, promoted to Director in 2021) at Fernwood Labs.")).toEqual(["platform engineer senior", "director"]);
+    expect(titlesIn("Platform Engineer (Staff Engineer) at Fernwood Labs.")).toEqual(["platform engineer staff engineer"]);
+    expect(titlesIn("Platform Engineer (Tech Lead, Payments) at Fernwood Labs.")).toEqual(["platform engineer tech lead"]);
+  });
+});
+
+describe("revision 5, Z7: “scores of” after a determiner or a possessive pronoun is a count", () => {
+  const mentoring = confirmedClaim("C14", "fact", "Mentored engineers joining the Harbor platform team.");
+
+  it.each([
+    ["“the”", "Mentored the scores of engineers who joined the Harbor platform team [C14]."],
+    ["“their”", "Mentored their scores of new engineers joining the Harbor platform team [C14]."],
+    ["“our”", "Mentored our scores of engineers joining the Harbor platform team [C14]."],
+    ["“these”", "Mentored these scores of engineers joining the Harbor platform team [C14]."],
+    ["“its”", "Mentored its scores of engineers joining the Harbor platform team [C14]."],
+    ["“the many”", "Mentored the many scores of engineers joining the Harbor platform team [C14]."],
+    ["“top”, which is no noun", "Mentored top scores of engineers joining the Harbor platform team [C14]."],
+    ["“It's”, which is “It is”", "It's scores of engineers joining the Harbor platform team that I mentored [C14]."],
+  ])("refuses the count after %s", (_name, statement) => {
+    expect(rulesWith([mentoring], statement)).toEqual(["number"]);
+  });
+
+  it("still passes “scores” after a noun or a possessive", () => {
+    const redesigned = "Redesigned the ledger service behind Northwind Labs' billing, which feeds";
+    for (const statement of [
+      `${redesigned} Harbor's scores of risk [C1].`,
+      `${redesigned} the high scores of the release checks [C1].`,
+      `${redesigned} the credit scores of merchants [C1].`,
+      `${redesigned} its onboarding scores of merchants [C1].`,
+    ]) {
+      expect(rules(resume(statement)), statement).toEqual([]);
+    }
+  });
+
+  it("reads each as written, and a claim's own count after “the” passes", () => {
+    expect(
+      numbersIn("the scores of engineers, their scores of teams, our scores of engineers, these scores of engineers, the many scores of engineers, top scores of engineers, it's scores of engineers").map(
+        (fact) => fact.key,
+      ),
+    ).toEqual(["scores of", "scores of", "scores of", "scores of", "scores of", "scores of", "scores of"]);
+    expect(numbersIn("Harbor's scores of risk, the credit scores of merchants, its onboarding scores of merchants, the combined scores of merchants, the high scores of the checks")).toEqual([]);
+    const counted = confirmedClaim("C15", "fact", "Mentored the scores of engineers who joined the Harbor platform team.");
+    expect(rulesWith([counted], "Mentored the scores of engineers who joined the Harbor platform team [C15].")).toEqual([]);
+  });
+});
+
+describe("revision 5, Z8: a title after “I am”", () => {
+  // C9 is FERNWOOD_LABS, "Platform Engineer at Fernwood Labs, 2019–2021."; C10 and C11 say "engineering manager", C11 open.
+  const harborManager = confirmedClaim("C10", "title", "Engineering manager at Harbor, 2021–2023.");
+  const harborNow = confirmedClaim("C11", "title", "Engineering manager at Harbor since 2021.");
+  const claims = [FERNWOOD_LABS, harborManager, harborNow];
+
+  it.each([
+    ["“I am” and a role phrase", "I am engineering manager at Fernwood Labs [C9]."],
+    ["“I am the” and a role phrase", "I am the engineering manager at Fernwood Labs [C9]."],
+    ["“I'm” and a role phrase", "I'm engineering manager at Fernwood Labs [C9]."],
+    ["“I am also” and a role phrase", "I am also engineering manager at Fernwood Labs [C9]."],
+    ["“I am” mid-sentence", "At Fernwood Labs I am engineering manager for the platform group [C9]."],
+    ["“I am” and a role phrase running on", "I am engineering manager overseeing the Fernwood Labs billing team [C9]."],
+    ["“I'm” mid-sentence and a role phrase running on", "At Fernwood Labs I'm engineering manager overseeing the billing team [C9]."],
+  ])("refuses %s against a claim that says otherwise", (_name, statement) => {
+    expect(rulesWith(claims, statement)).toEqual(["title"]);
+  });
+
+  it("passes the claim's own title after “I am” and “I'm”", () => {
+    for (const statement of [
+      "I am a Platform Engineer at Fernwood Labs [C9].",
+      "I am Platform Engineer at Fernwood Labs [C9].",
+      "I am platform engineer at Fernwood Labs [C9].",
+      "I'm Platform Engineer at Fernwood Labs [C9].",
+      "At Fernwood Labs I'm Platform Engineer for the platform group [C9].",
+      "I am engineering manager at Harbor [C10].",
+      "I'm the engineering manager at Harbor [C10].",
+      "I am currently engineering manager at Harbor [C11].",
+      "I am now the engineering manager at Harbor [C11].",
+    ]) {
+      expect(rulesWith(claims, statement), statement).toEqual([]);
+    }
+  });
+
+  it("reads no title after “I am” without a role word", () => {
+    for (const text of ["I am responsible for the Harbor ledger service.", "I am on the Harbor platform team.", "I am proud of the Ledgerkit developer preview."]) {
+      expect(titlesIn(text), text).toEqual([]);
+    }
+  });
+
+  it("reads each the way the rule compares it", () => {
+    expect(titlesIn("I am engineering manager at Fernwood Labs.")).toEqual(["engineering manager"]);
+    expect(titlesIn("I'm engineering manager at Fernwood Labs.")).toEqual(["engineering manager"]);
+    expect(titlesIn("I am currently the engineering manager at Harbor.")).toEqual(["engineering manager"]);
+    expect(titlesIn("I'm Platform Engineer at Fernwood Labs.")).toEqual(["platform engineer"]);
+    expect(titlesIn("I am a Payments engineer at Harbor.")).toEqual(["payments engineer"]);
+  });
+});
