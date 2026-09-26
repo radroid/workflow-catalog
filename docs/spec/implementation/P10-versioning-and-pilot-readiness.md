@@ -1,6 +1,6 @@
 # P10 · Package versioning, upgrade, and pilot readiness
 
-Status: part B ready for review
+Status: done (part A 2026-09-25, PR #22, squash 2bf591b; part B 2026-09-25, PR #25, squash 50016c3)
 Assignee: manual session (Sonnet), part B
 Blocked by: P02–P09
 Owns: runner/upgrade/, runner/server/routes/upgrade.ts, runner/ui/settings.html (upgrade section), packages/job-assistant/CHANGELOG.md, docs/pilot/
