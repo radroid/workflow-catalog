@@ -298,6 +298,94 @@ only this round's own doc edits (no stray build artifacts).
 
 Head after this round, CI run id and result: see the final reply.
 
+### 2026-09-25 — Part B gate fix round 2 (manual session)
+
+The re-check confirmed B1b, B2 and B3 done and the code already behaving
+correctly for B1a and F11; the orchestrator scoped this round to tests
+only ("change no production code unless a new test shows a real bug") —
+none did. Four items, each mutation-proved against the reviewer's named
+mutation before being committed:
+
+1. **B1a, the `/status` route.** The existing `networkForbiddenDeps`-based
+   test only checked the response shape, and the review noted its throw
+   is swallowed inside `fetchBytes` into a graceful `{ok:false,
+   reason:"dns_failed"}` — so a route that made a network call and
+   ignored the failure would still pass. Added
+   `runner/test/upgrade-fixtures.ts`'s (already-present)
+   `recordingUpgradeDeps` to `upgrade-route.test.ts` › "GET
+   /api/upgrade/status" as a new primary test asserting `calls` is `[]`
+   after the request — a true call-count proof, not an outcome-shape
+   one. Kept the old `networkForbiddenDeps` test alongside it ("belt and
+   suspenders"). **Mutation:** added `await checkForUpgrade(currentVersion,
+   deps).catch(() => undefined);` to the `/status` handler (the
+   reviewer's exact bug) — the new spy test failed (`calls` was
+   `["release_lookup"]`) while the old shape-only test still passed 200
+   with the right body, exactly confirming the review's diagnosis;
+   reverted, both pass.
+2. **F11, the page.** Added `runner/test/settings-upgrade-page.test.ts`, a
+   happy-dom page test in the shape of `sessions-page.test.ts` /
+   `board-page.test.ts`, loading Settings with `settings-upgrade.js` and
+   asserting the load requests only `/api/upgrade/status`, and only a
+   press of Check-for-updates additionally requests `/api/upgrade`.
+   Required extending `runner/test/page-harness.ts`'s `openUiPage` with
+   two new optional fields, `script` (the `assets/<name>.js` to import,
+   when it differs from `page`) and `liveRegionId` (defaults to
+   `"last-action"`) plus a lenient live-region reader (Settings has three
+   scripts and a plain `#status-message` text node, not the harness's
+   built-in single-script/`#last-action`+`.text`-child assumption). Both
+   are backward-compatible no-ops for existing callers when omitted —
+   confirmed by re-running `sessions-page.test.ts` and `board-page.test.ts`
+   (9 tests) unchanged. **Mutation:** pointed `loadStatus()` at
+   `/api/upgrade` instead of `/api/upgrade/status` (the reviewer's exact
+   bug) — the new test failed (`page.requests` was `["GET
+   /api/upgrade"]`); reverted, passed.
+3. **Checksum before read.** Added `upgrade-core.test.ts` › "applyUpgrade"
+   › "the checksum is verified before the tarball is ever read or parsed
+   …": a garbage, non-gzip/non-tar buffer paired with a wrong checksum.
+   A correct implementation reports `checksum_mismatch` without ever
+   reaching the parse step that would otherwise throw
+   `TarballReadError`. **Mutation:** swapped the order in `applyUpgrade`
+   so `readFileFromReleaseTarball` ran before `verifyChecksum` — the new
+   test failed (`unpack_failed` instead of `checksum_mismatch`, from the
+   garbage bytes throwing during parse); reverted, passed.
+4. **The regression.** Restored the two tests the gate flagged as dropped,
+   now directly against `applyUpgrade`: "refuses (unpack_failed) when the
+   verified tarball has no package/workflow.json" and "refuses
+   (invalid_manifest) when workflow.json's own version disagrees with the
+   release tag." **Mutations, per the review:** dropping the
+   tag-vs-`workflow.json`-version refusal made the `invalid_manifest`
+   test fail immediately (the real 0.1.0→0.2.0 migration ran to
+   completion, flipping the result to `"upgraded"`); reverted, passed.
+   Dropping the missing-`workflow.json` refusal did *not* fail the
+   `unpack_failed` test on the reason code alone — the following
+   `JSON.parse(Buffer.from(undefined)…)` call happens to throw and land
+   in a different catch block that reuses the same `"unpack_failed"`
+   reason string, just with a different message. Strengthened the test
+   to also assert the exact message
+   (`"The release tarball has no package/workflow.json."`); re-ran with
+   the mutation still in place — now failed correctly (message was "…is
+   not valid JSON." instead); reverted, passed. This message assertion
+   is a strengthening, not a weakening: it is what makes the restored
+   test able to catch the reviewer's actual regression.
+
+After every mutation-proof, `git diff --stat` on `runner/upgrade/upgrade.ts`,
+`runner/server/routes/upgrade.ts`, and `runner/ui/assets/settings-upgrade.js`
+was checked clean before moving to the next item; the round's committed
+diff is exactly `runner/test/page-harness.ts`,
+`runner/test/upgrade-core.test.ts`, `runner/test/upgrade-route.test.ts`,
+and the new `runner/test/settings-upgrade-page.test.ts` — zero production
+code changed.
+
+**Chain:** merged with current `origin/overnight/integration` — already up
+to date, no new commits since round 1. `pnpm typecheck` (exit 0, 6/6),
+`pnpm test` (exit 0: contracts 244, job-assistant 153, apps/catalog 168,
+runner 2206 + 7 evals/161 gates — the 5 new/reworked tests from this round
+included, up from round 1's 2201 —, extension 428/5 skipped,
+fixtures-policy 2/2), `pnpm -r lint` (exit 0, 6/6), `pnpm check:fixtures`
+(exit 0). `git status --porcelain` empty after committing.
+
+Head after this round, CI run id and result: see the final reply.
+
 ### 2026-09-25 — Gate fix round 1 (manual session, Sonnet)
 
 Fixed all 7 BLOCKING items from the gate review (`/tmp/wc-manual/P10-A-gate-review.md`, PR #22 head `50171a1`). FOLLOW-UPs F1–F23 were not touched, per instruction. Merged `origin/overnight/integration` first (now `9e2866e`, includes P08-B as `c33689a`); clean merge.
