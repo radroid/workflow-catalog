@@ -1,0 +1,3 @@
+# Local PGlite data directory (see lib/db/index.ts). Dev-only; production
+# uses Neon via DATABASE_URL and never touches this.
+.data/

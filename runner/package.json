@@ -1,0 +1,39 @@
+{
+  "name": "@workflow-catalog/runner",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The job-assistant runner: a pinned eve@0.63.0 agent (mode A, eve build + eve start on 127.0.0.1:3210) and the Hono bridge on 127.0.0.1:4310. Used from a whole-repo clone; see README.md.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "setup": "node --import ./lib/register-ts.mjs cli/setup.ts",
+    "doctor": "node --import ./lib/register-ts.mjs cli/doctor.ts",
+    "runner": "node --import ./lib/register-ts.mjs cli/runner.ts",
+    "pair": "node --import ./lib/register-ts.mjs cli/pair.ts",
+    "ui": "node --import ./lib/register-ts.mjs cli/ui.ts",
+    "upgrade": "node --import ./lib/register-ts.mjs cli/upgrade.ts",
+    "eval": "node --import ./lib/register-ts.mjs cli/eval.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0 --ignore-pattern '.eve/**' --ignore-pattern '.output/**' --ignore-pattern '.nitro/**' --ignore-pattern 'eval-agent/.eve/**' --ignore-pattern 'eval-agent/.output/**'",
+    "test": "vitest run && node --import ./lib/register-ts.mjs cli/eval.ts"
+  },
+  "dependencies": {
+    "@expo-google-fonts/noto-sans": "0.4.2",
+    "@hono/node-server": "2.1.1",
+    "@workflow-catalog/contracts": "workspace:*",
+    "@workflow-catalog/job-assistant-eve": "workspace:*",
+    "ai": "7.0.107",
+    "docx": "9.5.2",
+    "eve": "0.63.0",
+    "fflate": "0.8.3",
+    "hono": "4.13.8",
+    "pdfkit": "0.20.2",
+    "unpdf": "1.8.1",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "happy-dom": "20.14.5"
+  }
+}

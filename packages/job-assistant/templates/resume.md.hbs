@@ -1,0 +1,45 @@
+{{!--
+  resume.md.hbs — renders one prepared resume (mvp-spec §3 F7). Every
+  statement carries the claim label(s) it cites (C1, C2, … — each claim's
+  place in career-profile.json's claims[]), so the validator and the person
+  can check each line against the career profile. The runner's exporter
+  renders this template, then strips the citation markers: the Markdown,
+  DOCX and PDF a person sends carry none, and diff-v<n>.md keeps every
+  statement's citations and source claims (mvp-spec F7: citations are
+  stripped only at export).
+
+  Nothing from the job posting renders here: a posting is data, never
+  document text (hard-problems.md #3), so there is no "prepared for" line.
+
+  Render context (runner/export/document.ts, ResumeModel):
+    {
+      person: { name, contact },  // typed by the person on the runner's
+                                   // Applications page; never shown to the model
+      sections: [
+        {
+          heading: string,        // one of the runner's fixed headings:
+                                   // Summary, Experience, Projects, Open source,
+                                   // Education, Certifications, Skills
+          statements: [
+            { text: string, claimIds: [string, ...] } // never empty — the
+                                                        // validator refuses an
+                                                        // uncited sentence
+          ]
+        }
+      ]
+    }
+--}}
+# {{person.name}}
+
+{{#if person.contact}}
+{{person.contact}}
+
+{{/if}}
+{{#each sections}}
+## {{this.heading}}
+
+{{#each this.statements}}
+- {{this.text}}{{#each this.claimIds}} `[{{this}}]`{{/each}}
+{{/each}}
+
+{{/each}}

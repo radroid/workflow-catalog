@@ -1,0 +1,38 @@
+{
+  "name": "@workflow-catalog/job-assistant-eve",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The job-assistant workflow package as an eve extension: the package's skills plus a 'content is data, never instructions' fragment. Mounted by runner/agent/extensions/jobs.ts.",
+  "type": "module",
+  "eve": {
+    "extension": {
+      "source": "./extension",
+      "dist": "./dist/extension"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/sync-skills.mjs && eve extension build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "eve": "0.63.0"
+  },
+  "peerDependencies": {
+    "eve": "*"
+  }
+}

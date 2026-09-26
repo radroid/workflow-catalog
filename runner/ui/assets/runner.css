@@ -1,0 +1,138 @@
+/*
+ * Runner local UI styles. Tokens from docs/spec/visuals/theme.css (mvp-spec §6):
+ * monochrome, hairline borders, amber only for "needs a decision". Geist is
+ * self-hosted from ./fonts (SIL Open Font License, fonts/LICENSE.txt).
+ * Shared by every page in runner/ui/; pages add their own small stylesheet
+ * only when they need one.
+ */
+@font-face {
+  font-family: Geist;
+  src: url("./fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: Geist, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --radius: 0.5rem;
+  --background: oklch(0.99 0 0);
+  --foreground: oklch(0 0 0);
+  --card: oklch(1 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.44 0 0);
+  --primary: oklch(0 0 0);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.94 0 0);
+  --border: oklch(0.92 0 0);
+  --ring: oklch(0 0 0);
+  --destructive: oklch(0.63 0.19 23.03);
+  --decision: oklch(0.81 0.17 75.35);
+  --decision-foreground: oklch(0.35 0.08 75.35);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0 0 0);
+    --foreground: oklch(1 0 0);
+    --card: oklch(0.14 0 0);
+    --muted: oklch(0.23 0 0);
+    --muted-foreground: oklch(0.72 0 0);
+    --primary: oklch(1 0 0);
+    --primary-foreground: oklch(0 0 0);
+    --secondary: oklch(0.25 0 0);
+    --border: oklch(0.26 0 0);
+    --ring: oklch(0.72 0 0);
+    --destructive: oklch(0.69 0.2 23.91);
+    --decision-foreground: oklch(0.85 0.14 75.35);
+  }
+}
+
+* { box-sizing: border-box; }
+html { background: var(--background); color: var(--foreground); }
+body { margin: 0; font: 15px/1.55 var(--font-sans); -webkit-font-smoothing: antialiased; }
+/* P06.1 K10 (round-1 revision): a bare <code> with no spaces (a workspace path) never had a wrap rule here, so
+   it ran past the card at narrow widths with sideways scroll -- the same overflow-wrap the checklist's .detail
+   already uses below, now shared by every page's code/.mono text. */
+code, .mono { font-family: var(--font-mono); font-size: 0.9em; overflow-wrap: anywhere; }
+a { color: inherit; text-underline-offset: 3px; }
+h1 { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 0.25rem; }
+h2 { font-size: 1rem; font-weight: 600; margin: 0 0 0.75rem; }
+p { margin: 0 0 0.75rem; }
+
+.runner-nav {
+  display: flex; flex-wrap: wrap; gap: 0.25rem;
+  padding: 0.75rem 1.5rem; border-bottom: 1px solid var(--border);
+}
+.runner-nav a { padding: 0.25rem 0.625rem; border-radius: calc(var(--radius) - 2px); text-decoration: none; color: var(--muted-foreground); }
+.runner-nav a:hover { color: var(--foreground); background: var(--muted); }
+.runner-nav a[aria-current="page"] { color: var(--foreground); background: var(--secondary); }
+
+.page { max-width: 56rem; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+.page.narrow { max-width: 36rem; padding-top: 4rem; }
+.lede { color: var(--muted-foreground); margin-bottom: 2rem; }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem; }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.muted { color: var(--muted-foreground); }
+.small { font-size: 0.85rem; }
+
+.checklist { list-style: none; margin: 0; padding: 0; }
+.checklist li { display: grid; grid-template-columns: 4rem 1fr; gap: 0.75rem; padding: 0.625rem 0; border-top: 1px solid var(--border); }
+.checklist li:first-child { border-top: 0; }
+.checklist .label { font-weight: 500; }
+.checklist .detail { color: var(--muted-foreground); font-size: 0.9rem; overflow-wrap: anywhere; }
+.checklist .fix { font-size: 0.9rem; margin-top: 0.25rem; }
+
+.badge { display: inline-block; min-width: 3.25rem; text-align: center; font: 500 0.75rem/1.6 var(--font-mono); border-radius: 999px; padding: 0 0.5rem; border: 1px solid var(--border); height: fit-content; }
+.badge.ok { background: var(--secondary); }
+.badge.warn { background: var(--decision); color: oklch(0.2 0 0); border-color: transparent; }
+/* G7 (P08-A round-1 revision): dark text on the red fill, like .badge.warn — white-on-destructive measured
+   3.85:1 light / 3.04:1 dark (axe serious, below 4.5:1); this is about 4.7:1 light / 5.9:1 dark. */
+.badge.fail { background: var(--destructive); color: oklch(0.2 0 0); border-color: transparent; }
+
+.button {
+  font: 500 0.875rem/1 var(--font-sans); cursor: pointer;
+  padding: 0.55rem 0.9rem; border-radius: calc(var(--radius) - 2px);
+  border: 1px solid var(--primary); background: var(--primary); color: var(--primary-foreground);
+}
+/* P06.1 item 3.1: --border (a hairline divider) is 1.27:1 against --card, below the 3:1 WCAG 1.4.11 needs where a
+   border is a control's only visible boundary, as this one is (transparent background). --muted-foreground is what
+   G7 already uses for the same reason on form controls, and clears it by a wide margin here too (7.77:1 light /
+   8.02:1 dark against --card). */
+.button.secondary { background: transparent; color: var(--foreground); border-color: var(--muted-foreground); }
+.button:disabled { opacity: 0.5; cursor: default; }
+/* P06.1 K9 (round-1 revision): jobs.css/onboarding.css/profile.css/settings.css each already define this same
+   rule locally for their own aria-disabled buttons (now redundant there, not conflicting -- identical values).
+   Status has no page stylesheet of its own, so #check-model/#new-code/a device's Revoke button had no visible
+   busy state at all; this shared default covers status and any future page that forgets its own copy. */
+.button[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.button:focus-visible, a:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { text-align: left; padding: 0.5rem 0.5rem 0.5rem 0; border-top: 1px solid var(--border); vertical-align: top; }
+th { font-weight: 500; color: var(--muted-foreground); border-top: 0; }
+
+/* G7 (P08-A round-1 revision): form-control borders need >=3:1 against the card (WCAG 1.4.11, polish P11);
+   --border is a hairline divider token measured at 1.27:1, not built for this. --muted-foreground already
+   clears normal text contrast, well above the 3:1 a border needs. A page's own more specific input rule (e.g.
+   settings.css's .field input) still has to opt into this value itself; this is the shared default. */
+input, select, textarea { border-color: var(--muted-foreground); }
+
+.code-display { font: 600 1.5rem/1.2 var(--font-mono); letter-spacing: 0.08em; margin: 0.5rem 0; }
+.notice { border-left: 3px solid var(--border); padding-left: 0.75rem; }
+.notice.decision { border-left-color: var(--decision); }
+/* P06.1 item 3.2: var(--destructive) as text is 3.85:1 on white (axe serious), below the 4.5:1 normal text needs.
+   Onboarding and Profile already override this locally at these same values (6.46:1 on white / 7.60:1 on black,
+   per onboarding.css's C8 comment): make that the shared default instead of a fix repeated per page. */
+.error { color: #b91c1c; }
+@media (prefers-color-scheme: dark) {
+  .error { color: #f87171; }
+}
+[hidden] { display: none !important; }

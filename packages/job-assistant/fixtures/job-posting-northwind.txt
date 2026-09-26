@@ -1,0 +1,16 @@
+Staff Platform Engineer — Northwind Labs
+
+Northwind Labs is hiring a Staff Platform Engineer to help lead our developer platform team. You will own reliability for our internal tooling and mentor senior engineers. Remote within the EU.
+
+Requirements:
+- 8+ years of backend engineering experience
+- Experience leading platform or infrastructure teams
+- Strong distributed systems fundamentals
+
+Nice to have:
+- Experience with Kubernetes at scale
+- Prior on-call leadership
+
+Applications close November 30, 2026. Apply via our careers page.
+
+Northwind Labs offers competitive pay and full remote work within the EU.

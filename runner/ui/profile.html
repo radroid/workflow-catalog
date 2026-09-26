@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Profile · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/profile.css" />
+    <script type="module" src="/ui/assets/profile.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1 id="page-title" tabindex="-1">Career profile</h1>
+      <p class="lede">The document everything else is drafted from: confirmed claims only, and only once you approve it. After that, an edit proposes a revision instead of changing an approved fact outright.</p>
+
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><div class="last-action-body"><span class="tag">Last action</span><span class="visually-hidden">: </span><span class="text">Nothing yet.</span></div></div>
+      <p id="page-error" class="error" role="alert" hidden></p>
+
+      <section class="card problem" id="markdown-problem" aria-labelledby="markdown-problem-title" aria-describedby="markdown-problem-text" tabindex="-1" hidden>
+        <h2 id="markdown-problem-title">career-profile.md has an edit the runner can't read</h2>
+        <p id="markdown-problem-text"></p>
+        <p class="muted small">Until it is fixed, no change to your profile can be saved. The box below shows the file as it is now. Fix the line in your editor, then reload this page. Or discard your edits: the file is rewritten from your profile, and your edits to it are lost. Text you typed in the box and haven't saved stays there.</p>
+        <button class="button" type="button" id="markdown-discard">Discard my edits to career-profile.md</button>
+      </section>
+
+      <section class="card withdrawn" id="withdrawal" aria-labelledby="withdrawal-title" hidden>
+        <h2 id="withdrawal-title"></h2>
+        <div id="withdrawal-body"></div>
+      </section>
+
+      <section class="card" aria-labelledby="status-title">
+        <h2 id="status-title">Status</h2>
+        <p id="status-summary"></p>
+        <ul id="status-steps" class="status-steps" hidden></ul>
+      </section>
+
+      <section class="card" aria-labelledby="revisions-title" id="revisions-section">
+        <h2 id="revisions-title" tabindex="-1">Pending revisions</h2>
+        <p class="muted small">An edit to an approved profile waits here. The current version stays in force until you accept it; documents already prepared keep saying which version they used.</p>
+        <div id="revisions"></div>
+      </section>
+
+      <section class="card" aria-labelledby="markdown-title">
+        <h2 id="markdown-title">career-profile.md</h2>
+        <p class="muted small" id="markdown-help">Each line ends with a marker in backticks. Edit the words before a marker, then save. Keep every marker exactly as it is: a line can't be added, removed or moved by editing the file, so use the <a href="/ui/onboarding">Onboarding</a> page for that.</p>
+        <label for="markdown-editor" id="markdown-editor-label">The file's text</label>
+        <textarea id="markdown-editor" class="markdown-editor" spellcheck="false" aria-describedby="markdown-help"></textarea>
+        <p id="markdown-editor-error" class="field-error" hidden></p>
+        <div class="markdown-actions">
+          <button class="button" type="button" id="save-markdown">Save edits</button>
+          <button class="button secondary" type="button" id="drop-markdown" hidden>Drop my unsaved changes</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

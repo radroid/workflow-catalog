@@ -1,0 +1,255 @@
+/* The board (P06): extends runner.css tokens (docs/spec/visuals/theme.css). The live line and fields follow
+   application.css (P05), copied rather than shared because each page owns its own stylesheet. Amber
+   (--decision) marks one thing only: a preparation waiting on the person's answer. */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+html {
+  scroll-padding-top: var(--last-action-offset, 5rem);
+  overflow-anchor: none;
+}
+main code {
+  overflow-wrap: anywhere;
+}
+.page.wide {
+  max-width: 76rem;
+}
+
+/* The sticky "Last action" line, the page's one live region. */
+.last-action {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 0 1.25rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--muted);
+  border-left: 3px solid var(--border);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  box-shadow: 0 1px 0 var(--border);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.last-action .tag {
+  display: block;
+  font: 500 0.675rem/1.5 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.last-action code {
+  font: 0.95em var(--font-mono);
+}
+.last-action.done {
+  border-left-color: var(--foreground);
+}
+.last-action.refused {
+  border-left-color: var(--destructive);
+}
+@media (max-width: 640px) {
+  .last-action {
+    padding: 0.375rem 0.625rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+  }
+  .last-action-body {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .last-action .tag {
+    display: inline;
+    margin-right: 0.375rem;
+  }
+}
+
+[tabindex="-1"]:focus {
+  outline: none;
+}
+[tabindex="-1"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.board-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 1rem;
+  align-items: start;
+}
+.board-top .card {
+  margin-bottom: 0;
+}
+@media (max-width: 760px) {
+  .board-top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.runs-line,
+.sync-line {
+  border-left: 3px solid var(--border);
+  padding-left: 0.6rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.runs-line.blocked {
+  border-left-color: var(--destructive);
+}
+.sync-line {
+  margin-top: 0.85rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.6rem;
+}
+.field label {
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+.field input,
+.move-row select {
+  max-width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--muted-foreground);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+.field input {
+  width: 100%;
+}
+.field input:focus-visible,
+.move-row select:focus-visible,
+.pick input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+#start-chosen {
+  overflow-wrap: anywhere;
+}
+
+.button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The stages: four columns at a desktop width, one below another on a phone. */
+.board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+@media (max-width: 1000px) {
+  .board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.stage {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+  min-width: 0;
+}
+.stage h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.6rem;
+}
+.stage > p {
+  margin: 0;
+}
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.board-card {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0.6rem 0.7rem;
+  background: var(--background);
+  min-width: 0;
+}
+.board-card p {
+  margin: 0 0 0.3rem;
+  overflow-wrap: anywhere;
+}
+.card-name {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0 0.3rem;
+}
+.pick input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0.2rem 0 0;
+  flex: none;
+  accent-color: var(--foreground);
+}
+.pick label {
+  cursor: pointer;
+  min-width: 0;
+}
+.card-state {
+  overflow-wrap: anywhere;
+}
+.card-state.refused {
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.5rem;
+}
+.card-state.decision {
+  border-left: 3px solid var(--decision);
+  padding-left: 0.5rem;
+}
+.move-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+.move-row select {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+}
+.button.move {
+  padding: 0.4rem 0.75rem;
+}
+.unreadable {
+  border-left: 3px solid var(--destructive);
+  padding-left: 0.6rem;
+  margin-top: 1rem;
+  overflow-wrap: anywhere;
+}

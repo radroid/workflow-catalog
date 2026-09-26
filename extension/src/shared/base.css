@@ -1,0 +1,376 @@
+/*
+ * Base rules shared by every extension page. Design tokens themselves
+ * come from theme.css, loaded via a plain `<link rel="stylesheet"
+ * href="/theme.css">` in each page's <head> — a root-absolute href, which
+ * Vite's HTML transform leaves untouched, resolving against
+ * extension/public/theme.css (copied at build time from
+ * docs/spec/visuals/theme.css by scripts/copy-static-assets.mjs; never
+ * edited here). This file only *consumes* those tokens via var(...) and
+ * never redefines them.
+ *
+ * Font files are self-hosted the same way (extension/public/fonts/,
+ * copied from the pinned `geist` package) and referenced here with
+ * url("/fonts/...") — a root-absolute CSS url(), which Vite also leaves
+ * untouched rather than trying to bundle/hash it.
+ */
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* P07-B revision 1: the `hidden` attribute's UA-stylesheet `display: none`
+ * is the lowest-priority origin in the cascade -- any author rule that
+ * sets `display` on the same element (e.g. .stack/.row's own `display:
+ * flex`, needed for their own visible-state layout) silently wins over it
+ * whenever that class also happens to be the one thing toggling hidden,
+ * same specificity or not. Caught for real (never in a jsdom/happy-dom
+ * unit test, which only checks the `hidden` *property*, not an actual
+ * browser's layout) once a real screenshot showed the Pairing section's
+ * "Pair again"-collapsed code form -- a `.stack`, hidden via exactly this
+ * -- fully visible instead. This one rule makes `hidden` win everywhere,
+ * regardless of what other classes an element carries. */
+[hidden] {
+  display: none !important;
+}
+
+html {
+  color-scheme: light dark;
+  /* theme.css has no --amber token by name, but --chart-1 is the exact
+   * same oklch(0.81 0.17 75.35) value docs/spec/visuals/index.html uses
+   * for its --amber, in both light and dark (chart-1 is the one token
+   * that doesn't change between the two theme.css blocks). Aliasing it
+   * here reads clearly at each call site below without hand-picking a
+   * color of our own. */
+  --amber: var(--chart-1);
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.pad {
+  padding: 14px 16px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kv {
+  /* Always a <dl> (options/main.ts, popup/render.ts) -- resets the UA
+   * stylesheet's default `dl { margin: 1em 0 }`, which otherwise added
+   * unwanted vertical space around every key/value block on both pages. */
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  font-size: 12.5px;
+}
+
+.kv dt {
+  color: var(--muted-foreground);
+}
+
+.kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+button {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+button:hover {
+  background: var(--muted);
+}
+
+button.primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+button.primary:hover {
+  opacity: 0.9;
+}
+
+/* P07-B revision 2, C4: a secondary action still looks like a button --
+ * the design reference's ghost button (docs/spec/visuals/index.html)
+ * drops the fill and the shadow but keeps the 1px border. With the border
+ * made transparent, "Pair again", "Check again", "Save as a file" and
+ * "Open settings" read as plain text. */
+button.ghost {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* An inert button looks inert: "Saved ✓", Save while "Saving…", Pair while
+ * "Pairing…" (aria-disabled, so each keeps focus -- see popup/render.ts and
+ * options/main.ts), and "No capture saved yet" (disabled). P07-B revision 3
+ * polish: a muted fill and muted text instead of revision 2's 50% opacity,
+ * which took "Saved ✓" down to 3.99:1 in light; muted-foreground on muted
+ * is about 7:1 in both themes. Hovering changes nothing. After every other
+ * button rule, several of which set the same properties at the same
+ * specificity. */
+button:disabled,
+button:disabled:hover,
+button[aria-disabled="true"],
+button[aria-disabled="true"]:hover {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  border-color: var(--border);
+  opacity: 1;
+  cursor: default;
+  box-shadow: none;
+}
+
+input[type="text"] {
+  font: inherit;
+  font-size: 13px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  width: 100%;
+}
+
+/* Review fold-in: an invalid pairing code (empty, malformed, or refused by
+ * the bridge -- wrong/expired/withdrawn) gets a real border colour change,
+ * not just the field's paired <p role="status"> text -- someone scanning
+ * the form by eye, not reading every status line, should still see which
+ * field is wrong. Applies to any text input options/main.ts marks invalid,
+ * not just the pairing code specifically. */
+input[type="text"][aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+.pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  white-space: nowrap;
+}
+
+.pill.ok {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+.pill.warn {
+  background: var(--amber);
+  color: #000;
+  border-color: var(--amber);
+}
+
+.pill.bad {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  border-color: var(--destructive);
+}
+
+.excerpt {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  /* Scrollable, not clipped: every saved character stays reachable (review
+   * issue 8 -- a clamped-and-hidden excerpt let saved text, including a
+   * hostile posting's injected instructions, go completely unseen). */
+  max-height: 10em;
+  overflow-y: auto;
+  line-height: 1.5;
+  /* A visible scroll cue (UI critic fold-in, part A): a native scrollbar
+   * alone can be easy to miss -- an overlay scrollbar only appears on
+   * hover on some platforms, and there's nothing here besides it hinting
+   * that the excerpt continues past the fold. A soft inset shadow at the
+   * bottom edge, built from the same border token every card/input already
+   * borders with, reads as "there's more below" in both themes without a
+   * hard-coded colour. It's painted on the box itself, so -- unlike a
+   * background scrolling with the content -- it stays pinned at the edge
+   * regardless of scroll position. `scrollbar-gutter`/`scrollbar-color` are
+   * a Chrome 121+ progressive enhancement (this extension's floor is 120):
+   * unsupported means the property is simply ignored, not an error.
+   */
+  /* P07-B revision 1 polish: the previous inset shadow (-10px spread) read
+   * as barely-there on some panels -- a taller, less-tightly-clipped
+   * spread reads clearly as "more below" without turning into a hard
+   * line. */
+  box-shadow: inset 0 -16px 14px -12px var(--border);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.flash {
+  border-left: 3px solid var(--amber);
+  background: var(--muted);
+  padding: 8px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 12.5px;
+}
+
+.flash.bad {
+  border-left-color: var(--destructive);
+}
+
+/* P07-B revision 2 polish: a success ("Paired.", "Sent to the runner.")
+ * is the reference's neutral .flash.ok. */
+.flash.ok {
+  border-left-color: var(--foreground);
+}
+
+/* P07-B revision 3, H1 (shared/tone.ts): progress and automatic retries
+ * ("Pairing…", "it'll be sent automatically") have nothing for the person
+ * to do, so a neutral edge. Plain amber .flash is left for "you need to
+ * act", and .flash.bad for "refused, not kept". */
+.flash.info {
+  border-left-color: var(--muted-foreground);
+}
+
+/* P07-B revision 3, H2: the reason under a refusal's lead sentence (the
+ * popup's "The runner refused this capture…"), on its own line. */
+.flash .detail {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted-foreground);
+}
+
+/* P07-B revision 2, C1: an empty message area takes no room and draws
+ * nothing. Status lines and live regions exist before their first message
+ * (a screen reader only announces a change to a region that was already
+ * there), and an empty .flash used to draw as a 16px amber-edged bar.
+ * Not display:none, which would take the region out of the accessibility
+ * tree: out of the flow, with no padding, border or background, it stays
+ * in the page with nothing to show. It returns to normal the moment it
+ * has text. */
+.flash:empty,
+[role="status"]:empty,
+[role="alert"]:empty,
+[aria-live]:empty {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* P07-B revision 2 polish: commands in messages and labels (`npm run
+ * pair`) in the mono face, as in the design reference, and never broken
+ * across lines (revision 1's "no mid-command wraps"): a command that
+ * doesn't fit moves to the next line whole. */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  white-space: nowrap;
+}
+
+a {
+  color: inherit;
+}
+
+/* One shared focus ring for every focusable element on every page
+ * (review fold-in f), instead of relying on each browser's own default
+ * (observed as a plain 1px blue outline with no relation to the theme).
+ * `:focus-visible` rather than `:focus` so a mouse click doesn't show it,
+ * only keyboard/programmatic focus does. */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+input[type="file"] {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--foreground);
+}
+
+input[type="file"]::file-selector-button {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  margin-right: 8px;
+  cursor: pointer;
+}
+
+input[type="file"]::file-selector-button:hover {
+  background: var(--muted);
+}
+
+.small {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}

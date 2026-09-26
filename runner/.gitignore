@@ -1,0 +1,17 @@
+# Per-install secrets and settings written by `npm run setup`
+# (route secret, UI token, workspace path, model settings). Never commit.
+.env
+.env.*
+
+# eve state and build output. `.eve/` holds session content in plain JSON
+# (.eve/.workflow-data): personal data, removed by `npm run setup -- --forget`.
+.eve/
+.output/
+.nitro/
+
+# The eval fixture agent's own eve state (a separate app root).
+eval-agent/.eve/
+eval-agent/.output/
+
+# Logs are personal data too (a failed model call prints the request body).
+*.log

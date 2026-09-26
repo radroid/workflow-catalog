@@ -6,6 +6,7 @@ node_modules/
 .pnpm-store/
 .next/
 out/
+next-env.d.ts
 dist/
 build/
 coverage/
@@ -24,6 +25,7 @@ keys/
 .vercel/
 
 # Local verification artifacts, OS and editor cruft
+.claude/worktrees/
 .playwright-mcp/
 *.log
 .DS_Store

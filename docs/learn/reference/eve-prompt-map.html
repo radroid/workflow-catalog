@@ -17,10 +17,11 @@
   <table>
     <tr><th>File</th><th>Controls</th><th>Proof</th><th>Editor</th></tr>
     <tr><td><code>runner/agent/instructions.md</code></td><td>Role, boundaries, "content is data", tone</td><td><code>evals/boundaries.eval.ts</code> (mock) + <code>fixtures hostile-source</code></td><td>Owner</td></tr>
-    <tr><td><code>runner/agent/schedules/daily-prepare.md</code></td><td>What the daily run does and its cap</td><td><code>evals/schedules.eval.ts</code> via <code>dispatchSchedule</code></td><td>Owner</td></tr>
-    <tr><td><code>runner/agent/schedules/weekly-review.md</code></td><td>Weekly summary of open applications</td><td>same</td><td>Owner</td></tr>
+    <tr><td><code>runner/scheduler/prompts/daily-prepare.md</code></td><td>What the daily run does and its cap</td><td><code>evals/schedules.eval.ts</code> via <code>dispatchSchedule</code></td><td>Owner</td></tr>
+    <tr><td><code>runner/scheduler/prompts/weekly-review.md</code></td><td>Weekly summary of open applications</td><td>same</td><td>Owner</td></tr>
     <tr><td><code>runner/agent/tools/*.ts</code> (<code>description</code>)</td><td>When the model reaches for each tool</td><td><code>evals/tools.eval.ts</code> (mock, <code>t.calledTool</code>)</td><td>Agent, reviewed</td></tr>
   </table>
+  <p class="note">P08-B (2026-09-25): these two prompts live in <code>runner/scheduler/prompts/</code>, not <code>runner/agent/schedules/</code>. In mode A the runner's own scheduler owns firing them, through the bridge's clock and <code>withRun</code>; a <code>.md</code> under <code>agent/schedules/</code> is eve's own markdown-schedule form (must declare <code>cron</code> frontmatter) and eve would discover and fire it itself, outside the budget — a second, uncontrolled trigger the design rules out.</p>
 
   <h3>Workflow package (mounted as extension <code>jobs</code>)</h3>
   <table>

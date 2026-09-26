@@ -258,6 +258,43 @@ export default eveChannel({
 11. **Vercel-centric integrations:** Vercel Connect OAuth, File memory (Vercel Blob), GitHub channel, Web Chat installer all assume `eve link`/a Vercel project. ([connections], [memory-file], [github-channel])
 12. **Single durable data dir:** `.eve/.workflow-data` inside the project; deleting the project directory loses sessions. ([self-hosting])
 13. **Responsible-use posture:** "Unless you configure stricter controls, eve agents may operate with permissive settings, including tool execution without human approval where approval is omitted." Job applications are "employment" actions the docs explicitly say should require approval. ([responsible-use])
+14. **Directives compile per app root.** This is not in the docs. It was verified by probe at eve@0.63.0 during the P03 review (2026-09-22; logs/blocks.md, "P03 peer review, round 1").
+    - `"use workflow"` and `"use step"` are compiled and registered only for modules inside the app root being built (`runner/agent` or `runner/eval-agent/agent`).
+    - Within one root, imports work, including an imported `"use workflow"` executor and separate step modules.
+    - Across roots, the directives fail:
+      - Re-exporting a workflow tool from another root fails discovery: "requires a compiled workflow executor".
+      - Importing a `"use step"` function from another root builds, then fails at run time: `Step "step//./…" is not registered`.
+      - A directive-free helper imported from another root and called from a local step works.
+    - Pattern:
+      - Share logic in directive-free modules under `runner/agent/lib/`.
+      - Keep a thin executor and step wrapper in each root.
+      - Never re-export or copy a tool's logic into the eval agent. Evals must exercise the shared helper, not a copy.
+15. **An aborted client turn can end quietly as `completed`.** This is not in the docs. It was verified at eve@0.63.0 during the P08-A review (2026-09-22; logs/blocks.md, "P08-A peer review, round 1"), by probes with the real `Client` and a stubbed `fetch`, and by reading `dist/src/client/`.
+    - `open-stream.js` `followStreamIterable`: when the `signal` aborts while the client is opening or reopening the event stream, or while it backs off between attempts, the stream returns without throwing (`catch … if (signal.aborted) return`, and the `aborted` checks after the read loop and after `sleep`). An abort while an open stream is being read does throw.
+    - `session-utils.js` `summarizeTurnEvents`: `status` is `waiting` or `failed` only when a boundary event (`session.waiting`, `session.failed`) was seen. With no boundary it defaults to `completed`. So `response.result()` resolves `completed` for a turn that never finished.
+    - The client reconnects an idle stream after 15 s (`streamReadIdleTimeoutMs`, default 15e3). A turn that goes silent more than about 15 s before its deadline therefore hits the quiet path.
+    - **Silence without an abort** (checked 2026-09-23, P03 round-3 review):
+      - A turn response (`MessageResponse`, whether through `result()` or by iterating it) follows its stream with `keepAlive`, so eve reopens a silent stream without limit.
+      - If that stream ends before the turn boundary without an abort, eve throws "The response stream ended before the accepted message reached its turn boundary." (`session.js`, when the send reported a delivery id). So on a turn response, the only quiet end is the abort.
+      - A manually opened `session.stream()` stops quietly after five reopens in a row that bring no event (idle policy `maxAttempts: 5`, each reopen after 15 s of silence). eve's docs say it "eventually stops after repeated empty streams" (`guides/client/streaming.mdx:154`).
+    - `MessageResponse.cancel()` sends nothing until the client has seen the turn start, and nothing once the turn is parked. `ClientSession.cancel()` (`POST …/session/:id/cancel`) is the reliable cancel.
+    - Pattern for every caller that sets a timeout:
+      - After `result()` resolves, check `signal.aborted`.
+      - Treat a turn as ok only when `summarizeTurnEvents(...).boundary` (a terminal `session.*` event) is present.
+      - Cancel through the session.
+      - Read the stream event by event, so partial `step.completed` usage survives a timeout.
+    - **Which boundary means what.** Don't confuse our "parked" with eve's.
+      - A normal conversation turn, which is what `client.sessions.create` gives, ends `turn.completed → session.waiting`. eve's docs call `session.waiting` "parked and ready for the next message": that is idle between turns, and it is **ok**.
+      - `session.completed` ends only task-mode sessions, such as a schedule firing. The P02 spike (`eve-spike.md`) recorded both sequences.
+      - A turn is **waiting on the person** only when `input.requested` carried a non-empty request list (`result().inputRequests`).
+      - `turn.cancelled` (always followed by `session.waiting`) is not ok.
+      - **Authorizations** (checked 2026-09-23, P08-A round-3 review):
+        - A turn response keeps following past `session.waiting` only while an `authorization.required` that carried a `webhookUrl` is still pending (`updatePendingAuthorizations` in `session-utils.js`).
+        - An `authorization.required` with no `webhookUrl`, followed by `session.waiting`, ends the response. A classifier that checks only failures, cancels and `input.requested` then reads that turn as ok.
+        - This can't happen while `runner/agent` has no connections. The first packet that adds one (P05 or later) must treat a pending authorization as waiting on the person.
+      - A failure event, or a `session.failed` boundary, is not ok.
+      - Found in the P08-A round-2 review (2026-09-22): a harness that read `session.waiting` as "needs input" recorded every normal run as a failure.
+    - Callers: P08-A `runTurn` (fixed in its revision), P03's extraction route (R3 timeout), and P02's `checkModel` (a runner follow-up).
 
 **Recommended pin (read 2026-09-20):** `"eve": "0.63.0"` exact (no caret), `"ai"` and `"zod"` at whatever `eve init` writes for 0.63.0, Node `24` in `.nvmrc`/`engines`, and read docs from `node_modules/eve/docs` at that version rather than `main`. Re-evaluate the pin deliberately; do not float `eve@latest` in the template.
 

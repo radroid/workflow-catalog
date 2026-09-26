@@ -13,7 +13,7 @@ A reviewed, implementation-ready MVP specification and bounded agent work packet
 - Confirmed by the owner: $25/month hosted ceiling (USD before tax, target $0) excluding an existing $20 Codex subscription; Vercel hosting and tweakcn's Vercel theme; browser task groups; reusable skills and scripts; onboarding is central; five people, personal/noncommercial; full career context before generation; capture/prepare/open tabs first with manual submission; **guided local path first** (friends are mixed on installing into an existing harness).
 - This is a planning effort inside mission-control. The build itself is a fleet spawn: the intake brief is at `intake/inbox/workflow-catalog.md` and `bin/spawn-app.md` takes it from there after the owner kicks it. Do not start an implementation loop from this map.
 - Skills: `/wayfinder`, `/domain-modeling`, `/grilling`, `/research`, `/prototype`, `/teach`, frontend-design. Keep decisions distinct from implementation tickets.
-- Local tracker semantics follow `/Users/rajdholakia/.agents/skills/setup-matt-pocock-skills/issue-tracker-local.md`.
+- Local tracker semantics follow `issue-tracker-local.md` from the owner's `setup-matt-pocock-skills` skill (a local file, not in this repo).
 - Human decisions and prototype feedback stay visibly open until the owner answers; proposed defaults are not approvals. Every proposed default is labelled as such in its ticket.
 - Currency: costs are modelled in USD before tax. Nothing paid is provisioned until the owner confirms the currency reading.
 

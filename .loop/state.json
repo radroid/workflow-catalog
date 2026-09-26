@@ -1,7 +1,7 @@
 {
   "stage": "S3",
-  "stage_status": "in-progress",
-  "iter": 0,
+  "stage_status": "paused-manual",
+  "iter": 7,
   "pr_mode": true,
   "pr_size_policy": "fat",
   "base_branch": "overnight/integration",
@@ -9,5 +9,6 @@
     "kind": "file",
     "path": "GOALS.md"
   },
-  "smoke_test": "pnpm typecheck && pnpm test"
+  "smoke_test": "pnpm typecheck && pnpm test",
+  "integration_pr": 2
 }

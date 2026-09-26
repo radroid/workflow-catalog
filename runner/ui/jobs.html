@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jobs · Job assistant runner</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ui/assets/runner.css" />
+    <link rel="stylesheet" href="/ui/assets/jobs.css" />
+    <script type="module" src="/ui/assets/jobs.js"></script>
+  </head>
+  <body>
+    <!-- runner:nav -->
+    <main class="page">
+      <h1 id="page-title" tabindex="-1">Jobs</h1>
+      <p class="lede">Save a posting from the extension, paste its text, or fetch it from an <code>https://</code> link. Every save that changes the text keeps the version before it — nothing is overwritten.</p>
+
+      <!-- The page's one persistent live region (round-1 review L12 item 1, P03's pinned "Last action" line): sticky, so an outcome always shows where the person is working, not just at the top of a long page. The inner body carries the two-line clamp at 640 px and below (T18), so no sliver of a third line shows in the line's padding. -->
+      <div id="last-action" class="last-action" role="status" aria-atomic="true"><div class="last-action-body"><span class="tag">Last action</span><span class="visually-hidden">: </span><span class="text">Nothing yet.</span></div></div>
+
+      <section class="card" aria-labelledby="paste-title">
+        <h2 id="paste-title">Paste a posting</h2>
+        <p class="muted small">Paste the posting's own text along with the page's address, so the source is on record with it.</p>
+        <form id="paste-form" novalidate>
+          <div class="field">
+            <label for="paste-url">Posting address</label>
+            <input id="paste-url" name="url" type="url" autocomplete="off" placeholder="https://jobs.example/…" aria-describedby="paste-url-error" required />
+            <p id="paste-url-error" class="field-error" hidden></p>
+          </div>
+          <div class="field">
+            <label for="paste-text">Posting text</label>
+            <textarea id="paste-text" name="text" rows="8" aria-describedby="paste-text-error" required></textarea>
+            <p id="paste-text-error" class="field-error" hidden></p>
+          </div>
+          <button class="button" type="submit" id="paste-submit" aria-disabled="false">Save posting</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="url-title">
+        <h2 id="url-title">Fetch from a link</h2>
+        <p class="muted small">The runner fetches only <code>https://</code> links, and only public addresses — never a private or local network address.</p>
+        <form id="url-form" novalidate>
+          <div class="field">
+            <label for="url-input">Posting address</label>
+            <input id="url-input" name="url" type="url" autocomplete="off" placeholder="https://jobs.example/…" aria-describedby="url-input-error" required />
+            <p id="url-input-error" class="field-error" hidden></p>
+          </div>
+          <button class="button" type="submit" id="url-submit" aria-disabled="false">Fetch and save</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="jobs-title">
+        <h2 id="jobs-title">Saved jobs</h2>
+        <ul class="jobs-list" id="jobs-list">
+          <li class="muted">Loading…</li>
+        </ul>
+        <p id="jobs-empty" class="muted" hidden>No jobs saved yet.</p>
+      </section>
+
+      <section class="card" aria-labelledby="detail-title" id="detail-section" hidden>
+        <h2 id="detail-title" tabindex="-1">Posting detail</h2>
+        <div id="detail-body"></div>
+      </section>
+    </main>
+  </body>
+</html>

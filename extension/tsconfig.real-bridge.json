@@ -1,0 +1,39 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    // Mirrors runner/tsconfig.json's own options: these three files
+    // import @workflow-catalog/runner's server source directly by its
+    // literal .ts extension (Node 24's native TS type stripping needs
+    // that; runner only ever runs on Node 24) to start the real P02
+    // bridge in-process for P07-B's acceptance-gate tests -- an allowed
+    // devDependency per the P07 packet ("A devDependency on
+    // @workflow-catalog/runner (workspace:*) is fine if you drive the
+    // real bridge in tests"). tsc has one compiler-options set per
+    // program, so checking that imported graph needs runner's own
+    // options (allowImportingTsExtensions, lib ES2024), not this
+    // package's browser-targeted ones (DOM lib, no .ts-extension
+    // imports) -- hence a second, separate program instead of loosening
+    // tsconfig.json repo-wide (P07-B revision 1, B6; these three files
+    // used to be excluded from typechecking entirely, which hid a real
+    // error -- see bridge-e2e.spec.ts's own revoke() call).
+    // ES2024 for the same reason runner/tsconfig.json needs it (Node 24).
+    // DOM + DOM.Iterable (not in runner/tsconfig.json) for two reasons
+    // specific to this program: bridge-e2e.spec.ts's Locator.evaluate((el)
+    // => Array.from(el.querySelectorAll(...))...) callback bodies need
+    // DOM.Iterable for NodeListOf's iterator to type its elements as
+    // Element rather than unknown, and real-bridge-harness.ts's
+    // withChromeOrigin() names the DOM lib's RequestInfo type (Node's own
+    // ambient fetch typing has RequestInit but not that alias).
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    // "chrome" (not in runner/tsconfig.json) because bridge-e2e.spec.ts's
+    // Playwright page.evaluate(() => chrome.storage.session...) callback
+    // bodies reference the extension's real chrome.* global.
+    "types": ["node", "chrome"],
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["e2e/real-bridge-harness.ts", "src/shared/bridge-client.realbridge.test.ts", "e2e/bridge-e2e.spec.ts", "e2e/session-seed.ts", "e2e/sessions-e2e.spec.ts"]
+}

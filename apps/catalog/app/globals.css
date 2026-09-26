@@ -1,0 +1,691 @@
+@import "../../../docs/spec/visuals/theme.css";
+
+/* theme.css sets --font-sans/--font-mono to bare "Geist"/"Geist Mono" family
+   names; remap them to the next/font (geist package) CSS variables set on
+   <html> in app/layout.tsx, so no network font request is ever made.
+   next/font's generated variable already ends in a full fallback chain
+   (down to the generic family), so this does not append another generic
+   fallback on top — that produced a doubled "..., monospace, monospace".
+   Declared in both :root and [data-theme="dark"] explicitly: theme.css's
+   own [data-theme="dark"] block re-declares the bare family names, so the
+   remap must be explicit in dark mode too rather than relying on cascade
+   order between two equal-specificity selectors. */
+:root {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+[data-theme="dark"] {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+}
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 64px 28px;
+}
+
+.wrap.wide {
+  max-width: 960px;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  margin: 0 0 10px;
+}
+
+h1 {
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+h2 {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  margin: 36px 0 12px;
+}
+
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+}
+
+.lede {
+  max-width: 60ch;
+  color: var(--muted-foreground);
+  margin: 0 0 28px;
+}
+
+.lede strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+/* Non-breaking space before an em dash keeps it from ever starting a line
+   on its own — use "word&nbsp;— word" (see e.g. app/page.tsx). */
+
+section + section {
+  margin-top: 36px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.card.pad {
+  padding: 18px 20px;
+}
+
+.card + .card {
+  margin-top: 12px;
+}
+
+/* An intro paragraph inside a .card (e.g. the template page's Sources /
+   Connections / Browser permissions cards) explaining the content right
+   below it — .lede's page-level 28px bottom margin (sized for a top-of-page
+   intro) reads as an oversized gap in a compact card; this tightens it
+   without touching .lede everywhere else it's used. */
+.card .lede {
+  margin-bottom: 14px;
+}
+
+/* P09.1 (UI critic note): the Download card's not_found/error second line
+   is "lede tight" — .tight promises zero margin, full stop, but .card
+   .lede above (two classes) is more specific than .tight alone (one class)
+   and silently won the cascade on margin-bottom regardless of source
+   order, leaving 14px below that paragraph against 0px above it. This
+   three-class rule outranks .card .lede for exactly that combination,
+   without touching the plain-.lede intro paragraphs elsewhere in a card
+   (Sources/Connections/Browser permissions), which still want the
+   tightened-but-nonzero 14px above. */
+.card .lede.tight {
+  margin-bottom: 0;
+}
+
+/* A real list — <ul><li>, not a styled <div> — used wherever content is
+   genuinely a set of items and nothing pairs with them (the template
+   page's Sources and Connections; "Before you start"'s prerequisites on
+   /install). P09.1 revision round (UI critic U1): the previous .kv grid of
+   plain <div>/<span> elements had no list semantics at all, so a screen
+   reader read every source/connection as one run of text (WCAG 1.3.1), and
+   at 390px a wrapped long label looked like a separate item with nothing
+   to mark where one ended and the next began. Same recipe as
+   .changelog-notes just below (native bullet marker, padding-left gives it
+   room, the browser's own default text-wrap already hangs a wrapped
+   bullet-list line under its own text rather than the marker) — "like the
+   changelog list", as the critic put it — except in the normal text
+   colour, not muted: these items are primary content, not secondary
+   chrome. */
+.plain-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 13.5px;
+}
+
+.plain-list li + li {
+  margin-top: 4px;
+}
+
+/* Browser permissions: name + meaning, semantically a definition list
+   (screen readers announce the dt/dd relationship specifically), not the
+   <ol> of unrelated steps it used to be reused from. dt at least as bold as
+   dd, per the P09-B revision round's UI critique. */
+.perm-list {
+  margin: 0;
+}
+
+/* P09.1 (UI critic note): dt's weight matched h3's own 600 exactly, so a
+   card's permission names visually competed with its heading instead of
+   reading as subordinate to it. 500 keeps dt bolder than dd (dd has no
+   font-weight of its own, i.e. the normal 400) while landing below h3's
+   600. font-size likewise: dt inherited the body's 15px, heavier than it
+   needed to be next to dd's own 13px (revision round polish). */
+.perm-list dt {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 13.5px;
+  margin: 16px 0 4px;
+}
+
+.perm-list dt:first-child {
+  margin-top: 0;
+}
+
+.perm-list dd {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+/* The changelog's per-version notes: a plain <ul> with no class rendered
+   with the browser's own default list margin/padding/marker spacing
+   instead of this theme's spacing scale — flagged in the P09-B revision
+   round. */
+.changelog-notes {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.changelog-notes li {
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 13.5px;
+}
+
+.changelog-notes li:last-child {
+  margin-bottom: 0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stack > p {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.row.between {
+  justify-content: space-between;
+}
+
+/* A row of buttons (template page: download + checksum link) that must
+   never force horizontal scroll at narrow viewports — same reasoning as
+   pre.command-block's white-space: pre-wrap fix in part A, applied to a
+   flex row instead of text. (P09.1 revision round: this used to also
+   describe a row of pills — required sources, connections — before those
+   became a real <ul> (.plain-list) instead; the comment now matches what
+   this class actually styles.)
+   Named ".multiline", not ".wrap": ".wrap" already exists (the 720px
+   page-wrapper, "padding: 64px 28px") and CSS class selectors match by
+   whole token, not by which rule a human meant — "row wrap" as a
+   className would ALSO match .wrap and silently inherit its padding. */
+.row.multiline {
+  flex-wrap: wrap;
+}
+
+button,
+.button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 14px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  line-height: 1.3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+button:hover,
+.button:hover {
+  background: var(--muted);
+}
+
+/* One shared rule so every button and link gets the theme's ring on
+   keyboard focus instead of falling back to the browser default (e.g.
+   Chrome's blue outline), which doesn't match either theme. :focus-visible
+   (not :focus) so a mouse click doesn't show it, only keyboard/programmatic
+   focus — matching the role="alert" flash boxes' tabIndex={-1} autoFocus,
+   which also rely on :focus-visible-style rendering for the outline. */
+button:focus-visible,
+.button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* .button.primary too, not just button.primary — the template page's
+   download link is an <a className="button primary"> (a real download needs
+   a real href, which only <a> can carry), styled by the shared `.button`
+   rule above but never matched by a selector requiring a literal <button>.
+   Same bug and same fix as .button.ghost right below: unfixed, the link
+   fell back to plain `.button`'s var(--card)/var(--foreground) pairing
+   instead of the primary treatment, flagged in the P09-B revision round as
+   unreadable (effectively white-on-white in light mode) once a release
+   exists to link to. */
+button.primary,
+.button.primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+button.primary:hover,
+.button.primary:hover {
+  opacity: 0.92;
+}
+
+/* .button.ghost too, not just button.ghost — an <a className="button ghost">
+   (e.g. Home's "Owner sign-in" link) is styled by the shared `.button` rule
+   above but is not a <button> element, so button.ghost alone never matched
+   it and it rendered as a raised, bordered button instead of a ghost link. */
+button.ghost,
+.button.ghost {
+  background: transparent;
+  box-shadow: none;
+}
+
+button.small {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  margin: 0 0 6px;
+}
+
+input[type="text"],
+input[type="password"] {
+  font: inherit;
+  font-size: 14px;
+  width: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field-note {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 6px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  white-space: nowrap;
+}
+
+.pill.ok {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+.pill.warn {
+  background: var(--amber, oklch(0.81 0.17 75.35));
+  color: #000;
+  border-color: var(--amber, oklch(0.81 0.17 75.35));
+}
+
+.pill.dim {
+  opacity: 0.65;
+}
+
+.flash {
+  border-left: 3px solid var(--foreground);
+  background: var(--muted);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13.5px;
+  margin-bottom: 20px;
+}
+
+.flash.error {
+  border-left-color: var(--destructive);
+}
+
+/* The "Refused" flash boxes are tabIndex={-1} and focused programmatically
+   (see components/error-alert.tsx) right after a sign-in / accept-invite
+   refusal, so a keyboard/screen-reader user lands on the message
+   immediately. Without this rule the browser's own default focus
+   indicator shows instead (e.g. Chrome's blue ring), which doesn't match
+   either theme — same fix as the shared button/.button/a:focus-visible
+   rule earlier in this file, but plain :focus (matching the input rule
+   also earlier in this file): this box is focused programmatically, not by
+   a mouse click that :focus-visible would want to suppress the ring for. */
+.flash.error:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.flash .tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  display: block;
+  margin-bottom: 3px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.check-row + .check-row {
+  border-top: 1px solid var(--border);
+}
+
+.check-row .check-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.check-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex: none;
+}
+
+.check-mark.done {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+/* The checklist toggle's visible+accessible text is the constant word
+   "Done" in both states (see app/(gated)/install/page.tsx) — aria-pressed
+   carries the state for assistive tech, and this is the sighted-user
+   equivalent: a pressed item's button fills solid, same treatment as
+   .check-mark.done above, instead of relying on the (now-identical) text
+   alone to communicate which state a button is in. */
+.check-row button[aria-pressed="true"] {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+pre,
+code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+pre.command-block {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  /* Wrap instead of relying on horizontal scroll (matches the prototype's
+     own `pre` rule — docs/spec/visuals/index.html): at narrow viewports
+     (e.g. 390px) a long command overflowed this box, and axe flags a
+     scrollable region with no keyboard access as serious. white-space:
+     pre-wrap still preserves the newlines between commands; overflow-wrap
+     covers the rare single "word" with no space to wrap at, like a bare
+     URL, so nothing can force horizontal scroll back on. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+
+/* One command per element (see app/(gated)/install/page.tsx's CommandBlock)
+   instead of one "\n"-joined text blob, so each command can hang-indent on
+   its own — P09.1 revision round (UI critic U2): a long command (e.g. the
+   git clone URL) wrapping onto a second visual row at 390px looked
+   identical to a fresh command starting there, since white-space: pre-wrap
+   above only ever hangs the *first* line of the whole <pre> via
+   text-indent, not every command inside it. padding-left + a matching
+   negative text-indent means each command's own first line sits flush
+   left (padding cancels the indent) while any wrapped continuation of
+   that same command sits indented under it (text-indent only affects a
+   line box's first line, never a soft-wrapped continuation) — no "$ "
+   prompt or other decoration is added to the DOM, so selecting and
+   copying a block's text reproduces exactly its commands, nothing more
+   (tests/install-command-block.test.ts). white-space/overflow-wrap are
+   inherited from pre.command-block above, not repeated here. */
+.command-line {
+  display: block;
+  padding-left: 1.4em;
+  text-indent: -1.4em;
+}
+
+.command-line + .command-line {
+  margin-top: 4px;
+}
+
+/* P09.1 revision 2 (UI critic): a caption just above a command block that
+   says when or where to run it ("Node 25 or newer only:", "In a second
+   terminal, in workflow-catalog/runner:"). It sits outside the <pre>, so
+   copying the block still copies only its commands. */
+.command-label {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin: 6px 0;
+}
+
+.step-list {
+  list-style: decimal;
+  margin: 0;
+  padding: 0 0 0 22px;
+}
+
+.step-list > li {
+  margin-bottom: 20px;
+  padding-left: 4px;
+}
+
+.step-list .step-label {
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.step-note {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin-top: 6px;
+  max-width: 70ch;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  padding: 0 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.tight {
+  margin: 0;
+}
+
+.break-all {
+  word-break: break-all;
+}
+
+/* Standard "sr-only" pattern: present in the accessibility tree and to
+   find-in-page, but removed from visual layout — unlike display:none or
+   visibility:hidden, which would also remove it from the accessible name
+   computation. Used to prefix a stable, item-specific identifier onto a
+   button whose short visible text (e.g. "Mark done") repeats across
+   several controls — see the install checklist. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.top-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 28px 0;
+  font-size: 13px;
+}
+
+.top-nav a {
+  text-decoration: none;
+  color: var(--muted-foreground);
+}
+
+.top-nav a:hover {
+  color: var(--foreground);
+}
+
+/* aria-current="page" (see components/gated-nav.tsx) is primarily an
+   assistive-tech signal, but a link that's the current page should look
+   different too — matches the hover color rather than inventing a third
+   treatment. */
+.top-nav a[aria-current="page"] {
+  color: var(--foreground);
+}
+
+.top-nav .who {
+  color: var(--muted-foreground);
+}
+
+.doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.doc-list li + li {
+  margin-top: 4px;
+}
+
+.doc-list a {
+  display: block;
+  padding: 10px 0;
+  text-decoration: none;
+  color: var(--foreground);
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-list a:hover {
+  color: var(--muted-foreground);
+}
+
+footer.page-footer {
+  max-width: 720px;
+  margin: 40px auto 0;
+  padding: 20px 28px 40px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  border-top: 1px solid var(--border);
+}

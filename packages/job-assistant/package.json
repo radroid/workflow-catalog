@@ -1,0 +1,26 @@
+{
+  "name": "@workflow-catalog/job-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "eslint . --max-warnings 0"
+  },
+  "files": [
+    "workflow.json",
+    "skills",
+    "schemas",
+    "templates",
+    "fixtures",
+    "adapters"
+  ],
+  "devDependencies": {
+    "@workflow-catalog/contracts": "workspace:*",
+    "zod": "4.5.4",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "@types/node": "24.13.6"
+  }
+}
