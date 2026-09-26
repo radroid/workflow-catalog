@@ -1,4 +1,4 @@
-import { symlink, writeFile } from "node:fs/promises";
+import { stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ManualClock } from "../lib/clock.ts";
@@ -74,6 +74,24 @@ function workspaceOf(values: Record<string, string>): string {
   const value = values.RUNNER_WORKSPACE;
   if (!value) throw new Error("install() did not set RUNNER_WORKSPACE");
   return value;
+}
+
+/**
+ * Whether `dir` (which must exist) can also be reached under a different
+ * letter case — true on the case-insensitive-but-case-preserving filesystem
+ * macOS and Windows default to, false on a case-sensitive one (ubuntu's
+ * ext4, this repo's CI). A runtime probe, not a `process.platform` guess:
+ * either can be reformatted the other way.
+ */
+async function isCaseInsensitiveFilesystem(dir: string): Promise<boolean> {
+  const flipped = dir === dir.toUpperCase() ? dir.toLowerCase() : dir.toUpperCase();
+  if (flipped === dir) return false; // a path with no letters can't probe this at all
+  try {
+    const [original, differentCase] = await Promise.all([stat(dir), stat(flipped)]);
+    return original.dev === differentCase.dev && original.ino === differentCase.ino;
+  } catch {
+    return false;
+  }
 }
 
 describe("doctor", () => {
@@ -232,6 +250,21 @@ describe("doctor: workspace comparison by real folder, not string (P02.2 revisio
       expect(item(report.items, "workspace").status, label).toBe("ok");
       expect(item(report.items, "workspace").detail, label).toBe(A);
     }
+  });
+
+  it("R2-N2: does not warn on a case-only difference, on a filesystem where that names the same folder", async () => {
+    // Guards fs.realpathSync.native specifically: the plain JS realpathSync
+    // does not canonicalize case on a case-insensitive volume the way the
+    // native one does, so a regression back to it would start warning here
+    // (P10 packet, "Carried into part B", R2-N2).
+    const { clock, values } = await install({ verified: true });
+    const A = workspaceOf(values);
+    if (!(await isCaseInsensitiveFilesystem(A))) return; // this machine's filesystem is case-sensitive; nothing to prove here (true in this repo's CI)
+    const differentCase = A === A.toUpperCase() ? A.toLowerCase() : A.toUpperCase();
+    const settings = await loadedSettings(values, { RUNNER_WORKSPACE: differentCase });
+    const report = await runDoctor(deps(settings.values, clock, { settings }));
+    expect(item(report.items, "workspace").status).toBe("ok");
+    expect(item(report.items, "workspace").detail).toBe(A);
   });
 
   it("still warns when the environment names a genuinely different, real workspace (W5: B exists on disk)", async () => {
