@@ -125,6 +125,10 @@ export interface OpenOptions {
   /** What the pages' 15-second request timeout becomes, in this test. */
   readonly requestTimeoutMs?: number;
   readonly width?: number;
+  /** The `assets/<name>.js` module to import, when it differs from `page` (settings.html loads three: `settings-budget`, `settings-schedules`, `settings-upgrade`, one per section — a test that cares about only one imports only that one). Defaults to `page`. */
+  readonly script?: string;
+  /** The page's live-region id, when it isn't `#last-action` (Settings' is `#status-message`, plain text, not the `.text`-child convention every other page uses). Defaults to `"last-action"`. */
+  readonly liveRegionId?: string;
 }
 
 export async function openUiPage(bridge: TestBridge, options: OpenOptions): Promise<Page> {
@@ -156,24 +160,32 @@ export async function openUiPage(bridge: TestBridge, options: OpenOptions): Prom
     if (!node) throw new Error(`no #${id}`);
     return node;
   };
-  const lineText = () => byId("last-action").querySelector(".text")?.textContent ?? "";
-  const regionText = () => byId("last-action").textContent ?? "";
+  // Most pages' live region is #last-action, with a nested .text span (jobs.html, sessions.html, board.html).
+  // Settings' is its own simpler #status-message, plain text directly on the element (settings.css) -- a real,
+  // pre-existing difference, not something to paper over by renaming either page's markup. `liveRegionId` lets a
+  // test name its own; when the element isn't found at all (or has no .text child), this degrades to reading the
+  // element's own textContent, or to doing nothing, rather than throwing.
+  const liveRegion = document.getElementById(options.liveRegionId ?? "last-action");
+  const lineText = () => liveRegion?.querySelector(".text")?.textContent ?? liveRegion?.textContent ?? "";
+  const regionText = () => liveRegion?.textContent ?? "";
   const lines: string[] = [];
   const regions: string[] = [];
   let lastLine = lineText();
   let lastRegion = regionText();
-  new window.MutationObserver(() => {
-    const line = lineText();
-    if (line !== lastLine) {
-      lastLine = line;
-      if (line !== "") lines.push(line);
-    }
-    const region = regionText();
-    if (region !== lastRegion) {
-      lastRegion = region;
-      regions.push(region);
-    }
-  }).observe(byId("last-action"), { childList: true, subtree: true, characterData: true });
+  if (liveRegion) {
+    new window.MutationObserver(() => {
+      const line = lineText();
+      if (line !== lastLine) {
+        lastLine = line;
+        if (line !== "") lines.push(line);
+      }
+      const region = regionText();
+      if (region !== lastRegion) {
+        lastRegion = region;
+        regions.push(region);
+      }
+    }).observe(liveRegion, { childList: true, subtree: true, characterData: true });
+  }
 
   let visibility: "visible" | "hidden" = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
@@ -213,7 +225,7 @@ export async function openUiPage(bridge: TestBridge, options: OpenOptions): Prom
   };
   pages.push(page);
   vi.resetModules();
-  await import(path.join(UI, "assets", `${options.page}.js`));
+  await import(path.join(UI, "assets", `${options.script ?? options.page}.js`));
   await until(() => options.ready(document), `the ${options.page} page to finish loading`);
   return page;
 }

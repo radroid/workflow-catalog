@@ -134,6 +134,45 @@ describe("applyUpgrade", () => {
     expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
   });
 
+  it("the checksum is verified before the tarball is ever read or parsed: garbage bytes that would throw if unpacked still refuse checksum_mismatch, not unpack_failed", async () => {
+    // Not gzip, and not tar even if it were: gunzipSync throws on this, so if applyUpgrade ever tried to read it
+    // before checking the checksum, readFileFromReleaseTarball would throw TarballReadError and the result would
+    // come back "unpack_failed" instead -- that is exactly the distinction this test is watching for.
+    const garbage = Buffer.from("not a gzip file, and not a tar archive either, on purpose".repeat(20), "utf8");
+    const wrongChecksum = Buffer.from(sha256Line(Buffer.from("something else entirely"), "job-assistant-0.2.0.tgz"), "utf8");
+    const workspace = await newWorkspace();
+    const result = await applyUpgrade(workspace, "0.2.0", fakeUpgradeDeps({ version: "0.2.0", tarball: garbage, checksumBytes: wrongChecksum }));
+    expect(result.status).toBe("refused");
+    if (result.status !== "refused") throw new Error("unreachable");
+    expect(result.reason).toBe("checksum_mismatch");
+    expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
+  });
+
+  it("refuses (unpack_failed) when the verified tarball has no package/workflow.json", async () => {
+    const tarball = buildReleaseTarball({ "README.md": "no manifest in here" });
+    const workspace = await newWorkspace();
+    const result = await applyUpgrade(workspace, "0.2.0", fakeUpgradeDeps({ version: "0.2.0", tarball }));
+    expect(result.status).toBe("refused");
+    if (result.status !== "refused") throw new Error("unreachable");
+    expect(result.reason).toBe("unpack_failed");
+    // The exact message, not only the reason: readFileFromReleaseTarball legitimately returns undefined for two
+    // different causes (gzip failure, or a missing entry) and both currently map to "unpack_failed" through two
+    // different code paths, so the reason alone can't tell this specific guard apart from, say, a JSON-parse
+    // failure that happens to produce the same reason for a different message.
+    expect(result.message).toBe("The release tarball has no package/workflow.json.");
+    expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
+  });
+
+  it("refuses (invalid_manifest) when workflow.json's own version disagrees with the release tag", async () => {
+    const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(workflowManifest("0.5.0")) });
+    const workspace = await newWorkspace();
+    const result = await applyUpgrade(workspace, "0.2.0", fakeUpgradeDeps({ version: "0.2.0", tarball }));
+    expect(result.status).toBe("refused");
+    if (result.status !== "refused") throw new Error("unreachable");
+    expect(result.reason).toBe("invalid_manifest");
+    expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
+  });
+
   it("reports up_to_date, applying nothing, when there is no update to confirm", async () => {
     const workspace = await newWorkspace();
     const result = await applyUpgrade(workspace, "0.2.0", fakeUpgradeDeps(undefined));

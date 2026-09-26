@@ -3,7 +3,7 @@ import { createUpgradeRouteModule } from "../server/routes/upgrade.ts";
 import type { LoadedRouteModule } from "../server/route-modules.ts";
 import { currentWorkspaceVersion } from "../upgrade/upgrade.ts";
 import { BRIDGE, UI_TOKEN, makeBridge } from "./helpers.ts";
-import { buildReleaseTarball, fakeUpgradeDeps, networkForbiddenDeps, sha256Line } from "./upgrade-fixtures.ts";
+import { buildReleaseTarball, fakeUpgradeDeps, networkForbiddenDeps, recordingUpgradeDeps, sha256Line } from "./upgrade-fixtures.ts";
 
 const COOKIE = `wc_runner_ui=${UI_TOKEN}`;
 const READ = { cookie: COOKIE, "sec-fetch-site": "same-origin" };
@@ -43,7 +43,19 @@ function releaseMissingAssets(): ReturnType<typeof fakeUpgradeDeps> {
 }
 
 describe("GET /api/upgrade/status", () => {
-  it("F11: reports the workspace's current version and makes no network request at all -- proved with deps that throw on any request", async () => {
+  it("F11: makes no network request at all -- proved by a call-count spy, not by relying on a thrown error surfacing (round-2 fix: networkForbiddenDeps's throw is caught inside fetchBytes and turned into a graceful 'dns_failed' result, so a route that ignored that result and answered anyway would still pass a response-shape-only assertion)", async () => {
+    const { deps, calls } = recordingUpgradeDeps(undefined);
+    const modules: readonly LoadedRouteModule[] = [{ name: "upgrade", module: createUpgradeRouteModule(deps) }];
+    const bridge = await makeBridge({ modules });
+    const response = await bridge.request("/api/upgrade/status", { headers: READ });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ currentVersion: "0.1.0" });
+    // The actual proof: not one call to resolve/performRequest happened, whatever the response looked like.
+    expect(calls).toEqual([]);
+    expect(await currentWorkspaceVersion(bridge.workspace)).toBe("0.1.0");
+  });
+
+  it("still answers when the deps would refuse to be reached at all (networkForbiddenDeps) -- belt and suspenders with the call-count proof above", async () => {
     const modules: readonly LoadedRouteModule[] = [{ name: "upgrade", module: createUpgradeRouteModule(networkForbiddenDeps) }];
     const bridge = await makeBridge({ modules });
     const response = await bridge.request("/api/upgrade/status", { headers: READ });
