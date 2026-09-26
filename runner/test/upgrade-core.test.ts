@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { newWorkspace } from "./helpers.ts";
-import { buildReleaseTarball, fakeUpgradeDeps, networkForbiddenDeps, sha256Line } from "./upgrade-fixtures.ts";
+import { buildReleaseTarball, downloadForbiddenUpgradeDeps, fakeUpgradeDeps, networkForbiddenDeps, recordingUpgradeDeps, sha256Line } from "./upgrade-fixtures.ts";
 import { applyUpgrade, checkForUpgrade, currentWorkspaceVersion } from "../upgrade/upgrade.ts";
+import { MigrationError } from "../upgrade/migrate.ts";
 
 function workflowManifest(version: string, notes: readonly string[] = [`Release ${version}.`]) {
   return {
@@ -30,56 +31,39 @@ describe("checkForUpgrade", () => {
     expect(result.status).toBe("up_to_date");
   });
 
-  it("reports available with the changelog staged from the tarball's workflow.json, for a genuinely newer release", async () => {
+  it("reports available with the release's own notes, for a genuinely newer release -- from the release lookup alone, never downloading anything", async () => {
     const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(workflowManifest("0.2.0", ["Adds the upgrade flow."])) });
-    const result = await checkForUpgrade("0.1.0", fakeUpgradeDeps({ version: "0.2.0", tarball, notes: "See CHANGELOG." }));
+    const result = await checkForUpgrade("0.1.0", downloadForbiddenUpgradeDeps({ version: "0.2.0", tarball, notes: "- Adds the upgrade flow." }));
     expect(result.status).toBe("available");
     if (result.status !== "available") throw new Error("unreachable");
     expect(result.nextVersion).toBe("0.2.0");
-    expect(result.changelog).toEqual([{ version: "0.2.0", date: "2026-09-25", notes: ["Adds the upgrade flow."] }]);
-    expect(result.releaseNotes).toBe("See CHANGELOG.");
+    expect(result.releaseNotes).toBe("- Adds the upgrade flow.");
   });
 
-  it("includes every changelog entry newer than currentVersion, not only the latest", async () => {
-    const manifest = {
-      ...workflowManifest("0.3.0"),
-      changelog: [
-        { version: "0.1.0", date: "2026-09-01", notes: ["First."] },
-        { version: "0.2.0", date: "2026-09-10", notes: ["Second."] },
-        { version: "0.3.0", date: "2026-09-20", notes: ["Third."] },
-      ],
-    };
-    const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(manifest) });
-    const result = await checkForUpgrade("0.1.0", fakeUpgradeDeps({ version: "0.3.0", tarball }));
-    expect(result.status).toBe("available");
-    if (result.status !== "available") throw new Error("unreachable");
-    expect(result.changelog.map((e) => e.version)).toEqual(["0.2.0", "0.3.0"]);
-  });
-
-  it("refuses (checksum_mismatch) when the downloaded tarball does not match its .sha256, and never reads it as JSON", async () => {
+  it("F11: never downloads the tarball or its checksum -- only the release lookup runs, proved by a deps object that throws on any other request", async () => {
     const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(workflowManifest("0.2.0")) });
-    const wrongChecksum = Buffer.from(sha256Line(Buffer.from("not the tarball"), "job-assistant-0.2.0.tgz"), "utf8");
-    const result = await checkForUpgrade("0.1.0", fakeUpgradeDeps({ version: "0.2.0", tarball, checksumBytes: wrongChecksum }));
+    // downloadForbiddenUpgradeDeps throws from performRequest for any URL but the GitHub API itself; checkForUpgrade
+    // completing at all (let alone reporting "available") is the proof.
+    await expect(checkForUpgrade("0.1.0", downloadForbiddenUpgradeDeps({ version: "0.2.0", tarball }))).resolves.toMatchObject({ status: "available", nextVersion: "0.2.0" });
+  });
+
+  it("refuses (missing_asset) when the release names neither the expected tarball nor checksum asset -- from the release lookup's own asset list, no download needed", async () => {
+    // Serve a release whose tag is newer but whose assets don't match job-assistant-0.2.0.tgz[.sha256] at all; any
+    // request but the release lookup itself throws, so a download would fail the test outright.
+    const deps = {
+      resolve: async () => [{ address: "203.0.113.10", family: 4 as const }],
+      performRequest: async (input: { readonly url: URL }) => {
+        if (input.url.hostname === "api.github.com") {
+          return { status: 200, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ tag_name: "job-assistant@0.2.0", body: "", assets: [] }), "utf8") };
+        }
+        throw new Error("must not download when assets are missing");
+      },
+    };
+    const result = await checkForUpgrade("0.1.0", deps);
     expect(result.status).toBe("refused");
     if (result.status !== "refused") throw new Error("unreachable");
-    expect(result.reason).toBe("checksum_mismatch");
+    expect(result.reason).toBe("missing_asset");
     expect(result.nextVersion).toBe("0.2.0");
-  });
-
-  it("refuses (unpack_failed) when the verified tarball has no package/workflow.json", async () => {
-    const tarball = buildReleaseTarball({ "README.md": "no manifest in here" });
-    const result = await checkForUpgrade("0.1.0", fakeUpgradeDeps({ version: "0.2.0", tarball }));
-    expect(result.status).toBe("refused");
-    if (result.status !== "refused") throw new Error("unreachable");
-    expect(result.reason).toBe("unpack_failed");
-  });
-
-  it("refuses (invalid_manifest) when workflow.json's own version disagrees with the release tag", async () => {
-    const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(workflowManifest("0.5.0")) });
-    const result = await checkForUpgrade("0.1.0", fakeUpgradeDeps({ version: "0.2.0", tarball }));
-    expect(result.status).toBe("refused");
-    if (result.status !== "refused") throw new Error("unreachable");
-    expect(result.reason).toBe("invalid_manifest");
   });
 });
 
@@ -94,6 +78,24 @@ describe("applyUpgrade", () => {
     expect(result.fromVersion).toBe("0.1.0");
     expect(result.toVersion).toBe("0.2.0");
     expect(await currentWorkspaceVersion(workspace)).toBe("0.2.0");
+  });
+
+  it("F11: downloads the tarball and checksum only once confirmed -- a check makes the release lookup alone, and confirming is the first request that downloads either asset", async () => {
+    const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(workflowManifest("0.2.0")) });
+    const { deps, calls } = recordingUpgradeDeps({ version: "0.2.0", tarball });
+    const workspace = await newWorkspace();
+
+    await checkForUpgrade("0.1.0", deps);
+    expect(calls).toEqual(["release_lookup"]);
+
+    calls.length = 0;
+    const result = await applyUpgrade(workspace, "0.2.0", deps);
+    expect(result.status).toBe("upgraded");
+    expect(calls).toContain("tarball");
+    expect(calls).toContain("checksum");
+    // The confirm re-verifies the release lookup itself too (never trusting a stale check), but every download
+    // happens only inside this one applyUpgrade call, never before it.
+    expect(calls.filter((kind) => kind === "release_lookup")).toHaveLength(1);
   });
 
   it("runs the shipped 0.1.0 -> 0.2.0 fixture migration for real: a pre-migration career-profile.json gets backfilled", async () => {
@@ -138,16 +140,36 @@ describe("applyUpgrade", () => {
     expect(result.status).toBe("up_to_date");
     expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
   });
+
+  it("B1b: a failing migration step leaves workspace.json at the old version -- the new version is written only after every step succeeds", async () => {
+    const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(workflowManifest("0.2.0")) });
+    const workspace = await newWorkspace();
+    // The shipped 0001 migration throws when career-profile.json isn't a JSON object -- an array qualifies, and is
+    // never written by any production code path, so this is a clean way to force a real step to fail for real.
+    await workspace.writeJson(["career-profile.json"], []);
+
+    await expect(applyUpgrade(workspace, "0.2.0", fakeUpgradeDeps({ version: "0.2.0", tarball }))).rejects.toThrow(MigrationError);
+
+    // Proof, read fresh off disk (never the in-memory workspace.manifest, which cannot reflect an external write
+    // anyway): the version was not moved, and the file the failing step touched was not touched either.
+    expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
+    expect(await workspace.readJson("career-profile.json")).toEqual([]);
+  });
 });
 
 describe("nothing changes without confirmation (F12's core guarantee)", () => {
-  it("checkForUpgrade alone never writes to the workspace, however many times it is called", async () => {
+  it("checkForUpgrade alone never writes to the workspace, however many times it is called -- against a real workspace, not one created only after the fact", async () => {
     const tarball = buildReleaseTarball({ "workflow.json": JSON.stringify(workflowManifest("0.2.0")) });
     const deps = fakeUpgradeDeps({ version: "0.2.0", tarball });
-    await checkForUpgrade("0.1.0", deps);
-    await checkForUpgrade("0.1.0", deps);
     const workspace = await newWorkspace();
-    expect(workspace.manifest.packageVersion).toBe("0.1.0"); // checkForUpgrade never even saw this workspace: it takes only a version string
+    expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
+
+    await checkForUpgrade(await currentWorkspaceVersion(workspace), deps);
+    await checkForUpgrade(await currentWorkspaceVersion(workspace), deps);
+    await checkForUpgrade(await currentWorkspaceVersion(workspace), deps);
+
+    expect(await currentWorkspaceVersion(workspace)).toBe("0.1.0");
+    expect(await workspace.readJson("career-profile.json").catch(() => undefined)).toBeUndefined();
   });
 
   it("networkForbiddenDeps proves checkForUpgrade for an up-to-date instance still has to ask (it is not a purely local decision) -- and a genuinely unreachable network surfaces as a plain error, not a silent up_to_date", async () => {

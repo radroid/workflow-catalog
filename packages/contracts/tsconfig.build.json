@@ -2,11 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
-    "declaration": true,
-    "rootDir": "src"
+    "declaration": true
   },
-  // Narrows back to "src": migrations/ is source consumed in place (never
-  // through dist/), so the build never compiles or emits it.
-  "include": ["src"],
   "exclude": ["src/**/*.test.ts"]
 }

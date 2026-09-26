@@ -191,20 +191,26 @@ npm run upgrade                # interactive: shows the changelog, asks to confi
 npm run upgrade -- --yes       # confirms without asking
 ```
 
-1. Fetches the latest GitHub release (https only, the same address rules as
-   `lib/safe-fetch.ts`, though not that function itself — it decodes every
-   body as text and only accepts `text/html`/`text/plain`, wrong for a
-   binary tarball and for the GitHub API's JSON; `runner/upgrade/release-source.ts`
-   is its own small transport built the same way). Nothing newer than the
-   workspace's version: "Already on the latest release."
-2. Downloads the release's tarball and its `.sha256` asset
-   (`.github/workflows/release-package.yml` publishes both) and verifies
-   the digest before anything is unpacked. A mismatch refuses plainly and
-   changes nothing.
-3. Reads `workflow.json` out of the verified tarball (never off disk — this
-   checkout's own copy may still be the old version) for the authoritative
-   changelog: every entry newer than the workspace's current version.
-4. Asks to confirm (or requires `--yes`). Declining changes nothing.
+1. Looks up the latest GitHub release — one API call, https only, the same
+   address rules as `lib/safe-fetch.ts`, though not that function itself —
+   it decodes every body as text and only accepts `text/html`/`text/plain`,
+   wrong for a binary tarball and for the GitHub API's JSON;
+   `runner/upgrade/release-source.ts` is its own small transport built the
+   same way. Nothing is downloaded yet. Nothing newer than the workspace's
+   version: "Already on the latest release." The changelog shown is the
+   release's own notes (its GitHub release body, which
+   `.github/workflows/release-package.yml` writes from `workflow.json`'s
+   changelog entry for that version) — read from this one lookup, not from
+   a downloaded tarball.
+2. Asks to confirm (or requires `--yes`), showing that changelog. Declining
+   changes nothing, and nothing has been downloaded to decline.
+3. Only once confirmed: downloads the release's tarball and its `.sha256`
+   asset (`.github/workflows/release-package.yml` publishes both) and
+   verifies the digest before anything is unpacked. A mismatch refuses
+   plainly and changes nothing.
+4. Reads `workflow.json` out of the verified tarball (never off disk — this
+   checkout's own copy may still be the old version) to confirm the release
+   is genuinely the version it claims to be.
 5. Runs the workspace migrations
    (`packages/contracts/migrations/`, one file per version step) forward
    from the current version to the release's version. Every step's writes
@@ -215,11 +221,16 @@ npm run upgrade -- --yes       # confirms without asking
 
 The Settings page's Upgrade section (`ui/settings.html`,
 `ui/assets/settings-upgrade.js`) is the same flow through
-`GET/POST /api/upgrade[/confirm]` (`server/routes/upgrade.ts`): a check, the
-changelog, an inline confirm panel, and — the one difference from the
-CLI — confirming always re-fetches and re-verifies the release itself
-rather than trusting an earlier page load, refusing a stale confirmation if
-what is actually available has moved on since.
+`GET /api/upgrade/status`, `GET /api/upgrade`, and
+`POST /api/upgrade/confirm` (`server/routes/upgrade.ts`): loading the page
+(or any later re-poll) calls only `/status`, which reads the workspace's own
+recorded version off disk and makes no network request at all; the "Check
+for updates" button is the only thing that calls the release lookup; and
+confirming is the only thing that ever downloads the tarball and its
+checksum — re-verifying the release itself rather than trusting an earlier
+check, refusing a stale confirmation if what is actually available has
+moved on since (the one difference from the CLI, which has no separate
+page-load moment to keep network-free).
 
 ## The bridge (`server/`)
 
@@ -777,7 +788,7 @@ change ships with a fixture that proves it (`eval-agent/`).
 | P07-B | Nothing here. The extension uses the four bridge routes. |
 | P08-A | `store/runs.ts` (the run log), `store/budget.ts`, `server/run-harness.ts` (`withRun`, `runTurn`, and the `classifyTurn` P03.2 split out of `runTurn` — free functions over `ctx`, now called from `routes/onboarding.ts`'s extraction route and `eve-gateway.ts`'s `checkModel`), `server/routes/runs.ts` (list/get runs, budget `GET`/`POST`/`resume`, `status()` for `budget`), `ui/runs.html`, the budget section of `ui/settings.html`. |
 | P08-B | `scheduler/` (`config.ts` the two fixed schedules and `SCHEDULES_PROMPT_DIR`, `time.ts` pure cadence math, `store.ts` per-schedule pause/attempt state and the slot-claim, `dispatch.ts` the daily-prepare/weekly-review bodies and the catch-up/fallback dispatcher, `status.ts` the `GET /status` and Settings shapes, `index.ts` the `start()` wiring, `prompts/` — the schedules' prompt files, `daily-prepare.md` documents the schedule and `weekly-review.md` is its turn's own prompt; they live here, not under `runner/agent/schedules/`, because in mode A the runner's own scheduler owns firing, and eve would otherwise discover and compile them as its own cron schedules — a second, uncontrolled trigger the design rules out), the schedules section of `ui/settings.html` + `ui/assets/settings-schedules.js`, and `server/routes/runs.ts`'s `status()` for `schedules`, `start()` (catch-up), and `GET`/`POST /api/runs/schedules[...]`. Calls into `run-harness.ts`'s `withRun`/`runTurn` and `routes/applications.ts`'s `startPreparation` to actually run something; never edits either. |
-| P10-B | `upgrade/` (`release-source.ts` the https-only GitHub fetch, `checksum.ts`, `tar.ts` the bounded gzip+tar reader, `migrate.ts` the migration-chain runner and loader, `semver.ts`, `upgrade.ts` `checkForUpgrade`/`applyUpgrade`), `server/routes/upgrade.ts`, `cli/upgrade.ts`, the upgrade section of `ui/settings.html` + `ui/assets/settings-upgrade.js`, and `packages/contracts/migrations/` (outside `runner/`: versioned migration scripts, loaded the same way route modules are — a computed `import()` by file path, never through `@workflow-catalog/contracts`'s package export). |
+| P10-B | `upgrade/` (`release-source.ts` the https-only GitHub fetch, `checksum.ts`, `tar.ts` the bounded gzip+tar reader, `migrate.ts` the migration-chain runner and loader, `semver.ts`, `upgrade.ts` `checkForUpgrade`/`applyUpgrade` — the release lookup and the download+verify+migrate are deliberately two functions, so a check can never download anything, `cli-flow.ts` `runUpgradeCli` — the CLI's own confirm/decline decision, injectable so it's testable without a real terminal), `server/routes/upgrade.ts` (`/status` reads the workspace's own version with no network; `/` is the release lookup; `/confirm` is the only thing that downloads), `cli/upgrade.ts` (thin), the upgrade section of `ui/settings.html` + `ui/assets/settings-upgrade.js`, and `packages/contracts/migrations/` (outside `runner/`: versioned migration scripts, loaded the same way route modules are — a computed `import()` by file path, never through `@workflow-catalog/contracts`'s package export). |
 
 **Commands.** `GET /commands` is already complete over
 `store/commands.ts`. P06 only has to fill the queue and acknowledge

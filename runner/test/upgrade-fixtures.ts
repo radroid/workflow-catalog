@@ -109,6 +109,38 @@ function response(status: number, headers: Record<string, string>, body: Buffer)
   return Promise.resolve({ status, headers, body });
 }
 
+export type UpgradeRequestKind = "release_lookup" | "tarball" | "checksum";
+
+/**
+ * `fakeUpgradeDeps`, plus a log of which request kind each call was —
+ * proves *when* a download happens relative to a check or a confirm (gate
+ * review round 1, F11: the release lookup alone must never download the
+ * tarball or its checksum; only a confirm may).
+ */
+export function recordingUpgradeDeps(release: FakeRelease | undefined): { readonly deps: UpgradeFetchDeps; readonly calls: UpgradeRequestKind[] } {
+  const base = fakeUpgradeDeps(release);
+  const calls: UpgradeRequestKind[] = [];
+  const performRequest: PerformRequest = async (input) => {
+    if (input.url.hostname === "api.github.com") calls.push("release_lookup");
+    else if (input.url.toString() === "https://releases.example/assets/tarball") calls.push("tarball");
+    else if (input.url.toString() === "https://releases.example/assets/checksum") calls.push("checksum");
+    return base.performRequest!(input);
+  };
+  return { deps: { ...base, performRequest }, calls };
+}
+
+/** `fakeUpgradeDeps`, but throws if the tarball or checksum asset is ever fetched — proves a caller (`checkForUpgrade`) never downloads the release itself, only looks it up. */
+export function downloadForbiddenUpgradeDeps(release: FakeRelease | undefined): UpgradeFetchDeps {
+  const base = fakeUpgradeDeps(release);
+  const performRequest: PerformRequest = async (input) => {
+    if (input.url.hostname !== "api.github.com") {
+      throw new Error(`upgrade-fixtures: downloading ${input.url.toString()} must never happen from a check alone.`);
+    }
+    return base.performRequest!(input);
+  };
+  return { ...base, performRequest };
+}
+
 /** `UpgradeFetchDeps` whose `performRequest` always fails: proves a caller never reaches the network by accident. */
 export const networkForbiddenDeps: UpgradeFetchDeps = {
   resolve: async () => {

@@ -1,5 +1,6 @@
 /* global document, requestAnimationFrame */
-// Settings → Upgrade section (F12): server/routes/upgrade.ts GET/POST /api/upgrade[/confirm].
+// Settings → Upgrade section (F12): server/routes/upgrade.ts GET /api/upgrade/status (no network),
+// GET /api/upgrade (the release lookup only), POST /api/upgrade/confirm (downloads and applies).
 import { el, getJson, postJson } from "./runner.js";
 
 const $ = (id) => document.getElementById(id);
@@ -37,17 +38,24 @@ function friendlyError(error) {
 /** The release the page currently shows as available, so Confirm always sends exactly the version the person saw and clicked (never a value re-read from an input the person could have raced with a fresh check). */
 let shown = null;
 
-function renderChangelog(changelog) {
+/** The release's own notes (GitHub's release body: F11 fix — the changelog shown at check time comes from the release lookup alone, never from downloading and unpacking the tarball). Plain text, one bullet per line. */
+function renderReleaseNotes(releaseNotes) {
   const container = $("upgrade-changelog");
   container.replaceChildren();
-  for (const entry of changelog) {
-    const notes = el("ul", { className: "upgrade-changelog-notes" });
-    for (const note of entry.notes) notes.append(el("li", { text: note }));
-    container.append(el("div", { className: "upgrade-changelog-entry" }, el("p", { className: "small", text: `${entry.version} (${entry.date})` }), notes));
+  const lines = releaseNotes
+    .split("\n")
+    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) {
+    container.append(el("p", { className: "small muted", text: "This release has no notes." }));
+    return;
   }
+  const notes = el("ul", { className: "upgrade-changelog-notes" });
+  for (const line of lines) notes.append(el("li", { text: line }));
+  container.append(notes);
 }
 
-/** Shows exactly one of: up-to-date, refused, available (with Confirm hidden), or the confirm panel (with Available's own "Update to this version" trigger hidden, since Confirm's own buttons take over). */
+/** Shows exactly one of: nothing yet (before the first check), up-to-date, refused, available (with Confirm hidden), or the confirm panel (with Available's own "Update to this version" trigger hidden, since Confirm's own buttons take over). */
 function showState(state) {
   $("upgrade-up-to-date").hidden = state !== "up_to_date";
   $("upgrade-refused").hidden = state !== "refused";
@@ -67,17 +75,24 @@ function render(check) {
   } else if (check.status === "available") {
     $("upgrade-next-version").textContent = check.nextVersion;
     $("upgrade-confirm-version").textContent = check.nextVersion;
-    renderChangelog(check.changelog);
+    renderReleaseNotes(check.releaseNotes);
     showState("available");
   }
   // "error" (the check itself could not complete, e.g. GitHub unreachable): leaves whatever was already shown in
   // place and only announces the plain message, rather than replacing a known-good state with a guess.
 }
 
-async function loadUpgrade() {
-  const check = await getJson("/api/upgrade");
-  render(check);
-  if (check.status === "error") announce(check.message, "error");
+/**
+ * Settings load, and any later re-poll of "what version is this": reads the
+ * workspace's own current version only, from `/api/upgrade/status`, which
+ * makes no network request of its own (F11 fix). Shows none of the four
+ * check-result panels yet — nothing has been checked — only the current
+ * version and the "Check for updates" button.
+ */
+async function loadStatus() {
+  const status = await getJson("/api/upgrade/status");
+  $("upgrade-current-value").textContent = status.currentVersion;
+  showState(null);
 }
 
 $("upgrade-check").addEventListener("click", async () => {
@@ -131,4 +146,4 @@ $("upgrade-confirm-yes").addEventListener("click", async () => {
   }
 });
 
-loadUpgrade().catch((error) => announce(friendlyError(error), "error"));
+loadStatus().catch((error) => announce(friendlyError(error), "error"));

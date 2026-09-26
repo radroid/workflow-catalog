@@ -120,6 +120,13 @@ real install, with the file or code path that proves it.
       Jobs-page section, `extension/manifest.json`'s `host_permissions`, and
       (for the P03.1 part) that packet's Deliverables on
       `origin/packet/P03.1`.
+- [ ] **The Upgrade section's "Check for updates"**, and a confirmed upgrade,
+      are network use the person starts, not something a page load does:
+      loading Settings makes no request at all; the check contacts only
+      GitHub's release API (`releases/latest`); a confirm additionally
+      downloads that release's tarball and `.sha256` asset — proof:
+      `runner/upgrade/upgrade.ts` and `runner/server/routes/upgrade.ts`'s
+      `/status` route.
 - [ ] **The extension's permissions and host access are exactly the minimum**:
       `activeTab, scripting, tabGroups, storage, sidePanel, alarms`, and
       `host_permissions` naming only the runner's own loopback origin — no

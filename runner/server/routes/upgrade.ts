@@ -7,14 +7,25 @@ import { defineRouteModule } from "../route-modules.ts";
 /**
  * Settings' Upgrade section (F12), mounted at `/api/upgrade`:
  *
+ *   GET  /api/upgrade/status    the workspace's own recorded packageVersion,
+ *                                read off disk. Makes no network request at
+ *                                all — this is what a Settings page load (or
+ *                                any later re-poll of "what version is this")
+ *                                calls (gate review round 1, F11: loading
+ *                                Settings must never reach the network).
  *   GET  /api/upgrade           checks for a release newer than this
  *                                workspace's recorded packageVersion and
- *                                reports it — never applies anything.
+ *                                reports it — one GitHub API call (the
+ *                                release lookup), never a download, and
+ *                                never applies anything. Only the "Check for
+ *                                updates" button calls this.
  *   POST /api/upgrade/confirm   { nextVersion }: applies the upgrade the
  *                                person just confirmed, for exactly that
  *                                version (a stale confirmation, built from
  *                                an older GET, is refused — see
- *                                upgrade.ts's `applyUpgrade`).
+ *                                upgrade.ts's `applyUpgrade`). This is the
+ *                                first and only request that ever downloads
+ *                                the release's tarball and `.sha256`.
  *
  * A factory, not module-level state directly (round-1 pattern from
  * `captures.ts`'s `createCapturesRouteModule`): production wiring (the
@@ -44,6 +55,13 @@ export function createUpgradeRouteModule(deps: UpgradeFetchDeps = {}) {
 
   return defineRouteModule({
     api(router, ctx) {
+      // Zero network: reads workspace.json off disk only, never `deps`. The only path a Settings page load (or
+      // any later re-poll) is allowed to call.
+      router.get("/status", async (c) => {
+        const currentVersion = await currentWorkspaceVersion(ctx.workspace);
+        return c.json({ currentVersion });
+      });
+
       router.get("/", async (c) => {
         const currentVersion = await currentWorkspaceVersion(ctx.workspace);
         runningCheck ??= checkForUpgrade(currentVersion, deps).finally(() => {
