@@ -53,8 +53,7 @@ before the attempt: nothing listening, and P07-C is merged).
    behaviour), a fresh workspace was created, and a pairing code was printed
    — matching the checklist's *Expect*, modulo the provider substitution.
 
-3. **Doctor — passed (matches the checklist's expected shape at this
-   point).**
+3. **Doctor — passed except `provider`: blocked.**
    ```
    node --import ./lib/register-ts.mjs cli/doctor.ts
    ```
@@ -67,12 +66,21 @@ before the attempt: nothing listening, and P07-C is merged).
    [ok]   Privacy settings: eve telemetry off; trace content off.
    [ok]   eve pinned to 0.63.0: eve 0.63.0 installed, pinned exactly.
    ```
-   `extension: fail` is exactly the checklist's documented expectation before
-   step 6 pairs. `provider: fail` (checklist says `warn`) is the direct,
-   expected consequence of the gateway substitution in step 2 (a real
-   account would show `warn`, not `fail`, until verified `--live`); doctor's
-   own logic is unaffected. `doctor -- --live` was **not** run: it makes one
-   real call to a live model, which this run must never do.
+   `cli/doctor.ts:64` sets `process.exitCode = report.ok ? 0 : 1`; with two
+   `[FAIL]` items, `report.ok` is `false`, so **this run exited 1** — the
+   checklist's own documented Expect for this point ("the command exits 1").
+   `extension: fail` ("No browser extension is paired.") is exactly the
+   checklist's documented expectation before step 6 pairs — that part
+   passed as written. `provider: fail` did **not** go as written: the
+   checklist's Expect says `provider` should show `warn` here (an
+   unverified but present account), not `fail` (no account at all). That
+   line is **blocked**, not passed: no real provider account or key may be
+   used in this run (Acceptance 2's own rule against a live model, and the
+   Decisions section's rule against touching the real keychain), so step
+   2's `gateway`-with-no-key substitution was the only way to reach this
+   point at all, and it necessarily reports `fail` instead of `warn`.
+   `npm run doctor -- --live` was **not** run for the same reason: it makes
+   one real call to a live model.
 
 4. **Start the runner — blocked.**
    ```
@@ -158,16 +166,21 @@ before the attempt: nothing listening, and P07-C is merged).
 ## Summary
 
 - **Passed, for real, against the fresh clone/workspace:** 1 (clone+install),
-  2 (setup, gateway substitution), 3 (doctor, expected pre-pairing shape),
-  5's build half (extension bundle), 15 (forget, dry-run and real).
-- **Blocked, with cause:** 4 (port 3210 held by an unrelated process on this
-  shared machine; no override flag; not authorized to kill another process),
-  5's load half and 6 (branded Chrome), 7–9 and 11–14 (need the running
-  bridge from step 4, some also a live model or a real provider 429), 10 and
-  the live half of step 12 additionally need a live model call, which this
-  run must never make regardless of the bridge.
-- **Failed:** none — every attempted step matched its documented *Expect* or
-  a directly-attributable substitution.
+  2 (setup, gateway substitution), 3's `node`/`runner`/`workspace`/
+  `privacy`/`eve` lines and its `extension: fail` line (the checklist's own
+  documented shape before pairing), 5's build half (extension bundle), 15
+  (forget, dry-run and real).
+- **Blocked, with cause:** 3's `provider` line (no real provider account or
+  key may be used in this run, so it necessarily reads `fail` where the
+  checklist's Expect says `warn`; exit code 1 recorded and explained
+  either way — `cli/doctor.ts:64`), 4 (port 3210 held by an unrelated
+  process on this shared machine; no override flag; not authorized to kill
+  another process), 5's load half and 6 (branded Chrome), 7–9 and 11–14
+  (need the running bridge from step 4, some also a live model or a real
+  provider 429), 10 and the live half of step 12 additionally need a live
+  model call, which this run must never make regardless of the bridge.
+- **Failed:** none — every attempted step either matched its documented
+  *Expect* exactly, or is recorded blocked (not "passed") where it did not.
 - No server used the port assigned to another agent; nothing above 4310/3210
   was left running (the one `cli/runner.ts` attempt exited immediately on
   its own port check, no lingering process).

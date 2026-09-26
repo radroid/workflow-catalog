@@ -90,13 +90,20 @@ test.
    Fresh clone `/tmp/wc-p10b-clone` (`packet/P10-B` @ `566e555`), fresh
    workspace `/tmp/wc-p10b-ws`. Passed for real: steps 1 (clone+install), 2
    (setup, `gateway` provider substituted so no real keychain/live-model
-   touch), 3 (doctor, matches the checklist's documented pre-pairing shape),
-   5's build half, 15 (forget, dry-run then real). Blocked with cause: step
-   4 (port 3210 held by an unrelated pre-existing process on this shared
-   machine — `lsof` confirmed before the attempt; `cli/runner.ts` hard-codes
-   the port with no override; not authorized to kill another process to
-   free it), which cascades to 6–14 (all need the running bridge); 5's load
-   half and 6 additionally need branded Chrome; 10, 12's live half, 13's
+   touch), 3's `node`/`runner`/`workspace`/`privacy`/`eve`/`extension`
+   lines (the checklist's own documented pre-pairing shape), 5's build
+   half, 15 (forget, dry-run then real). **Blocked with cause (gate review
+   round 1, B3):** step 3's `provider` line — the checklist's Expect says
+   `warn`, but no real provider account or key may be used in this run, so
+   `gateway`-with-no-key (the only reachable substitution) reads `fail`
+   instead; the run's exit code is 1 either way (`cli/doctor.ts:64`,
+   `report.ok ? 0 : 1`, and two `[FAIL]` lines were present). Also blocked:
+   step 4 (port 3210 held by an unrelated pre-existing process on this
+   shared machine — `lsof` confirmed before the attempt; `cli/runner.ts`
+   hard-codes the port with no override; not authorized to kill another
+   process to free it), which cascades to 6–14 (all need the running
+   bridge); 5's load half and 6 additionally need branded Chrome; 10, 12's
+   live half, 13's
    catch-up-on-demand and 14's "Paused" case additionally need a live model
    call, a real Chrome tab group, real wall-clock waiting, or a real
    provider 429 respectively — none forced, per the brief's own examples of
@@ -160,6 +167,136 @@ packet's `Owns:`.
 **Open questions / unfinished:** none beyond the success-test's recorded
 blocked steps (all environmental — a shared machine's port, branded
 Chrome, a live model, real wall-clock time — never this packet's own code).
+
+### 2026-09-25 — Part B gate fix round 1 (manual session)
+
+Fixed the 3 BLOCKING items from the round-1 gate review of PR #25
+(`/tmp/wc-manual/P10-B-gate-review.md`, head `2790338`), plus F11 (a
+FOLLOW-UP in that review, reclassified BLOCKING by the orchestrator in a
+separate message before this round started). FOLLOW-UPs F1–F10 and
+F12–F21 were not touched, per instruction; F1 (the fetch is its own
+transport, not `safeFetch` itself) was explicitly ratified by the
+orchestrator and needed no change.
+
+- **B1a** (an Acceptance bullet — "0.1.0 stays on 0.1.0 … until confirmed"
+  — mapped to tests that passed with the behaviour broken). Added
+  `runner/test/upgrade-route.test.ts` › "GET /api/upgrade" › "B1a: repeated
+  GETs while a release is available never apply it …", which calls `GET
+  /api/upgrade` five times against a workspace with a genuine 0.2.0 release
+  available and asserts `workspace.json` (read fresh off disk via
+  `currentWorkspaceVersion`, never the route's own response or the cached
+  `workspace.manifest`) stays at `0.1.0` throughout, with no
+  `career-profile.json` migration write. Added the CLI's own confirmation
+  logic as a new, directly testable unit: `runner/upgrade/cli-flow.ts`'s
+  `runUpgradeCli(workspace, deps)` takes an injectable `ask`/`yes`/`isTTY`,
+  never a real terminal; `cli/upgrade.ts` is now a thin wrapper around it
+  (Owns already required this shape — "logic lives in `runner/upgrade/`").
+  New `runner/test/upgrade-cli-flow.test.ts` (6 tests) covers a declined
+  ("no") confirmation and a non-interactive run without `--yes` (`ask` is
+  never even called, proven with a spy that throws if it is), both leaving
+  the workspace at `0.1.0`.
+  **Proof, per the review's own mutation:** temporarily added `if
+  (check.status === "available") await applyUpgrade(ctx.workspace,
+  check.nextVersion, deps);` to the GET handler (the reviewer's exact
+  M1a) — the new B1a route test failed (second GET saw `up_to_date`
+  instead of `available`); reverted, re-ran, passed. Diff and test output
+  for both states were inspected before moving on; the mutation was never
+  committed.
+- **B1b** (the same bullet's "a failed migration step leaves the workspace
+  unchanged" half, and the Decisions' "records the new version only after
+  every step succeeds"). Added `runner/test/upgrade-core.test.ts` ›
+  "applyUpgrade" › "B1b: a failing migration step leaves workspace.json at
+  the old version …": seeds a real workspace with `career-profile.json` set
+  to `[]` (an array — the shipped 0001 migration throws on any non-object,
+  and no production writer ever produces one, so this forces a genuine
+  failure through the real migration, not a mock), calls `applyUpgrade`
+  with a real 0.2.0 release available, asserts it rejects with
+  `MigrationError`, then reads `workspace.json` and `career-profile.json`
+  fresh off disk and asserts both are exactly as they were.
+  **Proof, per the review's own mutation:** temporarily moved
+  `workspace.writeJson(["workspace.json"], …)` to before `runMigrations(…)`
+  in `upgrade.ts` (the reviewer's exact M3) — the new B1b test failed
+  (`workspace.json` read `0.2.0` instead of `0.1.0`); reverted, re-ran,
+  passed.
+- **B2** (an edit outside Owns, neither forced nor disclosed). Reverted
+  `packages/contracts/tsconfig.json` and `tsconfig.build.json` to their
+  `origin/overnight/integration` content exactly (`git checkout
+  origin/overnight/integration -- packages/contracts/tsconfig.json
+  packages/contracts/tsconfig.build.json`). Confirmed after reverting:
+  `pnpm --filter @workflow-catalog/contracts typecheck`, `lint`, `build`,
+  and `test` all still exit 0 (244/244 tests). The one consequence is that
+  `packages/contracts/migrations/*.ts` is no longer typechecked by that
+  package's own `tsc` invocation — unchanged from every other packet's
+  dynamically-imported files (e.g. `server/routes/*.ts`), which were never
+  typechecked that way either; `runner`'s own `tsc` and the runtime
+  type-stripping loader are what actually govern these files' correctness.
+- **F11 (BLOCKING by orchestrator addendum):** "every Settings page load
+  calls the GitHub API and downloads the tarball and .sha256, unasked."
+  `runner/upgrade/upgrade.ts` now splits the release lookup from the
+  download: a private `lookupRelease()` does the one GitHub API call
+  (`fetchLatestRelease`) and, from the release's own asset list alone,
+  can already tell `up_to_date` from `available` from `refused
+  (missing_asset)` — no download. `checkForUpgrade` (`GET /api/upgrade`,
+  the "Check for updates" button) is now exactly that lookup, returning
+  `releaseNotes` (the release's own GitHub body — already generated from
+  `workflow.json`'s changelog by `release-package.yml`) as the changelog,
+  instead of a structured array read out of the tarball. `applyUpgrade`
+  (`POST /api/upgrade/confirm`) is the only thing that ever calls
+  `downloadReleaseAsset`, and only after re-confirming a matching release
+  is still available. New `GET /api/upgrade/status`
+  (`server/routes/upgrade.ts`) reads the workspace's own recorded version
+  off disk via `currentWorkspaceVersion` and touches `deps` not at all —
+  this is what `ui/assets/settings-upgrade.js`'s `loadStatus()` now calls
+  on page load instead of the old `loadUpgrade()`'s `GET /api/upgrade`;
+  the section shows none of its four outcome panels until a person
+  presses "Check for updates".
+  Proof: `runner/test/upgrade-fixtures.ts` gained
+  `downloadForbiddenUpgradeDeps` (throws if any asset URL is ever
+  requested) and `recordingUpgradeDeps` (logs which request kind each call
+  was). `upgrade-core.test.ts` › "checkForUpgrade" › "F11: never downloads
+  the tarball or its checksum …" uses the former; › "applyUpgrade" › "F11:
+  downloads the tarball and checksum only once confirmed …" uses the
+  latter to assert a check makes exactly one `release_lookup` call and a
+  subsequent confirm is the first call to touch `tarball`/`checksum`.
+  `upgrade-route.test.ts` › "GET /api/upgrade/status" › "F11: reports the
+  workspace's current version and makes no network request at all" passes
+  `networkForbiddenDeps` (throws on any `resolve`/`performRequest` call)
+  straight into the route and asserts it still answers 200. The "refused"
+  screenshot scenario changed from a checksum mismatch (no longer
+  reachable from a check alone) to `missing_asset` (still check-time
+  detectable from the release's own asset list); all 16
+  `docs/screenshots/P10-B-upgrade-*.png` were retaken — the section's
+  first state (no longer an auto-run check), the changelog rendering
+  (plain release notes, not a structured list), and the refused message
+  all changed. Added one line to `docs/pilot/privacy-checklist.md`
+  naming the Upgrade check/confirm as network use the person starts, and
+  what each contacts. Updated `runner/README.md`'s Upgrade section and its
+  "Extending the runner" row to match the new check-vs-confirm split and
+  the new `cli-flow.ts`/`/status` route.
+- **B3** (success-test step 3 labelled "passed" though its `provider` line
+  didn't go as written). `docs/pilot/success-test-run.md` step 3 and its
+  Summary, and this file's own Acceptance 2 bullet above, now say step 3
+  "passed except `provider`: blocked" — the checklist's Expect is `warn`
+  there, but no real provider account or key may be used in this run, so
+  the reachable substitution (`gateway`, no key) necessarily shows `fail`
+  instead; the exit code (1, from `cli/doctor.ts:64`'s `report.ok ? 0 :
+  1` with two `[FAIL]` lines present) is now stated explicitly rather than
+  left silent.
+
+**Chain, after all of the above** (merged with current
+`origin/overnight/integration` — already up to date, no new commits since
+part B's own chain): `pnpm typecheck` (exit 0, 6/6), `pnpm test` (exit 0:
+contracts 244, job-assistant 153, apps/catalog 168, runner 2201 + 7
+evals/161 gates, extension 428/5 skipped, fixtures-policy 2/2 — the 9 new
+upgrade tests from this round are included in runner's 2201), `pnpm -r
+lint` (exit 0, 6/6), `pnpm check:fixtures` (exit 0). `git status
+--porcelain` empty after committing. Re-ran the gate's `sh
+/tmp/wc-manual/eve-build-check.sh <worktree-root>` for this round too
+(`runner/upgrade/upgrade.ts`, `server/routes/upgrade.ts`, `cli/upgrade.ts`
+all changed again): `EVE_BUILD_EXIT=0`, `git status --porcelain` showed
+only this round's own doc edits (no stray build artifacts).
+
+Head after this round, CI run id and result: see the final reply.
 
 ### 2026-09-25 — Gate fix round 1 (manual session, Sonnet)
 
